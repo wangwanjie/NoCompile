@@ -1,0 +1,42 @@
+// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "NoCompile",
+    platforms: [
+        .macOS(.v12),
+        .iOS(.v13),
+        .tvOS(.v13),
+    ],
+    products: [
+        // 接入 App 工程的客户端（只在 Debug 生效）
+        .library(name: "NoCompile", targets: ["NoCompileClient"]),
+        // Mac 端引擎，供 CLI 与菜单栏 App 复用
+        .library(name: "NoCompileKit", targets: ["NoCompileKit"]),
+        // 命令行工具
+        .executable(name: "nocompile", targets: ["nocompile"]),
+        // 菜单栏 App
+        .executable(name: "NoCompileApp", targets: ["NoCompileApp"]),
+    ],
+    targets: [
+        .target(
+            name: "NoCompileClient",
+            path: "Sources/NoCompileClient",
+            publicHeadersPath: "include"
+        ),
+        .target(
+            name: "NoCompileKit",
+            path: "Sources/NoCompileKit"
+        ),
+        .executableTarget(
+            name: "nocompile",
+            dependencies: ["NoCompileKit"],
+            path: "Sources/nocompile"
+        ),
+        .executableTarget(
+            name: "NoCompileApp",
+            dependencies: ["NoCompileKit"],
+            path: "Sources/NoCompileApp"
+        ),
+    ]
+)
