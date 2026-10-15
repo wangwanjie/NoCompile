@@ -10,6 +10,9 @@
 import Foundation
 import NoCompileKit
 
+// 关闭 stdout 缓冲，便于实时查看日志
+setvbuf(stdout, nil, _IONBF, 0)
+
 final class CLIDelegate: EngineDelegate {
     func engine(_ engine: Engine, didChangeState state: EngineState) {
         switch state {
@@ -126,8 +129,17 @@ guard let project = parsed.project else {
     exit(1)
 }
 
+// 统一用绝对路径，确保 FSEvents 监听正确
+func absolutePath(_ path: String) -> String {
+    if (path as NSString).isAbsolutePath {
+        return (path as NSString).standardizingPath
+    }
+    return (FileManager.default.currentDirectoryPath + "/" + path as NSString).standardizingPath
+}
+
 let delegate = CLIDelegate()
-let engine = Engine(projectPath: project, customDerivedData: parsed.derivedData)
+let engine = Engine(projectPath: absolutePath(project),
+                    customDerivedData: parsed.derivedData.map(absolutePath))
 engine.delegate = delegate
 engine.injectsOnSave = !parsed.manual
 engine.watchesHeaders = parsed.headers

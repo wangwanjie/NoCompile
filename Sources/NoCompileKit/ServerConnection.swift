@@ -24,13 +24,15 @@ public final class ServerConnection {
     }
 
     private let fd: Int32
-    private let queue: DispatchQueue
+    private let queue: DispatchQueue        // 读循环（长期阻塞）
+    private let writeQueue: DispatchQueue   // 写（独立队列，避免被读循环饿死）
     private var buffer = Data()
     private var running = false
 
     public init(fd: Int32) {
         self.fd = fd
-        self.queue = DispatchQueue(label: "com.nocompile.server.conn.\(fd)")
+        self.queue = DispatchQueue(label: "com.nocompile.server.conn.read.\(fd)")
+        self.writeQueue = DispatchQueue(label: "com.nocompile.server.conn.write.\(fd)")
     }
 
     public func start() {
@@ -82,7 +84,7 @@ public final class ServerConnection {
 
     public func send(_ message: NCMessage) {
         let frame = NCFrameCodec.encode(message)
-        queue.async { [weak self] in
+        writeQueue.async { [weak self] in
             guard let self, self.running else { return }
             frame.withUnsafeBytes { raw in
                 var sent = 0

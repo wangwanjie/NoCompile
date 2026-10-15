@@ -1,0 +1,27 @@
+name: DemoMac
+options:
+  bundleIdPrefix: com.nocompile.demo
+  deploymentTarget:
+    macOS: "12.0"
+packages:
+  NoCompile:
+    path: ../..
+targets:
+  DemoMac:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources
+    dependencies:
+      - package: NoCompile
+        product: NoCompile
+    settings:
+      base:
+        PRODUCT_NAME: DemoMac
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_ALLOWED: "YES"
+      configs:
+        Debug:
+          OTHER_LDFLAGS: "-Xlinker -interposable"
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"

@@ -22,7 +22,12 @@ let package = Package(
         .target(
             name: "NoCompileClient",
             path: "Sources/NoCompileClient",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+                .linkedFramework("UIKit", .when(platforms: [.iOS, .tvOS])),
+            ]
         ),
         .target(
             name: "NoCompileKit",

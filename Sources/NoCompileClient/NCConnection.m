@@ -14,7 +14,8 @@
 
 @implementation NCConnection {
     int _fd;
-    dispatch_queue_t _ioQueue;
+    dispatch_queue_t _ioQueue;      // 读循环（长期阻塞）
+    dispatch_queue_t _writeQueue;   // 写（独立队列，避免被读循环饿死）
     BOOL _open;
 }
 
@@ -22,7 +23,8 @@
     self = [super init];
     if (self) {
         _fd = fd;
-        _ioQueue = dispatch_queue_create("com.nocompile.connection", DISPATCH_QUEUE_SERIAL);
+        _ioQueue = dispatch_queue_create("com.nocompile.connection.read", DISPATCH_QUEUE_SERIAL);
+        _writeQueue = dispatch_queue_create("com.nocompile.connection.write", DISPATCH_QUEUE_SERIAL);
         [self configureSocket];
     }
     return self;
@@ -159,7 +161,7 @@
     if (data) {
         [frame appendData:data];
     }
-    dispatch_async(_ioQueue, ^{
+    dispatch_async(_writeQueue, ^{
         [self writeFully:frame];
     });
 }
