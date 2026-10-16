@@ -21,7 +21,7 @@
 #define NC_PROTOCOL_VERSION 1
 /// 客户端版本：须与 Sources/NoCompileKit/Protocol.swift 的 NCProtocol.clientVersion 同步更新。
 /// 握手时上报给 Mac 端，不一致时 Mac 端提示重新编译 App（例如 App 包内拷贝的仍是旧 bundle）
-#define NC_CLIENT_VERSION @"0.2.1"
+#define NC_CLIENT_VERSION @"0.2.2"
 
 /// 模拟器 / macOS 客户端主动连接的 Mac 端口
 #define NC_MAC_PORT 21890
