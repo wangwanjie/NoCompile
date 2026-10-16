@@ -199,8 +199,10 @@ for notes_path in "$ARCHIVES_DIR"/*.md "$ARCHIVES_DIR"/*.txt "$ARCHIVES_DIR"/*.h
 done
 
 TMP_APPCAST="$TMP_DIR/appcast.xml"
+# 不生成增量包：增量文件只落在临时目录、不会随 Release 上传，写进 appcast 会是失效链接
 "$SPARKLE_BIN_DIR/generate_appcast" \
     --account "$ACCOUNT" \
+    --maximum-deltas 0 \
     --link "https://github.com/$REPO" \
     -o "$TMP_APPCAST" \
     "$TMP_DIR"

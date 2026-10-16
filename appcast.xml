@@ -3,8 +3,25 @@
     <channel>
         <title>NoCompile</title>
         <item>
+            <title>0.2.0</title>
+            <pubDate>Fri, 16 Oct 2026 14:15:28 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.0</link>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.0/NoCompile_v0.2.0.dmg" length="3794981" type="application/octet-stream" sparkle:edSignature="5y934D4gQ5yfuYKA8OEgmXeCwQasGltR7FM/CP5AiX5szUIEhM4skMIn74wmdb9vwCO5YVMJlERhY362PWIOBQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.0&lt;/h2&gt;
+&lt;h3&gt;新增&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;资源热重载&lt;/strong&gt;：保存 `.storyboard` / `.xib` 后自动用 ibtool 编译并下发，当前可见的页面按新界面重建，之后打开的页面也使用新版本；替换 Asset Catalog 图片集或工程中的图片后，`UIImage(named:)` / `NSImage(named:)` 与 nib 中引用的图片立即返回新图。iOS 真机、模拟器与 macOS 均支持&lt;/li&gt;&lt;li&gt;&lt;strong&gt;新增源文件&lt;/strong&gt;：运行中新建的 Swift / Objective-C / C / C++ 文件保存后即可注入，已有文件可以直接使用其中的新类型与函数&lt;/li&gt;&lt;li&gt;&lt;strong&gt;更多接入方式&lt;/strong&gt;：支持 CocoaPods、Carthage；NoCompile.app 内置客户端 bundle，可运行时加载、拷贝进 App（支持真机）或通过 `DYLD_INSERT_LIBRARIES` 零代码接入&lt;/li&gt;&lt;li&gt;偏好设置新增「热重载界面与图片资源」开关，命令行新增 `--no-resources`&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;代码注入后，界面来自 storyboard / xib 的页面会被清空：现在改为重新加载 nib，失败时保持原界面&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;已知限制&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;资源热重载只覆盖主 bundle；App 图标、颜色集、矢量图片、暗色等外观变体、`Localizable.strings` 需要重新运行 App&lt;/li&gt;&lt;li&gt;SwiftUI 的 `Image("name")` 不经过 `imageNamed:`，不会拿到新图&lt;/li&gt;&lt;li&gt;新增的 Objective-C 类要被 Swift 使用，需要修改桥接头并重新构建&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.1.0</title>
-            <pubDate>Fri, 16 Oct 2026 12:02:08 +0800</pubDate>
+            <pubDate>Fri, 16 Oct 2026 14:15:28 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.1.0</link>
             <sparkle:version>1</sparkle:version>
             <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>

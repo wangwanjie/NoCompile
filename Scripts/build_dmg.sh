@@ -66,6 +66,25 @@ verify_signature() {
     fi
 }
 
+# codesign 带 --timestamp 时需要访问 Apple 时间戳服务，连续签名多个产物时偶发
+# "The timestamp service is not available."，遇到该错误时退避重试
+codesign_with_retry() {
+    local attempt output
+    for attempt in 1 2 3 4 5; do
+        if output="$(/usr/bin/codesign "$@" 2>&1)"; then
+            [[ -n "$output" ]] && echo "$output"
+            return 0
+        fi
+        echo "$output" >&2
+        if ! grep -q "timestamp service is not available" <<<"$output"; then
+            return 1
+        fi
+        echo "时间戳服务暂不可用，$((attempt * 3)) 秒后重试（第 $attempt 次）..." >&2
+        sleep $((attempt * 3))
+    done
+    return 1
+}
+
 resign_for_notarization() {
     local identity="$1" app_path="$2"
     local frameworks_dir="$app_path/Contents/Frameworks"
@@ -74,24 +93,24 @@ resign_for_notarization() {
     if [[ -d "$frameworks_dir" ]]; then
         # 先签 Sparkle 内部的 XPC / AutoUpdate.app / Helper 等
         while IFS= read -r -d '' bundle; do
-            /usr/bin/codesign --force --sign "$identity" --timestamp --options runtime \
+            codesign_with_retry --force --sign "$identity" --timestamp --options runtime \
                 --deep --preserve-metadata=entitlements "$bundle" || true
         done < <(find "$frameworks_dir" -type d \( -name "*.xpc" -o -name "*.app" -o -name "*.framework" \) -print0)
     fi
 
     # 客户端 bundle（供接入方加载，含 iOS / tvOS 产物）也必须带 Developer ID 签名才能通过公证
     while IFS= read -r -d '' bundle; do
-        /usr/bin/codesign --force --sign "$identity" --timestamp --options runtime "$bundle"
+        codesign_with_retry --force --sign "$identity" --timestamp --options runtime "$bundle"
     done < <(find "$app_path/Contents/Resources" -maxdepth 1 -type d -name "*NoCompile.bundle" -print0)
 
     local helper="$app_path/Contents/Helpers/nocompile"
     if [[ -f "$helper" ]]; then
         echo "重新签名命令行工具..."
-        /usr/bin/codesign --force --sign "$identity" --timestamp --options runtime "$helper"
+        codesign_with_retry --force --sign "$identity" --timestamp --options runtime "$helper"
     fi
 
     echo "重新签名主 app..."
-    /usr/bin/codesign --force --sign "$identity" --timestamp --options runtime \
+    codesign_with_retry --force --sign "$identity" --timestamp --options runtime \
         --entitlements "$APP_ENTITLEMENTS" \
         "$app_path"
 }
