@@ -10,10 +10,19 @@
 #import <UIKit/UIKit.h>
 
 @interface NCHUD ()
+/// 圆角背景容器：文字多行时整体增高，左右留出内边距
+@property (nonatomic, strong) UIView *container;
 @property (nonatomic, strong) UILabel *label;
 @end
 
 @implementation NCHUD
+
+/// 文字与容器边缘的间距
+static const CGFloat NCHUDHorizontalPadding = 12;
+static const CGFloat NCHUDVerticalPadding = 7;
+/// 浮层距屏幕左右的最小间距，以及在大屏上的最大宽度
+static const CGFloat NCHUDScreenMargin = 16;
+static const CGFloat NCHUDMaxWidth = 420;
 
 + (instancetype)shared {
     static NCHUD *instance;
@@ -30,25 +39,38 @@
     });
 }
 
+- (void)setupViewsIfNeeded {
+    if (self.container) {
+        return;
+    }
+    UIView *container = [UIView new];
+    container.layer.cornerRadius = 12;
+    container.layer.masksToBounds = YES;
+    container.userInteractionEnabled = NO;
+
+    UILabel *label = [UILabel new];
+    label.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
+    label.textColor = UIColor.whiteColor;
+    label.textAlignment = NSTextAlignmentCenter;
+    // 长文案（文件名 + 提示）自动换行，完整显示
+    label.numberOfLines = 0;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    [container addSubview:label];
+
+    self.container = container;
+    self.label = label;
+}
+
 - (void)present:(NSString *)message state:(NSInteger)state {
     UIWindow *window = [self keyWindow];
     if (!window) {
         return;
     }
-    if (!self.label) {
-        UILabel *label = [UILabel new];
-        label.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
-        label.textColor = UIColor.whiteColor;
-        label.textAlignment = NSTextAlignmentCenter;
-        label.layer.cornerRadius = 12;
-        label.layer.masksToBounds = YES;
-        label.userInteractionEnabled = NO;
-        self.label = label;
+    [self setupViewsIfNeeded];
+    if (self.container.superview != window) {
+        [window addSubview:self.container];
     }
-    if (self.label.superview != window) {
-        [window addSubview:self.label];
-    }
-    [window bringSubviewToFront:self.label];
+    [window bringSubviewToFront:self.container];
 
     UIColor *background;
     switch (state) {
@@ -56,23 +78,35 @@
         case 2: background = [UIColor colorWithRed:0.85 green:0.25 blue:0.25 alpha:0.95]; break; // 失败
         default: background = [UIColor colorWithRed:0.90 green:0.65 blue:0.15 alpha:0.95]; break; // 进行中
     }
-    self.label.backgroundColor = background;
+    self.container.backgroundColor = background;
     self.label.text = [@"⚡ " stringByAppendingString:message];
 
-    CGFloat width = MIN(window.bounds.size.width - 40, 260);
-    CGFloat top = window.safeAreaInsets.top + 8;
-    self.label.frame = CGRectMake((window.bounds.size.width - width) / 2, top, width, 28);
-    self.label.alpha = 1;
+    // 宽度随文字自适应，超出屏幕宽度时换行，高度随行数增长
+    CGRect bounds = window.bounds;
+    UIEdgeInsets safeArea = window.safeAreaInsets;
+    CGFloat available = bounds.size.width - safeArea.left - safeArea.right - NCHUDScreenMargin * 2;
+    CGFloat maxWidth = MAX(MIN(available, NCHUDMaxWidth), 120);
+    CGSize textSize = [self.label sizeThatFits:CGSizeMake(maxWidth - NCHUDHorizontalPadding * 2, CGFLOAT_MAX)];
+    CGFloat width = MIN(maxWidth, ceil(textSize.width) + NCHUDHorizontalPadding * 2);
+    CGFloat height = MAX(28, ceil(textSize.height) + NCHUDVerticalPadding * 2);
+    CGFloat top = safeArea.top + 8;
+    CGFloat left = safeArea.left + (bounds.size.width - safeArea.left - safeArea.right - width) / 2;
+    self.container.frame = CGRectMake(left, top, width, height);
+    self.container.layer.cornerRadius = MIN(12, height / 2);
+    self.label.frame = CGRectInset(self.container.bounds, NCHUDHorizontalPadding, NCHUDVerticalPadding);
+    self.container.alpha = 1;
 
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(dismiss) object:nil];
     if (state != 1) {
-        [self performSelector:@selector(dismiss) withObject:nil afterDelay:1.5];
+        // 文案越长停留越久，便于读完；失败提示再多停一会儿
+        NSTimeInterval delay = MIN(6.0, 1.5 + message.length * 0.04) + (state == 2 ? 1.0 : 0);
+        [self performSelector:@selector(dismiss) withObject:nil afterDelay:delay];
     }
 }
 
 - (void)dismiss {
     [UIView animateWithDuration:0.3 animations:^{
-        self.label.alpha = 0;
+        self.container.alpha = 0;
     }];
 }
 
