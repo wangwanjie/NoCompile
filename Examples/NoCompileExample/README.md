@@ -21,11 +21,10 @@ xcodegen generate
 ### 2. 启动 NoCompile（在仓库根目录）
 
 ```bash
-swift build
-.build/debug/nocompile --project "$(pwd)/Examples/NoCompileExample/NoCompileExample.xcodeproj"
+Scripts/build-app.sh --open --project "$(pwd)/Examples/NoCompileExample/NoCompileExample.xcodeproj"
 ```
 
-一个 NoCompile 进程可以同时服务真机、模拟器和 Mac 三个 App。
+NoCompile 以菜单栏 App 运行（右上角 ⚡），不需要也不要在 Xcode 里打开它。一个 NoCompile 实例可以同时服务真机、模拟器和 Mac 三个 App。首次运行若弹出「访问“文稿”文件夹」的授权框，请点「允许」。
 
 ### 3. 在 Xcode 运行 App
 

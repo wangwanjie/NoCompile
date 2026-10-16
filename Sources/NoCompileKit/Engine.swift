@@ -113,6 +113,17 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
 
     private func startWatching() {
         let projectDir = (projectPath as NSString).deletingLastPathComponent
+        // 工程位于"文稿 / 桌面 / 下载"等受保护目录时，未获授权的 App 读不到文件，FSEvents 也会静默失效。
+        // 放到后台队列检查：首次访问可能弹出系统授权框，不能阻塞主线程
+        workQueue.async { [weak self] in
+            do {
+                _ = try FileManager.default.contentsOfDirectory(atPath: projectDir)
+            } catch {
+                self?.log("无法读取工程目录（\(error.localizedDescription)）。若工程在「文稿」「桌面」「下载」中，"
+                    + "请在 系统设置 → 隐私与安全性 → 文件与文件夹 中允许 NoCompile 访问，"
+                    + "或在 完全磁盘访问权限 中添加 NoCompile，然后重启 NoCompile", level: 3)
+            }
+        }
         let watcher = FileWatcher(directories: [projectDir]) { [weak self] changed in
             self?.handleChangedFiles(changed)
         }
@@ -268,7 +279,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         workQueue.async { [weak self] in
             guard let self else { return }
             self.connections.append(connection)
-            self.delegate?.engine(self, didUpdateClientCount: self.connections.count)
+            self.notifyClientCount(self.connections.count)
         }
     }
 
@@ -302,12 +313,20 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         workQueue.async { [weak self] in
             guard let self else { return }
             self.connections.removeAll { $0 === connection }
-            self.delegate?.engine(self, didUpdateClientCount: self.connections.count)
+            self.notifyClientCount(self.connections.count)
             self.log("断开：\(connection.displayName)", level: 2)
         }
     }
 
     // MARK: - 辅助
+
+    /// 连接数变化。delegate 回调统一在主线程触发，UI 层可直接操作 AppKit
+    private func notifyClientCount(_ count: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.engine(self, didUpdateClientCount: count)
+        }
+    }
 
     private func setState(_ state: EngineState) {
         DispatchQueue.main.async { [weak self] in

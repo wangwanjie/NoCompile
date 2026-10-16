@@ -26,10 +26,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, EngineDelegate {
         updateIcon()
         rebuildMenu()
 
-        // 自动恢复上次工程
-        if let path = projectPath, FileManager.default.fileExists(atPath: path) {
+        // 优先使用启动参数 --project，其次恢复上次的工程
+        if let path = launchArgumentProject(), FileManager.default.fileExists(atPath: path) {
             startEngine(projectPath: path)
+        } else if let path = projectPath, FileManager.default.fileExists(atPath: path) {
+            startEngine(projectPath: path)
+        } else {
+            logWindow.append("请点击菜单栏 ⚡ → 选择工程…（选择 .xcodeproj 或 .xcworkspace）", level: 2)
+            logWindow.showWindow(nil)
         }
+        rebuildMenu()
+    }
+
+    /// 解析启动参数：--project <路径>
+    private func launchArgumentProject() -> String? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--project"), index + 1 < args.count else {
+            return nil
+        }
+        let path = args[index + 1]
+        if (path as NSString).isAbsolutePath {
+            return (path as NSString).standardizingPath
+        }
+        return (FileManager.default.currentDirectoryPath + "/" + path as NSString).standardizingPath
     }
 
     // MARK: - 引擎
@@ -63,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, EngineDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "选择工程…", action: #selector(selectProject), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "显示日志", action: #selector(showLog), keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "在访达中显示日志文件", action: #selector(revealLogFile), keyEquivalent: ""))
 
         menu.addItem(.separator())
         let injectItem = NSMenuItem(title: "保存即注入", action: #selector(toggleInjectOnSave), keyEquivalent: "")
@@ -125,6 +145,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, EngineDelegate {
 
     func engine(_ engine: Engine, didLog message: String, level: Int) {
         logWindow.append(message, level: level)
+        appendToLogFile(message)
+    }
+
+    // MARK: - 日志文件
+
+    /// 日志文件：~/Library/Logs/NoCompile/NoCompile.log，便于排查与反馈问题
+    private lazy var logFileURL: URL = {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/NoCompile", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("NoCompile.log")
+        // 每次启动重新开始记录
+        try? Data().write(to: url)
+        return url
+    }()
+
+    private func appendToLogFile(_ message: String) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        let line = "[\(formatter.string(from: Date()))] \(message)\n"
+        guard let data = line.data(using: .utf8),
+              let handle = try? FileHandle(forWritingTo: logFileURL) else {
+            return
+        }
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    }
+
+    @objc private func revealLogFile() {
+        NSWorkspace.shared.activateFileViewerSelecting([logFileURL])
     }
 
     func engine(_ engine: Engine, didUpdateClientCount count: Int) {

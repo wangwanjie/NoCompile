@@ -5,3 +5,5 @@ DerivedData/
 .DS_Store
 Examples/**/*.xcodeproj
 Examples/**/DD/
+build/
+.build-app/

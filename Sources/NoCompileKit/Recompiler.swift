@@ -106,6 +106,7 @@ public final class Recompiler {
             return ("展开结果中未找到该文件的 frontend 命令", expand.stdout, nil)
         }
         var tokens = rewriteFrontendOutput(CommandTokenizer.tokenize(frontendLine), objectPath: objectPath)
+        tokens = replaceMissingBridgingPCH(tokens, driverTokens: module.tokens)
         tokens.append(contentsOf: ["-D", "INJECTING"])
         let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: module.workingDirectory)
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
@@ -248,6 +249,24 @@ public final class Recompiler {
         if !replacedOutput {
             result.append(contentsOf: ["-o", objectPath])
         }
+        return result
+    }
+
+    /// `-###` 会把桥接头规划为预编译 .pch，放在 driver 退出即删除的临时目录。
+    /// frontend 命令引用的 .pch 不存在时，换回 driver 命令里的原始桥接头 .h，由 frontend 直接解析
+    private func replaceMissingBridgingPCH(_ tokens: [String], driverTokens: [String]) -> [String] {
+        guard let idx = tokens.firstIndex(of: "-import-objc-header"), idx + 1 < tokens.count else {
+            return tokens
+        }
+        let header = tokens[idx + 1]
+        guard header.hasSuffix(".pch"), !FileManager.default.fileExists(atPath: header) else {
+            return tokens
+        }
+        guard let original = BuildLog.valueForFlag("-import-objc-header", in: driverTokens) else {
+            return tokens
+        }
+        var result = tokens
+        result[idx + 1] = original
         return result
     }
 

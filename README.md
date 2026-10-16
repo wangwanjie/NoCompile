@@ -51,15 +51,17 @@
 
 ## 快速开始
 
-### 1. 构建
+### 1. 构建并启动 NoCompile
 
 ```bash
-swift build -c release
+Scripts/build-app.sh --open
 ```
 
-产物：
-- `.build/release/nocompile`：命令行工具
-- `.build/release/NoCompileApp`：菜单栏 App
+脚本用 SwiftPM 命令行打包出 `build/NoCompile.app`（菜单栏 App，内含命令行工具 `Contents/Helpers/nocompile`），全程不经过 Xcode。加 `--install` 会安装到 `/Applications`。
+
+> 不要在 Xcode 里打开 NoCompile 的 `Package.swift` 来运行它。Xcode 不允许同一个本地包同时被两个窗口打开，而你的 App 工程以本地包方式引用 NoCompile 时会和它冲突。
+
+首次运行时，如果工程在「文稿」「桌面」「下载」目录下，macOS 会弹窗询问是否允许 NoCompile 访问，请点「允许」。脚本会优先用钥匙串里的 Apple Development 证书签名，授权一次后重新打包也不会再问。
 
 ### 2. 接入 App 工程
 
@@ -81,15 +83,15 @@ import NoCompile   // 仅在 Debug target 可用
 
 客户端会在镜像加载时自动启动，无需写任何调用代码。
 
-### 3. 启动热重载
+### 3. 选择工程
 
-命令行：
+点击菜单栏的 ⚡ 图标 → 选择工程，或者启动时直接指定：
 
 ```bash
-nocompile --project /path/to/YourApp.xcworkspace
+Scripts/build-app.sh --open --project /path/to/YourApp.xcworkspace
 ```
 
-或者运行菜单栏 App，点击状态栏的 ⚡ 图标 → 选择工程。
+日志可在 ⚡ → 显示日志 查看，同时写入 `~/Library/Logs/NoCompile/NoCompile.log`。
 
 然后 `Command+R` 运行你的 App。编辑任意源文件并保存，几秒后就能在 App 看到改动生效。
 
