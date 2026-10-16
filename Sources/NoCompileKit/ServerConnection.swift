@@ -32,15 +32,21 @@ public final class ServerConnection {
         return name.isEmpty ? "App" : name
     }
 
+    /// 连接的稳定标识
+    public let id = UUID().uuidString
+
+    /// 平台的中文名
+    public var platformTitle: String {
+        switch platformName {
+        case "simulator": return "模拟器"
+        case "device": return "真机"
+        case "macosx": return "macOS"
+        default: return platformName
+        }
+    }
+
     /// 展示用名称：App 名 + 平台
     public var displayName: String {
-        let platformTitle: String
-        switch platformName {
-        case "simulator": platformTitle = "模拟器"
-        case "device": platformTitle = "真机"
-        case "macosx": platformTitle = "macOS"
-        default: platformTitle = platformName
-        }
         let bundleID = clientInfo["bundleID"] as? String ?? ""
         return "\(shortName)（\(platformTitle)\(bundleID.isEmpty ? "" : "，\(bundleID)")）"
     }

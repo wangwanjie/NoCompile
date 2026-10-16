@@ -172,6 +172,10 @@ static NSUInteger gInjectionCount = 0;
         case NCMessageTypeStatus:
             [self handleStatus:json];
             break;
+        case NCMessageTypeHelloAck:
+        case NCMessageTypeConfig:
+            [self applyConfig:json[@"config"]];
+            break;
         case NCMessageTypePing:
             [connection sendType:NCMessageTypePong json:nil data:nil];
             break;
@@ -210,6 +214,29 @@ static NSUInteger gInjectionCount = 0;
         @"tmp": NSTemporaryDirectory(),
     };
     [self.connection sendType:NCMessageTypeHello json:hello data:nil];
+}
+
+/// 应用 Mac 端下发的偏好设置
+- (void)applyConfig:(NSDictionary *)config {
+    if (![config isKindOfClass:NSDictionary.class]) {
+        return;
+    }
+    NSNumber *autoReload = config[@"autoReloadViewControllers"];
+    if (autoReload) {
+        gAutoReloadViewControllers = autoReload.boolValue;
+    }
+    NSNumber *preserveStatics = config[@"preserveStaticState"];
+    if (preserveStatics) {
+        gPreserveStaticState = preserveStatics.boolValue;
+    }
+    NSNumber *showsHUD = config[@"showsHUD"];
+    if (showsHUD) {
+        gShowsHUD = showsHUD.boolValue;
+    }
+    NSNumber *suppress = config[@"suppressSwizzlingDuringLoad"];
+    if (suppress) {
+        gSuppressSwizzlingDuringLoad = suppress.boolValue;
+    }
 }
 
 - (void)handleStatus:(NSDictionary *)json {
@@ -265,12 +292,22 @@ static NSUInteger gInjectionCount = 0;
     if (gShowsHUD) {
         [NCHUD showStatus:hud state:ok ? 0 : 2];
     }
-    [self sendInjectResult:ok message:result.message source:sourceFiles];
+    [self sendInjectResult:ok message:result.message source:sourceFiles refreshed:result.refreshedControllers];
 }
 
 - (void)sendInjectResult:(BOOL)ok message:(NSString *)message source:(NSArray<NSString *> *)source {
+    [self sendInjectResult:ok message:message source:source refreshed:nil];
+}
+
+- (void)sendInjectResult:(BOOL)ok
+                 message:(NSString *)message
+                  source:(NSArray<NSString *> *)source
+               refreshed:(NSArray<NSString *> *)refreshed {
     [self.connection sendType:NCMessageTypeInjectResult
-                         json:@{ @"ok": @(ok), @"message": message ?: @"", @"sourceFiles": source ?: @[] }
+                         json:@{ @"ok": @(ok),
+                                 @"message": message ?: @"",
+                                 @"sourceFiles": source ?: @[],
+                                 @"refreshed": refreshed ?: @[] }
                          data:nil];
 }
 

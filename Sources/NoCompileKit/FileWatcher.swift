@@ -73,7 +73,16 @@ public final class FileWatcher {
             guard Self.watchedExtensions.contains(ext) else {
                 continue
             }
-            if path.contains("/DerivedData/") || path.contains("/.git/") || (path as NSString).lastPathComponent.hasPrefix(".") {
+            if path.contains("/DerivedData/") || path.contains("/.git/") {
+                continue
+            }
+            // 编辑器保存时产生的临时 / 备份文件：如 Xcode 的 "Foo~.m"、隐藏文件、".sb-xxxx" 安全保存文件
+            let name = (path as NSString).lastPathComponent
+            if name.hasPrefix(".") || name.contains("~") || name.contains(".sb-") {
+                continue
+            }
+            // 只处理当前确实存在的文件（原子保存时旧路径会先被移走）
+            if !FileManager.default.fileExists(atPath: path) {
                 continue
             }
             if let last = lastFire[path], now.timeIntervalSince(last) < debounce {

@@ -39,6 +39,8 @@ typedef NS_ENUM(uint32_t, NCMessageType) {
     NCMessageTypeLog = 3,
     /// Mac → 客户端：状态提示（编译中、编译失败等），用于浮层展示
     NCMessageTypeStatus = 4,
+    /// Mac → 客户端：下发偏好设置（自动刷新、保留静态状态、浮层等），握手应答中也会携带
+    NCMessageTypeConfig = 5,
     /// Mac → 客户端：注入请求，data 为 dylib 与资源文件的拼接
     NCMessageTypeInject = 10,
     /// 客户端 → Mac：注入结果

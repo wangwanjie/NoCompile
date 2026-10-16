@@ -46,17 +46,26 @@ static BOOL NCInjectableSymbol(const char *name, uint8_t type, BOOL preserveStat
         if (body[2] == 'S' || body[2] == 's') {
             return NO;
         }
-        if (NCHasSuffix(body, len, "F") && !NCHasSuffix(body, len, "MF")) {
+        // static 成员在 mangled 名末尾多一个 Z（如 static func → FZ，static var getter → vgZ），先去掉再判断
+        size_t effectiveLen = len;
+        if (effectiveLen > 1 && body[effectiveLen - 1] == 'Z') {
+            effectiveLen--;
+        }
+        char tail[4] = {0};
+        size_t tailLen = effectiveLen < 3 ? effectiveLen : 3;
+        memcpy(tail, body + effectiveLen - tailLen, tailLen);
+        size_t tl = strlen(tail);
+        if (NCHasSuffix(tail, tl, "F") && !NCHasSuffix(tail, tl, "MF")) {
             return YES;                 // 函数 / 方法 / 静态方法
         }
-        if (NCHasSuffix(body, len, "fD") || NCHasSuffix(body, len, "fC")) {
+        if (NCHasSuffix(tail, tl, "fD") || NCHasSuffix(tail, tl, "fC")) {
             return YES;                 // 析构 / 构造
         }
-        if (NCHasSuffix(body, len, "vg") || NCHasSuffix(body, len, "vs") ||
-            NCHasSuffix(body, len, "vM") || NCHasSuffix(body, len, "vr")) {
-            return YES;                 // 属性访问器
+        if (NCHasSuffix(tail, tl, "vg") || NCHasSuffix(tail, tl, "vs") ||
+            NCHasSuffix(tail, tl, "vM") || NCHasSuffix(tail, tl, "vr")) {
+            return YES;                 // 属性访问器（含 static）
         }
-        if (NCHasSuffix(body, len, "vau")) {
+        if (NCHasSuffix(tail, tl, "vau")) {
             return !preserveStatics;    // 全局 / 静态变量寻址器
         }
         return NO;
@@ -82,7 +91,8 @@ static BOOL NCInjectableSymbol(const char *name, uint8_t type, BOOL preserveStat
 /// 全局 / 静态变量寻址器（保留静态状态时反向绑定回旧实现）
 static BOOL NCIsStaticAddressor(const char *name) {
     size_t len = strlen(name);
-    return strncmp(name, "_$s", 3) == 0 && NCHasSuffix(name, len, "vau");
+    // 全局变量为 vau，static 存储属性为 vauZ
+    return strncmp(name, "_$s", 3) == 0 && (NCHasSuffix(name, len, "vau") || NCHasSuffix(name, len, "vauZ"));
 }
 
 /// 找出与新类同名的所有旧类（主程序及历史注入镜像中可能各有一份）

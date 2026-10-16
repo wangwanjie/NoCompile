@@ -2,6 +2,9 @@
 //  Engine.swift
 //  编排：监听文件 → 重编 → 推送注入。被 CLI 与菜单栏 App 共用。
 //
+//  线程约定：内部状态只在 workQueue 上读写；所有 delegate 回调都在主线程触发，
+//  UI 层可直接操作 AppKit / SwiftUI。
+//
 
 import Foundation
 
@@ -11,10 +14,43 @@ public enum EngineState: Equatable {
     case error(String)  // 出错（红）
 }
 
+/// 已连接 App 的概要信息（供界面展示）
+public struct ClientSummary: Identifiable, Equatable {
+    public let id: String
+    public let name: String
+    public let platform: String         // simulator / device / macosx
+    public let platformTitle: String    // 模拟器 / 真机 / macOS
+    public let bundleID: String
+    public let machine: String
+}
+
+/// 一次注入的记录（供界面展示）
+public struct InjectionRecord: Identifiable {
+    public let id = UUID()
+    public let file: String
+    public let clientName: String
+    public let platformTitle: String
+    public let success: Bool
+    public let duration: TimeInterval
+    public let message: String
+    public let refreshed: [String]
+    public let date = Date()
+}
+
 public protocol EngineDelegate: AnyObject {
     func engine(_ engine: Engine, didChangeState state: EngineState)
     func engine(_ engine: Engine, didLog message: String, level: Int)
     func engine(_ engine: Engine, didUpdateClientCount count: Int)
+    func engine(_ engine: Engine, didUpdateClients clients: [ClientSummary])
+    func engine(_ engine: Engine, didRecord record: InjectionRecord)
+    func engine(_ engine: Engine, didUpdatePendingFiles files: [String])
+}
+
+/// 可选回调的默认实现，CLI 等简单场景无需实现
+public extension EngineDelegate {
+    func engine(_ engine: Engine, didUpdateClients clients: [ClientSummary]) {}
+    func engine(_ engine: Engine, didRecord record: InjectionRecord) {}
+    func engine(_ engine: Engine, didUpdatePendingFiles files: [String]) {}
 }
 
 public final class Engine: ServerDelegate, ServerConnectionDelegate {
@@ -23,10 +59,21 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     public let customDerivedData: String?
     public weak var delegate: EngineDelegate?
 
-    /// 保存即注入（默认开）。关闭后需手动调用 triggerInjection
+    /// 保存即注入（默认开）。关闭后改动会累积为"待注入"，由 triggerPendingInjection 手动触发
     public var injectsOnSave: Bool = true
     /// 是否监听头文件变更
     public var watchesHeaders: Bool = true
+    /// 路径中包含这些关键字的文件不触发注入（如 "Pods/"、"Tests/"）
+    public var excludedKeywords: [String] = []
+    /// 下发给 App 端的偏好设置，变更后立即推送给所有已连接的 App
+    public var clientConfig: [String: Any] = [:] {
+        didSet {
+            let config = clientConfig
+            workQueue.async { [weak self] in
+                self?.connections.forEach { $0.send(NCMessage(type: .config, json: ["config": config])) }
+            }
+        }
+    }
 
     private var buildLog: BuildLog?
     private var commands = ParsedCommands()
@@ -37,12 +84,17 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var deviceBridge: DeviceBridge?
     private var watcher: FileWatcher?
     private var connections: [ServerConnection] = []
+    private var pendingFiles = Set<String>()
+    /// 已推送、等待 App 回报结果的注入：键为 "连接标识|源文件"，值为（开始时间, 编译耗时）
+    private var inflight: [String: (start: Date, compile: TimeInterval)] = [:]
     private let workQueue = DispatchQueue(label: "com.nocompile.engine")
+
+    public static let outputDirectory = NSTemporaryDirectory() + "NoCompile"
 
     public init(projectPath: String, customDerivedData: String? = nil) {
         self.projectPath = projectPath
         self.customDerivedData = customDerivedData
-        self.recompiler = Recompiler(outputDirectory: NSTemporaryDirectory() + "NoCompile")
+        self.recompiler = Recompiler(outputDirectory: Self.outputDirectory)
     }
 
     // MARK: - 生命周期
@@ -63,8 +115,10 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         server?.stop()
         deviceBridge?.stop()
         watcher?.stop()
-        connections.forEach { $0.close() }
-        connections.removeAll()
+        workQueue.sync {
+            connections.forEach { $0.close() }
+            connections.removeAll()
+        }
     }
 
     /// 定位日志；若出现了更新的构建日志则重新解析（例如先跑真机、再跑模拟器）
@@ -135,18 +189,39 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     // MARK: - 文件变更
 
     private func handleChangedFiles(_ files: [String]) {
-        guard injectsOnSave else {
-            return
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            let accepted = files.filter { path in
+                !self.excludedKeywords.contains { !$0.isEmpty && path.contains($0) }
+            }
+            guard !accepted.isEmpty else {
+                return
+            }
+            if self.injectsOnSave {
+                self.inject(files: accepted)
+            } else {
+                self.pendingFiles.formUnion(accepted)
+                self.notifyPendingFiles()
+                self.log("已记录 \(accepted.count) 个改动，等待手动注入", level: 0)
+            }
         }
+    }
+
+    /// 手动注入指定文件
+    public func triggerInjection(files: [String]) {
         workQueue.async { [weak self] in
             self?.inject(files: files)
         }
     }
 
-    /// 手动触发（供快捷键 / CLI 使用）
-    public func triggerInjection(files: [String]) {
+    /// 手动注入累积的待处理改动（"保存即注入"关闭时使用）
+    public func triggerPendingInjection() {
         workQueue.async { [weak self] in
-            self?.inject(files: files)
+            guard let self, !self.pendingFiles.isEmpty else { return }
+            let files = Array(self.pendingFiles)
+            self.pendingFiles.removeAll()
+            self.notifyPendingFiles()
+            self.inject(files: files)
         }
     }
 
@@ -187,33 +262,41 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             let name = (source as NSString).lastPathComponent
             notifyStatus("编译中：\(name)", state: 1)
             // 同一平台的多个连接共用一次编译结果
-            var builtByPlatform: [String: RecompileResult] = [:]
+            var builtByPlatform: [String: (result: RecompileResult, elapsed: TimeInterval)] = [:]
             for connection in connections {
                 guard let platform = platform(for: connection) else {
                     continue
                 }
-                let start = Date()
-                let result: RecompileResult
+                let built: (result: RecompileResult, elapsed: TimeInterval)
                 if let cached = builtByPlatform[platform.name] {
-                    result = cached
+                    built = cached
                 } else {
-                    result = recompiler.recompile(sourceFile: source, commands: commands,
-                                                  platform: platform, codesignIdentity: signingIdentity)
-                    builtByPlatform[platform.name] = result
+                    let start = Date()
+                    let result = recompiler.recompile(sourceFile: source, commands: commands,
+                                                      platform: platform, codesignIdentity: signingIdentity)
+                    built = (result, Date().timeIntervalSince(start))
+                    builtByPlatform[platform.name] = built
                 }
-                if result.succeeded, let dylibPath = result.dylibPath {
-                    let elapsed = String(format: "%.2f", Date().timeIntervalSince(start))
+                if built.result.succeeded, let dylibPath = built.result.dylibPath {
+                    inflight[inflightKey(connection, source)] = (Date(), built.elapsed)
                     sendInject(dylibPath: dylibPath, source: source, to: connection)
-                    log("⚡ \(name) → \(connection.displayName)（编译 \(elapsed)s）", level: 1)
+                    log("⚡ \(name) → \(connection.displayName)（编译 \(String(format: "%.2f", built.elapsed))s）", level: 0)
                 } else {
                     hadError = true
-                    let message = result.error ?? "重编失败"
+                    let message = built.result.error ?? "重编失败"
                     log("❌ \(name)（\(platform.name)）：\(message)", level: 3)
                     connection.send(NCMessage(type: .status, json: ["message": "编译失败：\(name)", "state": 2]))
+                    record(InjectionRecord(file: name, clientName: connection.shortName,
+                                           platformTitle: connection.platformTitle, success: false,
+                                           duration: built.elapsed, message: message, refreshed: []))
                 }
             }
         }
         setState(hadError ? .error("编译失败，详见日志") : .idle)
+    }
+
+    private func inflightKey(_ connection: ServerConnection, _ source: String) -> String {
+        return "\(connection.id)|\(source)"
     }
 
     private func sendInject(dylibPath: String, source: String, to connection: ServerConnection) {
@@ -279,20 +362,23 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         workQueue.async { [weak self] in
             guard let self else { return }
             self.connections.append(connection)
-            self.notifyClientCount(self.connections.count)
         }
     }
 
     public func connection(_ connection: ServerConnection, didReceive message: NCMessage) {
         switch message.type {
         case .hello:
-            if let info = message.json {
-                connection.updateClientInfo(info)
-                connection.send(NCMessage(type: .helloAck, json: ["protocol": NCProtocol.version]))
-                log("🔌 已连接：\(connection.displayName)", level: 1)
-                workQueue.async { [weak self] in
-                    self?.refreshCommandsIfNeeded()
-                }
+            guard let info = message.json else {
+                return
+            }
+            connection.updateClientInfo(info)
+            workQueue.async { [weak self] in
+                guard let self else { return }
+                connection.send(NCMessage(type: .helloAck,
+                                          json: ["protocol": NCProtocol.version, "config": self.clientConfig]))
+                self.log("🔌 已连接：\(connection.displayName)", level: 1)
+                self.notifyClients()
+                self.refreshCommandsIfNeeded()
             }
         case .log:
             if let msg = message.json?["message"] as? String {
@@ -300,31 +386,74 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 log("[\(connection.shortName)] \(msg)", level: level)
             }
         case .injectResult:
-            if let ok = message.json?["ok"] as? Bool, !ok {
-                let msg = message.json?["message"] as? String ?? ""
-                log("[\(connection.shortName)] 注入失败：\(msg)", level: 3)
+            let json = message.json ?? [:]
+            workQueue.async { [weak self] in
+                self?.handleInjectResult(json, from: connection)
             }
         default:
             break
         }
     }
 
+    /// App 回报注入结果：结合编译耗时生成一条记录（日志已由 App 端转发，这里不再重复打印）
+    private func handleInjectResult(_ json: [String: Any], from connection: ServerConnection) {
+        let ok = json["ok"] as? Bool ?? false
+        let source = (json["sourceFiles"] as? [String])?.first ?? ""
+        let refreshed = json["refreshed"] as? [String] ?? []
+        let key = inflightKey(connection, source)
+        let started = inflight.removeValue(forKey: key)
+        let total = started.map { $0.compile + Date().timeIntervalSince($0.start) } ?? 0
+        record(InjectionRecord(file: (source as NSString).lastPathComponent,
+                               clientName: connection.shortName,
+                               platformTitle: connection.platformTitle,
+                               success: ok,
+                               duration: total,
+                               message: json["message"] as? String ?? "",
+                               refreshed: refreshed))
+    }
+
     public func connectionDidClose(_ connection: ServerConnection) {
         workQueue.async { [weak self] in
             guard let self else { return }
             self.connections.removeAll { $0 === connection }
-            self.notifyClientCount(self.connections.count)
-            self.log("断开：\(connection.displayName)", level: 2)
+            if !connection.clientInfo.isEmpty {
+                self.log("断开：\(connection.displayName)", level: 2)
+            }
+            self.notifyClients()
         }
     }
 
-    // MARK: - 辅助
+    // MARK: - 回调（统一切到主线程）
 
-    /// 连接数变化。delegate 回调统一在主线程触发，UI 层可直接操作 AppKit
-    private func notifyClientCount(_ count: Int) {
+    private func notifyClients() {
+        // 只展示已完成握手的连接
+        let summaries = connections.filter { !$0.clientInfo.isEmpty }.map { connection in
+            ClientSummary(id: connection.id,
+                          name: connection.shortName,
+                          platform: connection.platformName,
+                          platformTitle: connection.platformTitle,
+                          bundleID: connection.clientInfo["bundleID"] as? String ?? "",
+                          machine: connection.machine)
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.delegate?.engine(self, didUpdateClientCount: count)
+            self.delegate?.engine(self, didUpdateClientCount: summaries.count)
+            self.delegate?.engine(self, didUpdateClients: summaries)
+        }
+    }
+
+    private func notifyPendingFiles() {
+        let files = pendingFiles.sorted()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.engine(self, didUpdatePendingFiles: files)
+        }
+    }
+
+    private func record(_ record: InjectionRecord) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.engine(self, didRecord: record)
         }
     }
 

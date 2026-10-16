@@ -21,6 +21,7 @@ public enum NCMessageType: UInt32 {
     case helloAck = 2
     case log = 3
     case status = 4
+    case config = 5
     case inject = 10
     case injectResult = 11
     case ping = 20
