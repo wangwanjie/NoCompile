@@ -18,6 +18,8 @@ NSString * const NoCompileInjectedFilesKey = @"files";
 #import "NCLog.h"
 #import "NCHUD.h"
 #include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <dlfcn.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -190,19 +192,42 @@ static NSUInteger gInjectionCount = 0;
 
 #pragma mark - 消息处理
 
+/// 客户端自身所在镜像的路径与 LC_UUID。bundle 方式接入时，Mac 端据此判断 App 包内的 bundle 是否与当前 Mac 端随附的一致
+- (void)clientImagePath:(NSString **)outPath uuid:(NSString **)outUUID {
+    Dl_info info;
+    if (dladdr((__bridge const void *)NoCompile.class, &info) == 0 || info.dli_fbase == NULL) {
+        return;
+    }
+    if (info.dli_fname) {
+        *outPath = @(info.dli_fname);
+    }
+    const struct mach_header_64 *header = (const struct mach_header_64 *)info.dli_fbase;
+    if (header->magic != MH_MAGIC_64) {
+        return;
+    }
+    const uint8_t *cursor = (const uint8_t *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        const struct load_command *command = (const struct load_command *)cursor;
+        if (command->cmd == LC_UUID) {
+            const struct uuid_command *uuidCommand = (const struct uuid_command *)command;
+            *outUUID = [[NSUUID alloc] initWithUUIDBytes:uuidCommand->uuid].UUIDString;
+            return;
+        }
+        cursor += command->cmdsize;
+    }
+}
+
 - (void)sendHello {
     struct utsname systemInfo;
     uname(&systemInfo);
-    NSMutableArray<NSString *> *images = [NSMutableArray array];
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name) {
-            [images addObject:@(name)];
-        }
-    }
+    NSString *imagePath = @"";
+    NSString *imageUUID = @"";
+    [self clientImagePath:&imagePath uuid:&imageUUID];
     NSDictionary *hello = @{
         @"protocol": @(NC_PROTOCOL_VERSION),
+        @"clientVersion": NC_CLIENT_VERSION,
+        @"clientImage": imagePath ?: @"",
+        @"clientUUID": imageUUID ?: @"",
         @"bundleID": NSBundle.mainBundle.bundleIdentifier ?: @"",
         @"bundlePath": NSBundle.mainBundle.bundlePath ?: @"",
         @"executable": NSBundle.mainBundle.executablePath ?: @"",
