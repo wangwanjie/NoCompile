@@ -79,6 +79,11 @@ resign_for_notarization() {
         done < <(find "$frameworks_dir" -type d \( -name "*.xpc" -o -name "*.app" -o -name "*.framework" \) -print0)
     fi
 
+    # 客户端 bundle（供接入方加载，含 iOS / tvOS 产物）也必须带 Developer ID 签名才能通过公证
+    while IFS= read -r -d '' bundle; do
+        /usr/bin/codesign --force --sign "$identity" --timestamp --options runtime "$bundle"
+    done < <(find "$app_path/Contents/Resources" -maxdepth 1 -type d -name "*NoCompile.bundle" -print0)
+
     local helper="$app_path/Contents/Helpers/nocompile"
     if [[ -f "$helper" ]]; then
         echo "重新签名命令行工具..."
@@ -130,6 +135,8 @@ if [[ "$DO_ARCHIVE" == true ]]; then
     require_command xcodegen
     echo "生成 Xcode 工程..."
     (cd "$PROJECT_DIR/App" && xcodegen generate)
+    echo "构建客户端 bundle..."
+    "$PROJECT_DIR/Scripts/build-client-bundles.sh"
     echo "归档 $SCHEME (Release, arm64 + x86_64)..."
     rm -rf "$ARCHIVE_PATH"
     xcodebuild -project "$PROJECT" \

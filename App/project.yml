@@ -60,10 +60,40 @@ targets:
         copy:
           destination: wrapper
           subpath: Contents/Helpers
+    postBuildScripts:
+      # 把 Scripts/build-client-bundles.sh 预先构建好的客户端 bundle 与拷贝脚本放进 Contents/Resources，
+      # 供接入方以 InjectionIII 风格免依赖加载。bundle 跨 iOS / tvOS / macOS 平台，无法作为本 target 的依赖直接构建
+      - name: Embed Client Bundles
+        basedOnDependencyAnalysis: false
+        script: |
+          SRC="${SRCROOT}/../build/ClientBundles"
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          if [ ! -d "$SRC" ]; then
+              echo "warning: 未找到 $SRC，NoCompile.app 将不含客户端 bundle。请先运行 Scripts/build-client-bundles.sh"
+              exit 0
+          fi
+          IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+          if [ -z "$IDENTITY" ]; then
+              IDENTITY="-"
+          fi
+          mkdir -p "$DEST"
+          for BUNDLE in "$SRC"/*.bundle; do
+              if [ ! -d "$BUNDLE" ]; then
+                  continue
+              fi
+              NAME="$(basename "$BUNDLE")"
+              rm -rf "$DEST/$NAME"
+              cp -R "$BUNDLE" "$DEST/$NAME"
+              /usr/bin/codesign --force --sign "$IDENTITY" --timestamp=none "$DEST/$NAME"
+          done
+          cp "${SRCROOT}/../Scripts/nocompile_copy_bundle.sh" "$DEST/nocompile_copy_bundle.sh"
+          chmod +x "$DEST/nocompile_copy_bundle.sh"
     settings:
       base:
         PRODUCT_NAME: NoCompile
         PRODUCT_BUNDLE_IDENTIFIER: cn.vanjay.NoCompile
+        # Embed Client Bundles 脚本需要读取仓库内 build/ClientBundles
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
   nocompile-cli:

@@ -81,7 +81,9 @@ func printUsage() {
 
     接入 App：在 Debug 配置的 Other Linker Flags 添加
       -Xlinker -interposable
-    并通过 SPM 依赖 NoCompile 库（仅 Debug）。
+    再任选一种方式接入客户端（仅 Debug）：SPM / CocoaPods / Carthage，
+    或加载 NoCompile.app 内置的 bundle（Contents/Resources/*NoCompile.bundle）。
+    详见 https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md
     """)
 }
 

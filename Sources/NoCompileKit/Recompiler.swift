@@ -118,8 +118,10 @@ public final class Recompiler {
 
     /// 找到包含该源文件的模块命令
     private func swiftModule(for sourceFile: String, in modules: [RawCompileCommand]) -> RawCompileCommand? {
+        let canonicalSource = ParsedCommands.canonicalPath(sourceFile)
         for module in modules {
-            if swiftSources(of: module).contains(sourceFile) {
+            let sources = swiftSources(of: module)
+            if sources.contains(sourceFile) || sources.contains(where: { ParsedCommands.canonicalPath($0) == canonicalSource }) {
                 return module
             }
         }
@@ -192,13 +194,14 @@ public final class Recompiler {
 
     /// 从 -### 输出中找到目标文件对应的 frontend 行
     private func frontendLine(for sourceFile: String, in stdout: String) -> String? {
+        let canonicalSource = ParsedCommands.canonicalPath(sourceFile)
         for line in stdout.components(separatedBy: "\n") {
             guard line.contains("-frontend"), line.contains("-primary-file") else {
                 continue
             }
             let tokens = CommandTokenizer.tokenize(line)
             if let idx = tokens.firstIndex(of: "-primary-file"), idx + 1 < tokens.count,
-               tokens[idx + 1] == sourceFile {
+               tokens[idx + 1] == sourceFile || ParsedCommands.canonicalPath(tokens[idx + 1]) == canonicalSource {
                 return line
             }
         }

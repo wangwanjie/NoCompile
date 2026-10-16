@@ -52,7 +52,13 @@ public struct ParsedCommands {
     public var clangFiles: [String: RawCompileCommand] = [:]
 
     public static func clangKey(platform: String, source: String) -> String {
-        return "\(platform)|\(source)"
+        return "\(platform)|\(canonicalPath(source))"
+    }
+
+    /// 解析符号链接后的路径。文件监听给出的是真实路径（如 /private/tmp/...），
+    /// 构建日志里可能是带符号链接的写法（如 /tmp/...），比较前需统一
+    public static func canonicalPath(_ path: String) -> String {
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     public func swiftModules(for platform: String) -> [RawCompileCommand] {

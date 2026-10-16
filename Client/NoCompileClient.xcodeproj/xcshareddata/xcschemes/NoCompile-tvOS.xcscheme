@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D943294FBB1F6B01D44F1CED"
-               BuildableName = "NoCompile.app"
-               BlueprintName = "NoCompile"
-               ReferencedContainer = "container:NoCompile.xcodeproj">
+               BlueprintIdentifier = "61A5E2192F938BC2BA8DF7BB"
+               BuildableName = "NoCompile-tvOS.framework"
+               BlueprintName = "NoCompile-tvOS"
+               ReferencedContainer = "container:NoCompileClient.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,14 +32,16 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D943294FBB1F6B01D44F1CED"
-            BuildableName = "NoCompile.app"
-            BlueprintName = "NoCompile"
-            ReferencedContainer = "container:NoCompile.xcodeproj">
+            BlueprintIdentifier = "61A5E2192F938BC2BA8DF7BB"
+            BuildableName = "NoCompile-tvOS.framework"
+            BlueprintName = "NoCompile-tvOS"
+            ReferencedContainer = "container:NoCompileClient.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -51,16 +53,15 @@
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
       allowLocationSimulation = "YES">
-      <BuildableProductRunnable
-         runnableDebuggingMode = "0">
+      <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D943294FBB1F6B01D44F1CED"
-            BuildableName = "NoCompile.app"
-            BlueprintName = "NoCompile"
-            ReferencedContainer = "container:NoCompile.xcodeproj">
+            BlueprintIdentifier = "61A5E2192F938BC2BA8DF7BB"
+            BuildableName = "NoCompile-tvOS.framework"
+            BlueprintName = "NoCompile-tvOS"
+            ReferencedContainer = "container:NoCompileClient.xcodeproj">
          </BuildableReference>
-      </BuildableProductRunnable>
+      </MacroExpansion>
       <CommandLineArguments>
       </CommandLineArguments>
    </LaunchAction>
@@ -70,16 +71,17 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
-      <BuildableProductRunnable
-         runnableDebuggingMode = "0">
+      <CommandLineArguments>
+      </CommandLineArguments>
+      <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D943294FBB1F6B01D44F1CED"
-            BuildableName = "NoCompile.app"
-            BlueprintName = "NoCompile"
-            ReferencedContainer = "container:NoCompile.xcodeproj">
+            BlueprintIdentifier = "61A5E2192F938BC2BA8DF7BB"
+            BuildableName = "NoCompile-tvOS.framework"
+            BlueprintName = "NoCompile-tvOS"
+            ReferencedContainer = "container:NoCompileClient.xcodeproj">
          </BuildableReference>
-      </BuildableProductRunnable>
+      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

@@ -49,7 +49,7 @@
 ```
 
 - **Mac 端引擎**（`NoCompileKit`）：定位 DerivedData、解析 `.xcactivitylog`、单文件重编、链接、签名、通过 socket 推送。被命令行工具 `nocompile` 和菜单栏 App `NoCompileApp` 共用。
-- **客户端**（`NoCompileClient`）：以 Debug-only 的库形式链入 App，自动连接 Mac 端，收到 dylib 后在进程内完成替换。
+- **客户端**（`NoCompileClient`）：以 Debug-only 的库形式链入 App（SPM / CocoaPods / Carthage），或以 bundle 形式在运行时加载，自动连接 Mac 端，收到 dylib 后在进程内完成替换。
 
 详见 [Docs/Architecture.md](Docs/Architecture.md)。
 
@@ -81,13 +81,18 @@ Scripts/build-app.sh --open
 
 这一步让 App 内部的函数调用走 GOT 间接寻址，才能在运行时把调用重定向到新实现。
 
-**b. 通过 SPM 依赖客户端库**，并确保只在 Debug 链接。例如在你的调试入口：
+**b. 接入客户端**，任选一种：
 
-```swift
-import NoCompile   // 仅在 Debug target 可用
-```
+| 方式 | 写法 |
+|---|---|
+| Swift Package Manager | 添加包 `https://github.com/wangwanjie/NoCompile`，把 `NoCompile` 库加到 App target |
+| CocoaPods | `pod 'NoCompile', :configurations => ['Debug']` |
+| Carthage | `github "wangwanjie/NoCompile"`，Release 配置用 `EXCLUDED_SOURCE_FILE_NAMES` 排除 |
+| 加载 bundle（零依赖，模拟器 / macOS） | `Bundle(path: "/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle")?.load()` |
+| 拷贝 bundle（零依赖，支持真机） | Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle` |
+| `DYLD_INSERT_LIBRARIES`（零代码） | 在 scheme 环境变量里指向 bundle 内的可执行文件 |
 
-客户端会在镜像加载时自动启动，无需写任何调用代码。
+链接方式在镜像加载时自动启动，bundle 方式在 `load()` 时启动，都无需再写启动代码。各方式的完整步骤与注意事项见 [接入指南](Docs/Integration.md)。
 
 ### 3. 选择工程
 
@@ -137,6 +142,8 @@ SwiftUI 视图的刷新依赖通知。每次注入后，NoCompile 会发出 `NoC
 
 ```
 Package.swift        接入方使用的 Swift Package（零第三方依赖）
+NoCompile.podspec    CocoaPods 描述文件
+Client/              客户端的 Xcode 工程：Carthage 用的 framework 与运行时加载的 bundle
 Sources/
   NoCompileClient/   App 进程内客户端（ObjC/C）
   NoCompileKit/      Mac 端引擎（Swift）
@@ -149,8 +156,8 @@ Docs/                架构、接入指南、发布说明
 
 ## 发布新版本
 
-1. 修改 `App/project.yml` 中的 `MARKETING_VERSION` 与 `CURRENT_PROJECT_VERSION`。
-2. 构建、签名并公证 DMG：
+1. 修改 `App/project.yml` 中的 `MARKETING_VERSION` 与 `CURRENT_PROJECT_VERSION`，并同步 `NoCompile.podspec` 的 `s.version` 与 `Client/project.yml` 的 `MARKETING_VERSION`。
+2. 构建、签名并公证 DMG（会先用 `Scripts/build-client-bundles.sh` 构建客户端 bundle 并放进 App）：
 
    ```bash
    Scripts/build_dmg.sh
@@ -163,6 +170,11 @@ Docs/                架构、接入指南、发布说明
    ```
 
 4. 提交并推送 `appcast.xml`，已安装的用户会收到更新提示。
+5. 发布 CocoaPods（tag 为 `vX.Y.Z`，由上一步的 Release 创建）：
+
+   ```bash
+   pod trunk push NoCompile.podspec
+   ```
 
 App 图标由 `swift Scripts/generate_icons.swift` 程序化生成。
 

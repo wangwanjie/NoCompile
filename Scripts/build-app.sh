@@ -47,6 +47,9 @@ command -v xcodegen >/dev/null 2>&1 || { echo "错误：未找到 xcodegen（bre
 echo "⚙️  生成 Xcode 工程…"
 (cd "$ROOT/App" && xcodegen generate >/dev/null)
 
+# 客户端 bundle 由 App 的 Embed Client Bundles 阶段放进 Contents/Resources
+"$ROOT/Scripts/build-client-bundles.sh"
+
 echo "⚙️  构建 NoCompile（Release）…"
 xcodebuild -project "$ROOT/App/NoCompile.xcodeproj" \
     -scheme NoCompile \
@@ -61,6 +64,7 @@ if [ ! -d "$APP" ]; then
 fi
 echo "✅ 已生成：$APP"
 echo "   命令行工具：$APP/Contents/Helpers/nocompile"
+echo "   客户端 bundle：$APP/Contents/Resources/*NoCompile.bundle"
 
 TARGET_APP="$APP"
 if [ "$INSTALL" -eq 1 ]; then

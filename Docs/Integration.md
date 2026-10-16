@@ -16,21 +16,157 @@
 
 可以直接在 Build Settings 里按配置展开，只给 Debug 行填写。切勿加到 Release，`-interposable` 会影响优化，且上架构建不应包含它。
 
-> 本地 SPM 包里的代码若也要支持热重载，同样需要给对应 target 的 Debug 配置加这个参数。
+> 无论用下面哪种方式接入客户端，这一步都需要。CocoaPods 方式会自动加上。本地 SPM 包里的代码若也要支持热重载，同样需要给对应 target 的 Debug 配置加这个参数。
 
-## 第二步：链接客户端库（仅 Debug）
+## 第二步：接入客户端（任选一种，仅 Debug）
 
-### 方式 A：Swift Package Manager（推荐）
+| 方式 | 改动 | 真机 | 适合场景 |
+|---|---|---|---|
+| [A. Swift Package Manager](#方式-aswift-package-manager) | 加包依赖 | ✅ | 新工程、纯 SPM 工程 |
+| [B. CocoaPods](#方式-bcocoapods) | Podfile 一行 | ✅ | 已用 CocoaPods 的工程 |
+| [C. Carthage](#方式-ccarthage) | Cartfile + 一项排除设置 | ✅ | 已用 Carthage 的工程 |
+| [D. 运行时加载 bundle](#方式-d运行时加载-bundle零依赖) | 一行加载代码 | 模拟器 / macOS | 不想动依赖管理，InjectionIII 用户 |
+| [E. 拷贝 bundle 进 App](#方式-e拷贝-bundle-进-app零依赖支持真机) | Run Script + 一行加载代码 | ✅ | 零依赖且要支持真机 |
+| [F. DYLD_INSERT_LIBRARIES](#方式-fdyld_insert_libraries零代码) | 只改 scheme 环境变量 | 模拟器 / macOS | 完全不改工程与代码 |
+| [G. 手动链接](#方式-g手动链接) | 子工程 | ✅ | 想自己掌控构建 |
 
-1. File → Add Package Dependencies，填入 NoCompile 仓库地址。
+A/B/C/G 在镜像加载时自动启动；D/E 在 `load()` 时启动；F 在进程启动时启动，都不需要再调用 `NoCompile.start()`。同一进程里误接了多份客户端时，只有第一份生效，控制台会打印 `检测到重复加载的客户端`；此时 ObjC 运行时也会报 `Class NCxxx is implemented in both` 警告，去掉多余的那份即可。
+
+### 方式 A：Swift Package Manager
+
+1. File → Add Package Dependencies，填入 `https://github.com/wangwanjie/NoCompile`。
 2. 把 `NoCompile` 库加到 App target。
-3. 确保只在 Debug 生效。客户端代码整体包在 `#if DEBUG` 里，Release 构建为空壳，但仍建议在依赖层面隔离。
+3. Debug 的 Other Linker Flags 里加 `-ObjC`（或任意引用一次客户端），确保客户端的类被完整链接。
+4. 客户端代码整体包在 `#if DEBUG` 里，Release 构建为空壳；仍建议在依赖层面隔离。
 
-### 方式 B：手动链接
+SPM 的模块名为 `NoCompileClient`，需要调用 API 时 `import NoCompileClient`。
 
-把构建出的 `NoCompile.framework`（或静态库）加入工程，并在 Debug 的 Other Linker Flags 里 `-force_load` 它。
+### 方式 B：CocoaPods
 
-接好后无需写任何启动代码，客户端会在镜像加载时自动连接 Mac 端。SwiftUI Preview 和单元测试环境下会自动跳过（需要在单测里启用时设置环境变量 `NOCOMPILE_ENABLE_IN_TESTS=1`）。
+```ruby
+pod 'NoCompile', :configurations => ['Debug']
+```
+
+尚未发布到 Trunk 时可直接指向仓库：
+
+```ruby
+pod 'NoCompile', :git => 'https://github.com/wangwanjie/NoCompile.git', :branch => 'main', :configurations => ['Debug']
+```
+
+- Pod 会自动给引入它的配置加上 `-Xlinker -interposable`，第一步可以省略。
+- 客户端由 `DEBUG` 宏控制，CocoaPods 会给 debug 类配置的 Pod target 定义 `DEBUG=1`。自定义配置名（如 `Dev`）需要在 Podfile 里声明为 debug 类型：`project 'App', 'Dev' => :debug`，并加入 `:configurations`。
+- 静态库与 `use_frameworks!` 都支持。模块名为 `NoCompile`。
+- Pod 的最低系统版本为 iOS / tvOS 15、macOS 12（Xcode 27 不再支持更低的部署目标）。
+
+### 方式 C：Carthage
+
+```
+# Cartfile
+github "wangwanjie/NoCompile"
+```
+
+```bash
+carthage update NoCompile --use-xcframeworks
+```
+
+Carthage 默认以 Release 配置构建，因此 NoCompile 的 Carthage 产物不依赖 `DEBUG` 宏、始终包含客户端代码，需要在工程里把它限制在 Debug：
+
+1. 把 `Carthage/Build/NoCompile.xcframework` 拖到 App target 的 Frameworks, Libraries, and Embedded Content，选 **Embed & Sign**。
+2. Build Settings 里，给 **Release**（以及其他非调试配置）设置 Excluded Source File Names：
+
+   ```
+   EXCLUDED_SOURCE_FILE_NAMES = NoCompile.xcframework NoCompile.framework
+   ```
+
+   这样 Release 构建既不链接也不嵌入 NoCompile。
+3. 按第一步给 Debug 加 `-Xlinker -interposable`。
+
+模块名为 `NoCompile`。动态 framework 加载即自动启动，不需要 `-ObjC`。
+
+### 方式 D：运行时加载 bundle（零依赖）
+
+与 InjectionIII 的 `iOSInjection.bundle` 用法一致。NoCompile.app 内置了各平台的客户端 bundle：
+
+| bundle | 平台 |
+|---|---|
+| `macOSNoCompile.bundle` | macOS |
+| `iOSNoCompile.bundle` | iOS 模拟器 |
+| `tvOSNoCompile.bundle` | tvOS 模拟器 |
+| `iOSDeviceNoCompile.bundle` / `tvOSDeviceNoCompile.bundle` | 真机，见方式 E |
+
+在 App 启动尽早的位置（例如 `application(_:didFinishLaunchingWithOptions:)`）加载：
+
+```swift
+#if DEBUG
+#if os(macOS)
+Bundle(path: "/Applications/NoCompile.app/Contents/Resources/macOSNoCompile.bundle")?.load()
+#elseif os(tvOS)
+Bundle(path: "/Applications/NoCompile.app/Contents/Resources/tvOSNoCompile.bundle")?.load()
+#elseif targetEnvironment(simulator)
+Bundle(path: "/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle")?.load()
+#endif
+#endif
+```
+
+Objective-C：
+
+```objc
+#if DEBUG
+[[NSBundle bundleWithPath:@"/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle"] load];
+#endif
+```
+
+- NoCompile.app 不在 `/Applications` 时改成实际路径。从源码构建的 App 在 `build/DerivedData/Build/Products/Release/NoCompile.app`，也可以直接用 `Scripts/build-client-bundles.sh` 单独构建出 `build/ClientBundles/`。
+- macOS App 若开启了 Hardened Runtime，需在 Debug 的 entitlements 里加 `com.apple.security.cs.disable-library-validation`，否则系统会拒绝加载其他团队签名的 bundle；或者改用方式 E，由脚本用 App 自己的身份重签。
+- 模拟器进程能直接访问 Mac 的文件系统，所以可以从 NoCompile.app 里加载；真机做不到，请用方式 E。
+
+### 方式 E：拷贝 bundle 进 App（零依赖，支持真机）
+
+1. 在 App target 的 Build Phases 末尾加一个 Run Script：
+
+   ```bash
+   "/Applications/NoCompile.app/Contents/Resources/nocompile_copy_bundle.sh"
+   ```
+
+   脚本按当前平台挑出对应的 bundle，拷到 App 资源目录并命名为 `NoCompile.bundle`，再用 App 的签名身份重签。默认只在名字含 `Debug` 的配置生效。若 target 开启了 `ENABLE_USER_SCRIPT_SANDBOXING`，需要关闭，否则脚本读不到 NoCompile.app。
+
+2. 加载代码各平台相同：
+
+   ```swift
+   #if DEBUG
+   if let path = Bundle.main.path(forResource: "NoCompile", ofType: "bundle") {
+       Bundle(path: path)?.load()
+   }
+   #endif
+   ```
+
+脚本支持的环境变量：
+
+| 变量 | 作用 |
+|---|---|
+| `NOCOMPILE_BUNDLES_DIR` | bundle 所在目录，默认为脚本所在目录 |
+| `NOCOMPILE_COPY_CONFIGURATIONS` | 允许拷贝的配置名，逗号分隔，例如 `Debug,Dev` |
+| `NOCOMPILE_DISABLE_COPY=1` | 临时关闭拷贝 |
+
+### 方式 F：DYLD_INSERT_LIBRARIES（零代码）
+
+bundle 的可执行文件是动态库，可以在 scheme 里直接注入，工程和代码都不用改。Edit Scheme → Run → Arguments → Environment Variables 添加：
+
+| 平台 | `DYLD_INSERT_LIBRARIES` |
+|---|---|
+| iOS 模拟器 | `/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle/iOSNoCompile` |
+| tvOS 模拟器 | `/Applications/NoCompile.app/Contents/Resources/tvOSNoCompile.bundle/tvOSNoCompile` |
+| macOS | `/Applications/NoCompile.app/Contents/Resources/macOSNoCompile.bundle/Contents/MacOS/macOSNoCompile` |
+
+macOS App 开启 Hardened Runtime 时，系统会忽略 `DYLD_*` 环境变量，需要在 Debug 的 entitlements 里加 `com.apple.security.cs.allow-dyld-environment-variables` 与 `com.apple.security.cs.disable-library-validation`。
+
+### 方式 G：手动链接
+
+把 `Client/NoCompileClient.xcodeproj` 拖进工程作为子工程，链接对应平台的 `NoCompile` framework，Release 配置同样用 `EXCLUDED_SOURCE_FILE_NAMES` 排除（参考方式 C）。该工程的 framework 与 bundle 都定义了 `NOCOMPILE_FORCE_ENABLE=1`，不依赖 `DEBUG` 宏。
+
+---
+
+SwiftUI Preview 和单元测试环境下客户端会自动跳过（需要在单测里启用时设置环境变量 `NOCOMPILE_ENABLE_IN_TESTS=1`）。
 
 ## 第三步：运行
 
@@ -108,6 +244,8 @@ NoCompile 注入后会发出 `INJECTION_BUNDLE_NOTIFICATION`，与这些包兼�
 ## 常见问题
 
 **提示"未替换任何实现"**：多半是没加 `-Xlinker -interposable`，或加到了 Release 而非 Debug。
+
+**App 启动后 Mac 端一直没有"已连接"**：确认客户端确实被加载了。SPM / 静态库方式检查是否加了 `-ObjC`；bundle 方式检查 `load()` 的返回值和路径；`DYLD_INSERT_LIBRARIES` 方式检查 macOS App 是否开启了 Hardened Runtime。
 
 **提示"未找到构建日志"**：先在 Xcode 完整构建一次；若用了自定义 DerivedData，用 `-d` 指定。
 
