@@ -3,8 +3,26 @@
     <channel>
         <title>NoCompile</title>
         <item>
+            <title>0.2.2</title>
+            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.2</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.2/NoCompile_v0.2.2.dmg" length="4220352" type="application/octet-stream" sparkle:edSignature="e01GQFcarMlOZSJOa1IUSYlD0ITK/kCNknv0cb4w8CRzkFIm8L2UiFH5YWPRcHLboDjdcv1YJQPxHDDDMdI3DQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.2&lt;/h2&gt;
+&lt;h3&gt;新增&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;断开工程&lt;/strong&gt;：控制台顶栏、菜单栏与「文件」菜单可断开当前工程（停止监听并断开已连接的 App），断开后可一键重新打开最近的工程&lt;/li&gt;&lt;li&gt;&lt;strong&gt;导出诊断包&lt;/strong&gt;：控制台日志栏的 📦 按钮或菜单「导出诊断包…」生成 zip，包含各环节诊断日志、编译失败的完整命令与输出、主线程卡顿时自动采集的调用栈、引擎状态与最近注入记录，便于反馈问题&lt;/li&gt;&lt;li&gt;&lt;strong&gt;客户端版本校验&lt;/strong&gt;：App 内的客户端与 Mac 端版本不一致（例如 App 包里拷贝的仍是旧 bundle）时，控制台、系统通知与 App 浮层提示重新编译 App，并暂停向其推送热重载&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;优化&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;大型工程的构建日志改为流式解析并增量合并：1.1GB 的日志从 217 秒 / 4.5GB 内存降到约 8 秒 / 不到 100MB，修复打开大型工程后 Mac 端长时间无响应、转菊花&lt;/li&gt;&lt;li&gt;头文件改动改用依赖索引查找引用方，被大量文件引用的公共头文件只重编同名实现文件&lt;/li&gt;&lt;li&gt;本地 Pod / 子模块 git 拉取、合并后能正确触发热重载：一次 git 操作合并为一批处理，并监听 Podfile.lock 中工程目录之外的本地 Pod&lt;/li&gt;&lt;li&gt;App 内状态浮层支持多行，长提示不再被截断&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;存在同名工程（如两份 kugou.xcworkspace）时可能用错另一份工程的构建日志&lt;/li&gt;&lt;li&gt;切换工程、重启监听时可能卡住主线程&lt;/li&gt;&lt;li&gt;日志达到上限后「跟随最新」失效&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;&amp;gt; 升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.2。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.2.1</title>
-            <pubDate>Fri, 16 Oct 2026 15:37:30 +0800</pubDate>
+            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.1</link>
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
@@ -19,7 +37,7 @@
         </item>
         <item>
             <title>0.2.0</title>
-            <pubDate>Fri, 16 Oct 2026 15:37:30 +0800</pubDate>
+            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.0</link>
             <sparkle:version>2</sparkle:version>
             <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
@@ -33,25 +51,6 @@
 &lt;h3&gt;已知限制&lt;/h3&gt;
 &lt;ul&gt;&lt;li&gt;资源热重载只覆盖主 bundle；App 图标、颜色集、矢量图片、暗色等外观变体、`Localizable.strings` 需要重新运行 App&lt;/li&gt;&lt;li&gt;SwiftUI 的 `Image("name")` 不经过 `imageNamed:`，不会拿到新图&lt;/li&gt;&lt;li&gt;新增的 Objective-C 类要被 Swift 使用，需要修改桥接头并重新构建&lt;/li&gt;&lt;/ul&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
-        </item>
-        <item>
-            <title>0.1.0</title>
-            <pubDate>Fri, 16 Oct 2026 15:37:30 +0800</pubDate>
-            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.1.0</link>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.1.0/NoCompile_v0.1.0.dmg" length="3161943" type="application/octet-stream" sparkle:edSignature="5NzoLqqkjlhTjKkGxPL3BZuuSnSpzkjiNSx2bxXqngMUrChz6uLhS9p5t/1zmKPj4vCR/NhZ8lxFAaeFU07lAQ==" />
-            <description>&lt;h2&gt;NoCompile 0.1.0&lt;/h2&gt;
-&lt;p&gt;首个公开版本。NoCompile 是 iOS / macOS 热重载工具：修改代码并保存，几秒内就能在运行中的 App 看到效果，无需重新编译整个工程。&lt;/p&gt;
-&lt;h3&gt;主要特性&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;&lt;strong&gt;多语言&lt;/strong&gt;：支持 Swift、Objective-C、C、C++&lt;/li&gt;&lt;li&gt;&lt;strong&gt;多平台&lt;/strong&gt;：支持 iOS 真机（USB）、iOS 模拟器、macOS App&lt;/li&gt;&lt;li&gt;&lt;strong&gt;零侵入&lt;/strong&gt;：业务代码不需要 import、调用，也不需要实现 `injected()`。注入后自动重建受影响的可见页面（UIKit / AppKit）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;适配新版 Xcode&lt;/strong&gt;：从构建日志取模块命令，交给 `swiftc -###` 展开出单文件编译命令，不依赖 `EMIT_FRONTEND_COMMAND_LINES`，也不修改 Xcode 工具链&lt;/li&gt;&lt;li&gt;&lt;strong&gt;三层替换&lt;/strong&gt;：ObjC 方法替换、Swift vtable 覆写、符号重绑（C / C++ / Swift 静态函数）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;安全防护&lt;/strong&gt;：检测到内存布局变化时拒绝注入；保留静态状态（单例不重建）；拦截 `+load` 中的重复 swizzle；修正注入后的类型判定&lt;/li&gt;&lt;li&gt;&lt;strong&gt;控制台&lt;/strong&gt;：已连接 App、注入记录与耗时统计、可过滤可搜索的实时日志&lt;/li&gt;&lt;li&gt;&lt;strong&gt;偏好设置&lt;/strong&gt;：保存即注入 / 手动注入、头文件监听、排除路径、失败通知、提示音、登录启动等；App 端行为实时下发&lt;/li&gt;&lt;li&gt;&lt;strong&gt;自动更新&lt;/strong&gt;：基于 Sparkle&lt;/li&gt;&lt;/ul&gt;
-&lt;h3&gt;接入&lt;/h3&gt;
-&lt;p&gt;1. App 的 Debug 配置添加链接参数 `-Xlinker -interposable`&lt;br/&gt;2. 通过 SPM 依赖 `NoCompile` 库（仅 Debug 生效）&lt;br/&gt;3. 打开 NoCompile，选择工程，在 Xcode 中运行 App&lt;/p&gt;
-&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt; 与 &lt;a href="https://github.com/wangwanjie/NoCompile/tree/main/Examples/NoCompileExample"&gt;示例工程&lt;/a&gt;。&lt;/p&gt;
-&lt;h3&gt;已知限制&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;增删存储属性、给非 final 类增删方法需要重新运行 App（NoCompile 会检测并拒绝注入）&lt;/li&gt;&lt;li&gt;SwiftUI 需要配合 `@ObserveInjection` 触发重绘&lt;/li&gt;&lt;li&gt;暂不兼容 Whole Module Optimization 与编译缓存（Debug 默认关闭）&lt;/li&gt;&lt;/ul&gt;
-&lt;p&gt;系统要求：macOS 12 及以上，Xcode 15 及以上。&lt;/p&gt;</description>
         </item>
         <link>https://github.com/wangwanjie/NoCompile</link>
         <description>NoCompile release feed.</description>
