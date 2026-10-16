@@ -244,17 +244,26 @@ static NSUInteger gInjectionCount = 0;
 
     NCInjectResult *result = [NCInjector injectDylibAtPath:dylibPath sourceFiles:sourceFiles];
     BOOL ok = result.status == NCInjectStatusSuccess;
+    NSString *fileName = sourceFiles.firstObject.lastPathComponent ?: dylibName;
+    NSString *hud;
     if (ok) {
         gInjectionCount++;
-        NCLogSuccess(@"注入成功：替换 ObjC 方法 %lu，Swift 槽位 %lu，重绑符号 %lu",
+        NSString *refreshed = result.refreshedControllers.count > 0
+            ? [NSString stringWithFormat:@"，已刷新 %@", [result.refreshedControllers componentsJoinedByString:@"、"]]
+            : @"";
+        NCLogSuccess(@"%@ 注入成功：ObjC 方法 %lu，Swift 槽位 %lu，函数重绑 %lu%@",
+                     fileName,
                      (unsigned long)result.objcMethodsReplaced,
                      (unsigned long)result.swiftSlotsPatched,
-                     (unsigned long)result.symbolsRebound);
+                     (unsigned long)result.symbolsRebound,
+                     refreshed);
+        hud = [NSString stringWithFormat:@"%@ 已生效", fileName];
     } else {
-        NCLogError(@"注入失败：%@", result.message);
+        NCLogError(@"%@ 注入失败：%@", fileName, result.message);
+        hud = [NSString stringWithFormat:@"%@ 注入失败", fileName];
     }
     if (gShowsHUD) {
-        [NCHUD showStatus:ok ? @"注入成功" : @"注入失败" state:ok ? 0 : 2];
+        [NCHUD showStatus:hud state:ok ? 0 : 2];
     }
     [self sendInjectResult:ok message:result.message source:sourceFiles];
 }

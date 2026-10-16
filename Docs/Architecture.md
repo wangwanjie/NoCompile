@@ -82,7 +82,9 @@ C / C++ 自由函数、Swift 的全局函数和静态派发函数，既不走 Ob
 
 dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` 里做了 `method_exchangeImplementations`，再次交换会让 hook 链自我指向，造成无限递归。
 
-防护办法（见 `NCSwizzleGuard.m`）：加载期间用符号重绑把 `method_exchangeImplementations` 改成"两次 `setImplementation`"的幂等版本，加载结束后恢复。
+防护办法（见 `NCSwizzleGuard.m`）：注册 dyld 的 add-image 回调。该回调在新镜像完成符号绑定之后、执行 `+load` 之前触发，这时把新镜像对 `method_exchangeImplementations` 的引用重绑为一个空操作版本，让重复的交换不再发生，已有的 hook 链就能保持不变。
+
+已知局限：如果被重编的是对**其他类**做 swizzle 的分类文件（比如 `UIViewController+Tracking.m`），分类方法本身会被 runtime 重新附加。这种情况可能破坏 hook 链，建议改完后重新运行 App。
 
 ## 类型判定修复
 
@@ -90,13 +92,19 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 
 处理办法（见 `NCDynamicCast.m`）：登记新类到其原始类的映射，并改写 `isKindOfClass:` / `isMemberOfClass:`，按"归一化后的原始类"比较。
 
-## injected 回调与实例遍历
+## 零侵入刷新
 
-注入完成后在主线程（见 `NCSweeper.m`）：
+注入完成后，主线程上会执行以下步骤（实现见 `NCSweeper.m`）：
 
-1. 对实现了 `+injected` 的类调用类方法。
-2. 从界面根节点（windows、delegate）出发，广度遍历对象图，对实现了 `-injected` 的实例调用回调。
-3. 发出 `NoCompileDidInjectNotification` 通知，驱动 SwiftUI 刷新。
+1. 从各窗口的根控制器出发，收集当前可见的控制器。导航控制器只取栈顶，标签栏控制器只取选中项，另外包括被 present 的控制器和子控制器。
+2. 以**类名**判断受影响的控制器。App 里的实例属于旧类，dylib 里的是新类，两者名字相同。命中条件是控制器自身的类被替换，或它的视图层级里有被替换的视图类。系统容器（导航、标签栏等）不重建。
+3. 如果一个控制器都没命中（改的是模型、C/C++ 函数等非界面代码），就刷新最上层的可见业务控制器。
+4. 重建步骤：移除子控制器，清空根视图的子视图（重写了 `loadView` 的则重新 `loadView` 并替换原视图），再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`。根视图是 table / collection view 的，只 `reloadData`。
+5. 发出 `NoCompileDidInjectNotification` 和兼容的 `INJECTION_BUNDLE_NOTIFICATION`，供 SwiftUI 等场景使用。
+
+兼容项：类或控制器如果实现了 InjectionIII 风格的 `+injected` / `-injected`，会优先调用它们，不走默认重建。
+
+整个注入过程（dlopen、替换、刷新）都在主线程串行执行，避免和 UI 代码并发。
 
 ## 通信协议
 

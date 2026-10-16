@@ -34,31 +34,27 @@ public final class DeviceBridge {
     private func pollLoop() {
         while running {
             let devices = listDevices()
-            for deviceID in devices where !connectedDevices.contains(deviceID) {
-                if let fd = connect(deviceID: deviceID, port: NCProtocol.devicePort) {
-                    connectedDevices.insert(deviceID)
-                    let connection = ServerConnection(fd: fd)
-                    onConnection(connection)
-                    connection.start()
-                    // 监控断开：连接关闭后允许重连
-                    watchDisconnect(deviceID: deviceID, connection: connection)
+            let busy = stateLock.withLock { connectedDevices }
+            for deviceID in devices where !busy.contains(deviceID) {
+                // App 未运行时 Connect 会失败，下一轮继续尝试
+                guard let fd = connect(deviceID: deviceID, port: NCProtocol.devicePort) else {
+                    continue
                 }
+                stateLock.withLock { _ = connectedDevices.insert(deviceID) }
+                let connection = ServerConnection(fd: fd)
+                // 连接断开后释放该设备，允许 App 重启后重连
+                connection.onClose = { [weak self] in
+                    guard let self else { return }
+                    self.stateLock.withLock { _ = self.connectedDevices.remove(deviceID) }
+                }
+                onConnection(connection)
+                connection.start()
             }
             Thread.sleep(forTimeInterval: 2)
         }
     }
 
-    private func watchDisconnect(deviceID: Int, connection: ServerConnection) {
-        // ServerConnection 关闭时无直接回调给 bridge，这里用轻量轮询清理
-        queue.asyncAfter(deadline: .now() + 2) { [weak self, weak connection] in
-            guard let self else { return }
-            if connection == nil {
-                self.connectedDevices.remove(deviceID)
-            } else {
-                self.watchDisconnect(deviceID: deviceID, connection: connection!)
-            }
-        }
-    }
+    private let stateLock = NSLock()
 
     // MARK: - usbmuxd 原语
 

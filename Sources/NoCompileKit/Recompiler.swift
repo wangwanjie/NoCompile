@@ -34,105 +34,96 @@ public struct Platform {
 
 public final class Recompiler {
 
-    private let buildLog: BuildLog
     private let outputDirectory: String
-    private var counter: Int = 0
     private let toolchainBin: String
+    private var counter: Int = 0
+    /// 会话标识：保证引擎重启后 dylib 文件名也不重复（dlopen 对同路径会直接返回旧镜像）
+    private let sessionID: String
 
-    public init(buildLog: BuildLog, outputDirectory: String) {
-        self.buildLog = buildLog
+    public init(outputDirectory: String) {
         self.outputDirectory = outputDirectory
         try? FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
-        // 定位工具链 bin 目录
-        let result = Shell.run("/usr/bin/xcrun", ["--find", "swiftc"])
-        let swiftc = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.toolchainBin = swiftc.isEmpty
-            ? "/usr/bin"
-            : (swiftc as NSString).deletingLastPathComponent
+        let swiftc = Shell.run("/usr/bin/xcrun", ["--find", "swiftc"]).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.toolchainBin = swiftc.isEmpty ? "/usr/bin" : (swiftc as NSString).deletingLastPathComponent
+        self.sessionID = String(Int(Date().timeIntervalSince1970) % 1_000_000)
     }
 
     /// 重编单个源文件，返回签名完毕的 dylib 路径
     public func recompile(sourceFile: String,
-                          commands: (swiftModules: [RawCompileCommand], clangFiles: [String: RawCompileCommand]),
+                          commands: ParsedCommands,
                           platform: Platform,
                           codesignIdentity: String?) -> RecompileResult {
         counter += 1
-        let objectPath = "\(outputDirectory)/nc_object_\(counter).o"
-        let dylibPath = "\(outputDirectory)/nc_injection_\(counter).dylib"
+        let stem = "nc_\(sessionID)_\(counter)"
+        let objectPath = "\(outputDirectory)/\(stem).o"
+        let dylibPath = "\(outputDirectory)/\(stem).dylib"
 
-        let isSwift = sourceFile.hasSuffix(".swift")
-        let compileLog: String
-        let compileError: String?
-        if isSwift {
-            (compileError, compileLog) = compileSwift(sourceFile: sourceFile,
-                                                      modules: commands.swiftModules,
-                                                      objectPath: objectPath)
+        let compiled: (error: String?, log: String, target: String?)
+        if sourceFile.hasSuffix(".swift") {
+            compiled = compileSwift(sourceFile: sourceFile,
+                                    modules: commands.swiftModules(for: platform.name),
+                                    objectPath: objectPath)
         } else {
-            (compileError, compileLog) = compileClang(sourceFile: sourceFile,
-                                                      clangFiles: commands.clangFiles,
-                                                      objectPath: objectPath)
+            compiled = compileClang(sourceFile: sourceFile,
+                                    command: commands.clangCommand(for: sourceFile, platform: platform.name),
+                                    objectPath: objectPath)
         }
-        if let compileError {
-            return RecompileResult(dylibPath: nil, log: compileLog, error: compileError)
+        if let error = compiled.error {
+            return RecompileResult(dylibPath: nil, log: compiled.log, error: error)
         }
 
-        // 链接
-        let linkResult = link(objectPath: objectPath, dylibPath: dylibPath, platform: platform)
+        let linkResult = link(objectPath: objectPath, dylibPath: dylibPath, platform: platform, target: compiled.target)
         guard linkResult.succeeded else {
-            return RecompileResult(dylibPath: nil, log: compileLog + "\n" + linkResult.stdout + linkResult.stderr,
+            return RecompileResult(dylibPath: nil, log: compiled.log + "\n" + linkResult.stderr,
                                    error: "链接失败：\(linkResult.stderr)")
         }
-
-        // 签名
         if let signError = codesign(dylibPath: dylibPath, platform: platform, identity: codesignIdentity) {
-            return RecompileResult(dylibPath: nil, log: compileLog, error: signError)
+            return RecompileResult(dylibPath: nil, log: compiled.log, error: signError)
         }
-        return RecompileResult(dylibPath: dylibPath, log: compileLog, error: nil)
+        return RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil)
     }
 
     // MARK: - Swift
 
     private func compileSwift(sourceFile: String,
                               modules: [RawCompileCommand],
-                              objectPath: String) -> (error: String?, log: String) {
+                              objectPath: String) -> (error: String?, log: String, target: String?) {
         guard let module = swiftModule(for: sourceFile, in: modules) else {
-            return ("未在构建日志中找到包含该文件的 Swift 模块命令（该文件所属 target 是否已完整编译过？）", "")
+            return ("未在构建日志中找到包含该文件的 Swift 模块命令（请先为该平台完整构建一次）", "", nil)
         }
         // 1. 清洗 driver 参数，去掉增量 / 整模块 / 产物输出相关项
         let cleaned = cleanedSwiftDriverTokens(module.tokens)
         // 2. 用 -### 展开 frontend 命令
-        var expandArgs = Array(cleaned.dropFirst()) // 去掉 swiftc 本身
+        var expandArgs = Array(cleaned.dropFirst())
         expandArgs.append("-###")
         let expand = Shell.run(cleaned[0], expandArgs, workingDirectory: module.workingDirectory)
         guard expand.succeeded else {
-            return ("无法展开 Swift 编译命令：\(expand.stderr)", expand.stdout + expand.stderr)
+            return ("无法展开 Swift 编译命令：\(expand.stderr)", expand.stdout + expand.stderr, nil)
         }
         // 3. 找到以目标文件为 -primary-file 的那条 frontend 命令
         guard let frontendLine = frontendLine(for: sourceFile, in: expand.stdout) else {
-            return ("展开结果中未找到该文件的 frontend 命令", expand.stdout)
+            return ("展开结果中未找到该文件的 frontend 命令", expand.stdout, nil)
         }
-        var tokens = CommandTokenizer.tokenize(frontendLine)
-        tokens = rewriteFrontendOutput(tokens, objectPath: objectPath)
-        tokens.append(contentsOf: ["-D", "DEBUG", "-D", "INJECTING"])
+        var tokens = rewriteFrontendOutput(CommandTokenizer.tokenize(frontendLine), objectPath: objectPath)
+        tokens.append(contentsOf: ["-D", "INJECTING"])
         let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: module.workingDirectory)
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
             return (extractCompileError(compile.stderr + compile.stdout) ?? "Swift 编译失败",
-                    compile.stdout + compile.stderr)
+                    compile.stdout + compile.stderr, nil)
         }
-        return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)")
+        return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", module.target)
     }
 
     /// 找到包含该源文件的模块命令
     private func swiftModule(for sourceFile: String, in modules: [RawCompileCommand]) -> RawCompileCommand? {
-        if modules.count == 1 {
-            return modules.first
-        }
         for module in modules {
             if swiftSources(of: module).contains(sourceFile) {
                 return module
             }
         }
-        return nil
+        // 新增文件不在旧的文件列表中：模块只有一个时直接用它
+        return modules.count == 1 ? modules.first : nil
     }
 
     /// 取模块命令涉及的所有 swift 源文件（含 @filelist）
@@ -158,6 +149,7 @@ public final class Recompiler {
 
     /// 去掉会干扰单文件重编的 driver 参数
     private func cleanedSwiftDriverTokens(_ tokens: [String]) -> [String] {
+        // 注意：-serialize-diagnostics 在 driver 层是不带值的布尔标志
         let dropFlags: Set<String> = [
             "-incremental", "-enable-batch-mode", "-experimental-emit-module-separately",
             "-emit-module", "-emit-dependencies", "-emit-objc-header", "-emit-const-values",
@@ -182,11 +174,11 @@ public final class Recompiler {
                 i += 2
                 continue
             }
-            if token.hasPrefix("-j") {   // 并发度
+            if token.hasPrefix("-j") {
                 i += 1
                 continue
             }
-            // -Xcc -ivfsstatcache <path>：缓存文件可能已失效
+            // -Xcc -ivfsstatcache -Xcc <path>：缓存文件可能已失效
             if token == "-Xcc", i + 1 < tokens.count, tokens[i + 1] == "-ivfsstatcache" {
                 i += 4
                 continue
@@ -222,13 +214,12 @@ public final class Recompiler {
             "-emit-dependencies-path", "-emit-const-values-path",
             "-index-unit-output-path", "-index-store-path",
             "-supplementary-output-file-map",
-            // Xcode 16+ 显式模块：这些依赖会被清理掉的预编译 .pcm，改回隐式模块构建
+            // Xcode 16+ 显式模块：依赖会被清理的预编译 .pcm，改回隐式模块构建
             "-explicit-swift-module-map-file", "-explicit-swift-module-map",
         ]
         let dropFlags: Set<String> = [
             "-frontend-parseable-output", "-disable-implicit-swift-modules",
         ]
-        // 需要连同 -Xcc 前缀一起丢弃的 clang 参数（关闭隐式模块会导致找不到 .pcm）
         let dropXcc: Set<String> = ["-fno-implicit-modules", "-fno-implicit-module-maps"]
         while i < tokens.count {
             let token = tokens[i]
@@ -263,10 +254,10 @@ public final class Recompiler {
     // MARK: - ObjC / C / C++
 
     private func compileClang(sourceFile: String,
-                              clangFiles: [String: RawCompileCommand],
-                              objectPath: String) -> (error: String?, log: String) {
-        guard let command = clangFiles[sourceFile] else {
-            return ("未在构建日志中找到该文件的 clang 命令（该文件所属 target 是否已完整编译过？）", "")
+                              command: RawCompileCommand?,
+                              objectPath: String) -> (error: String?, log: String, target: String?) {
+        guard let command else {
+            return ("未在构建日志中找到该文件的 clang 命令（请先为该平台完整构建一次）", "", nil)
         }
         var tokens: [String] = []
         var i = 0
@@ -306,34 +297,48 @@ public final class Recompiler {
         let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
             return (extractCompileError(compile.stderr + compile.stdout) ?? "编译失败",
-                    compile.stdout + compile.stderr)
+                    compile.stdout + compile.stderr, nil)
         }
-        return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)")
+        return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", command.target)
     }
 
     // MARK: - 链接与签名
 
-    private func link(objectPath: String, dylibPath: String, platform: Platform) -> ShellResult {
+    private func link(objectPath: String, dylibPath: String, platform: Platform, target: String?) -> ShellResult {
         let swiftLibDir = "\(toolchainBin)/../lib/swift/\(platform.name)"
-        var args: [String] = [
-            "-arch", platform.arch,
+        var args: [String] = []
+        // 优先沿用编译时的 -target，保证平台与最低系统版本一致
+        if let target {
+            args.append(contentsOf: ["-target", target])
+        } else {
+            args.append(contentsOf: ["-arch", platform.arch])
+        }
+        args.append(contentsOf: [
             "-isysroot", platform.sdkPath,
             "-dynamiclib",
             "-undefined", "dynamic_lookup",
             "-Xlinker", "-interposable",
             "-fobjc-arc",
-            "-fprofile-instr-generate",
             "-L", swiftLibDir,
-            objectPath,
-            "-o", dylibPath,
-        ]
-        // 让 dylib 能找到 App 包里的 framework
-        args.append(contentsOf: ["-L", swiftLibDir, "-rpath", swiftLibDir])
+            "-install_name", "@rpath/\((dylibPath as NSString).lastPathComponent)",
+        ])
+        // 仅当目标文件开启了代码覆盖率时才链接 profile 运行时
+        if needsProfileRuntime(objectPath: objectPath) {
+            args.append("-fprofile-instr-generate")
+        }
+        // C++ 代码需要 libc++
+        args.append("-lc++")
+        args.append(contentsOf: [objectPath, "-o", dylibPath])
         return Shell.run("\(toolchainBin)/clang", args, workingDirectory: outputDirectory)
     }
 
+    private func needsProfileRuntime(objectPath: String) -> Bool {
+        let result = Shell.run("\(toolchainBin)/nm", ["-u", objectPath])
+        return result.stdout.contains("___llvm_profile_runtime")
+    }
+
     private func codesign(dylibPath: String, platform: Platform, identity: String?) -> String? {
-        // 模拟器无需签名；macOS 与真机需要签名（真机用开发者身份）
+        // 模拟器：链接器已自动 ad-hoc 签名
         if platform.isSimulator {
             return nil
         }
@@ -344,9 +349,10 @@ public final class Recompiler {
             }
             signIdentity = identity
         } else {
-            signIdentity = identity?.isEmpty == false ? identity! : "-"  // macOS 默认 ad-hoc
+            // macOS：默认 ad-hoc。若 App 开了 Hardened Runtime + 库校验，需在 Debug 关闭库校验
+            signIdentity = "-"
         }
-        let result = Shell.run("/usr/bin/codesign", ["--force", "--sign", signIdentity, dylibPath])
+        let result = Shell.run("/usr/bin/codesign", ["--force", "--sign", signIdentity, "--timestamp=none", dylibPath])
         return result.succeeded ? nil : "签名失败：\(result.stderr)"
     }
 

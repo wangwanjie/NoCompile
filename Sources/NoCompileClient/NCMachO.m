@@ -71,8 +71,16 @@ static BOOL NCIsAppImagePath(const char *path, NSString *bundlePath) {
             return YES;
         }
     }
-    if (bundlePath.length > 0 && [imagePath hasPrefix:bundlePath]) {
-        return YES;
+    if (bundlePath.length > 0) {
+        if ([imagePath hasPrefix:bundlePath]) {
+            return YES;
+        }
+        // 真机上 dyld 与 NSBundle 给出的路径可能一个带 /private 前缀、一个不带
+        NSString *bundleMarker = [NSString stringWithFormat:@"/%@/", bundlePath.lastPathComponent];
+        NSString *containerMarker = bundlePath.stringByDeletingLastPathComponent.lastPathComponent;
+        if ([imagePath containsString:bundleMarker] && [imagePath containsString:containerMarker]) {
+            return YES;
+        }
     }
     // 模拟器 / macOS 上，Xcode 可能通过 DYLD_FRAMEWORK_PATH 直接加载 DerivedData 中的 framework
     if ([imagePath containsString:@"/Build/Products/"] || [imagePath containsString:@"/DerivedData/"]) {

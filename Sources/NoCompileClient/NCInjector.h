@@ -21,6 +21,8 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 @property (nonatomic) NSUInteger swiftSlotsPatched;
 @property (nonatomic) NSUInteger symbolsRebound;
 @property (nonatomic, copy) NSArray<Class> *injectedClasses;
+/// 注入后被自动刷新的视图控制器类名
+@property (nonatomic, copy) NSArray<NSString *> *refreshedControllers;
 @end
 
 @interface NCInjector : NSObject

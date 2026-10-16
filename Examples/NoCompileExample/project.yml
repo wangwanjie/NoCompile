@@ -1,0 +1,72 @@
+name: NoCompileExample
+options:
+  bundleIdPrefix: com.vanjay.nocompile
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+    macOS: "12.0"
+packages:
+  NoCompile:
+    path: ../..
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: X6B6C6U6QV
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_OBJC_BRIDGING_HEADER: Shared/Example-Bridging-Header.h
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+  configs:
+    Debug:
+      # 热重载必需：让 App 内部的函数调用走符号指针，运行时才能重定向到新实现
+      # -ObjC：确保客户端库中的类被完整链接（客户端靠 +load 自动启动，业务代码无需引用它）
+      OTHER_LDFLAGS: "-Xlinker -interposable -ObjC"
+      SWIFT_COMPILATION_MODE: singlefile
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+targets:
+  ExampleiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: iOS
+    dependencies:
+      - package: NoCompile
+        product: NoCompile
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: NoCompile 示例
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.example.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+  ExampleMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Shared
+      - path: macOS
+    dependencies:
+      - package: NoCompile
+        product: NoCompile
+    info:
+      path: macOS/Info.plist
+      properties:
+        CFBundleDisplayName: NoCompile 示例
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.example.mac
+        # 示例用"Sign to Run Locally"、不开 Hardened Runtime / 沙盒，便于加载 ad-hoc 签名的注入 dylib
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: "-"

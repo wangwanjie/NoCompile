@@ -29,28 +29,33 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     public var watchesHeaders: Bool = true
 
     private var buildLog: BuildLog?
-    private var recompiler: Recompiler?
-    private var commands: (swiftModules: [RawCompileCommand], clangFiles: [String: RawCompileCommand])?
+    private var commands = ParsedCommands()
+    private var lastParsedLogDate: Date = .distantPast
     private var signingIdentity: String?
+    private let recompiler: Recompiler
     private var server: Server?
     private var deviceBridge: DeviceBridge?
     private var watcher: FileWatcher?
     private var connections: [ServerConnection] = []
     private let workQueue = DispatchQueue(label: "com.nocompile.engine")
-    private let outputDirectory: String
 
     public init(projectPath: String, customDerivedData: String? = nil) {
         self.projectPath = projectPath
         self.customDerivedData = customDerivedData
-        self.outputDirectory = NSTemporaryDirectory() + "NoCompile"
+        self.recompiler = Recompiler(outputDirectory: NSTemporaryDirectory() + "NoCompile")
     }
 
     // MARK: - 生命周期
 
     public func start() {
         setState(.working)
+        startServer()
+        startWatching()
         workQueue.async { [weak self] in
-            self?.initializeProject()
+            guard let self else { return }
+            self.refreshCommandsIfNeeded()
+            self.setState(.idle)
+            self.log("🎉 NoCompile 就绪，保存文件即可热重载", level: 1)
         }
     }
 
@@ -62,26 +67,32 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         connections.removeAll()
     }
 
-    private func initializeProject() {
-        guard let buildLog = BuildLog.locate(projectPath: projectPath, customDerivedData: customDerivedData) else {
-            setState(.error("未找到 DerivedData / 构建日志，请先在 Xcode 完整构建一次"))
+    /// 定位日志；若出现了更新的构建日志则重新解析（例如先跑真机、再跑模拟器）
+    private func refreshCommandsIfNeeded() {
+        if buildLog == nil {
+            buildLog = BuildLog.locate(projectPath: projectPath, customDerivedData: customDerivedData)
+            if buildLog == nil {
+                log("尚未找到构建日志，请先在 Xcode 构建并运行一次", level: 2)
+                return
+            }
+            log("DerivedData：\(buildLog!.derivedDataPath)", level: 0)
+        }
+        guard let buildLog else {
             return
         }
-        self.buildLog = buildLog
-        log("开始解析构建日志…", level: 0)
+        let latest = buildLog.latestLogDate()
+        guard latest > lastParsedLogDate else {
+            return
+        }
+        log("解析构建日志…", level: 0)
         let text = buildLog.extractPlainText()
-        self.signingIdentity = ProjectInfo.signingIdentity(fromPlainText: text)
-        self.commands = buildLog.parse()
-        self.recompiler = Recompiler(buildLog: buildLog, outputDirectory: outputDirectory)
+        commands = BuildLog.parse(plainText: text)
+        signingIdentity = ProjectInfo.signingIdentity(fromPlainText: text)
+        lastParsedLogDate = latest
 
-        let swiftCount = commands?.swiftModules.count ?? 0
-        let clangCount = commands?.clangFiles.count ?? 0
-        log("解析完成：\(swiftCount) 个 Swift 模块，\(clangCount) 个 ObjC/C 文件", level: 1)
-
-        startServer()
-        startWatching()
-        setState(.idle)
-        log("🎉 NoCompile 就绪，保存文件即可热重载", level: 1)
+        let platforms = Set(commands.swiftModules.map { $0.platform } + commands.clangFiles.values.map { $0.platform })
+            .filter { $0 != "unknown" }.sorted()
+        log("解析完成：\(commands.swiftModules.count) 条 Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件，平台：\(platforms.joined(separator: ", "))", level: 1)
     }
 
     private func startServer() {
@@ -90,11 +101,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         if server.start() {
             self.server = server
         } else {
-            log("TCP 端口监听失败（\(NCProtocol.macPort) 可能被占用）", level: 3)
+            log("TCP 端口 \(NCProtocol.macPort) 监听失败，可能已有另一个 NoCompile 在运行", level: 3)
         }
-        // 真机 USB 桥接
+        // 真机 USB 桥接：经 usbmuxd 连接设备上的客户端
         let bridge = DeviceBridge { [weak self] connection in
-            self?.server(self!.server ?? Server(), didAccept: connection)
+            self?.accept(connection)
         }
         bridge.start()
         self.deviceBridge = bridge
@@ -107,6 +118,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
         watcher.start()
         self.watcher = watcher
+        log("监听目录：\(projectDir)", level: 0)
     }
 
     // MARK: - 文件变更
@@ -128,11 +140,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     }
 
     private func inject(files: [String]) {
-        guard let recompiler, let commands, let buildLog else {
+        guard !connections.isEmpty else {
+            log("没有已连接的 App，跳过：\(files.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))", level: 2)
             return
         }
-        guard !connections.isEmpty else {
-            log("没有已连接的 App，跳过注入", level: 2)
+        refreshCommandsIfNeeded()
+        guard let buildLog else {
             return
         }
 
@@ -140,8 +153,13 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         var sources = Set<String>()
         for file in files {
             if file.hasSuffix(".h") || file.hasSuffix(".hpp") {
-                guard watchesHeaders else { continue }
+                guard watchesHeaders else {
+                    continue
+                }
                 let impls = ProjectInfo.implementationFiles(dependingOn: file, derivedDataPath: buildLog.derivedDataPath)
+                if !impls.isEmpty {
+                    log("头文件 \((file as NSString).lastPathComponent) 影响 \(impls.count) 个实现文件", level: 0)
+                }
                 sources.formUnion(impls)
             } else {
                 sources.insert(file)
@@ -152,28 +170,39 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
 
         setState(.working)
-        defer { setState(.idle) }
+        var hadError = false
 
-        // 每个连接的平台各重编一次（模拟器 / 真机 arch 不同）
-        for source in sources {
-            notifyStatus("编译中：\((source as NSString).lastPathComponent)", state: 1)
+        for source in sources.sorted() {
+            let name = (source as NSString).lastPathComponent
+            notifyStatus("编译中：\(name)", state: 1)
+            // 同一平台的多个连接共用一次编译结果
+            var builtByPlatform: [String: RecompileResult] = [:]
             for connection in connections {
                 guard let platform = platform(for: connection) else {
                     continue
                 }
-                let result = recompiler.recompile(sourceFile: source, commands: commands,
-                                                  platform: platform, codesignIdentity: signingIdentity)
-                if result.succeeded, let dylibPath = result.dylibPath {
-                    sendInject(dylibPath: dylibPath, source: source, to: connection)
-                    log("✅ \((source as NSString).lastPathComponent) → \(connection.platformName)", level: 1)
+                let start = Date()
+                let result: RecompileResult
+                if let cached = builtByPlatform[platform.name] {
+                    result = cached
                 } else {
+                    result = recompiler.recompile(sourceFile: source, commands: commands,
+                                                  platform: platform, codesignIdentity: signingIdentity)
+                    builtByPlatform[platform.name] = result
+                }
+                if result.succeeded, let dylibPath = result.dylibPath {
+                    let elapsed = String(format: "%.2f", Date().timeIntervalSince(start))
+                    sendInject(dylibPath: dylibPath, source: source, to: connection)
+                    log("⚡ \(name) → \(connection.displayName)（编译 \(elapsed)s）", level: 1)
+                } else {
+                    hadError = true
                     let message = result.error ?? "重编失败"
-                    log("❌ \((source as NSString).lastPathComponent)：\(message)", level: 3)
-                    notifyStatus("编译失败", state: 2)
-                    setState(.error(message))
+                    log("❌ \(name)（\(platform.name)）：\(message)", level: 3)
+                    connection.send(NCMessage(type: .status, json: ["message": "编译失败：\(name)", "state": 2]))
                 }
             }
         }
+        setState(hadError ? .error("编译失败，详见日志") : .idle)
     }
 
     private func sendInject(dylibPath: String, source: String, to connection: ServerConnection) {
@@ -183,11 +212,18 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             "sourceFiles": [source],
         ]
         var payload: Data? = nil
-        if connection.isLocalFileSystem {
-            // 共享文件系统：把路径告诉客户端即可
-            json["localPath"] = dylibPath
+        if connection.isLocalFileSystem, let tmp = connection.clientInfo["tmp"] as? String, !tmp.isEmpty {
+            // 模拟器 / macOS：与 Mac 共享文件系统，直接拷进 App 自己的 tmp 目录，避免沙盒读权限问题
+            let destination = (tmp as NSString).appendingPathComponent(dylibName)
+            try? FileManager.default.removeItem(atPath: destination)
+            do {
+                try FileManager.default.copyItem(atPath: dylibPath, toPath: destination)
+                json["localPath"] = destination
+            } catch {
+                payload = try? Data(contentsOf: URL(fileURLWithPath: dylibPath))
+            }
         } else {
-            // 真机：随帧传输 dylib 字节
+            // 真机：随帧传输 dylib 字节，由客户端写入自己的 tmp 目录
             payload = try? Data(contentsOf: URL(fileURLWithPath: dylibPath))
         }
         connection.send(NCMessage(type: .inject, json: json, data: payload))
@@ -205,7 +241,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         case "macosx":
             name = "macosx"; isSimulator = false; isDevice = false
         default:
-            name = "iphonesimulator"; isSimulator = true; isDevice = false
+            log("未知的客户端平台：\(connection.platformName)", level: 3)
+            return nil
         }
         guard let sdkPath = ProjectInfo.sdkPath(for: name) else {
             log("无法定位 \(name) SDK", level: 3)
@@ -223,6 +260,10 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     // MARK: - ServerDelegate / ServerConnectionDelegate
 
     public func server(_ server: Server, didAccept connection: ServerConnection) {
+        accept(connection)
+    }
+
+    private func accept(_ connection: ServerConnection) {
         connection.delegate = self
         workQueue.async { [weak self] in
             guard let self else { return }
@@ -237,18 +278,20 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             if let info = message.json {
                 connection.updateClientInfo(info)
                 connection.send(NCMessage(type: .helloAck, json: ["protocol": NCProtocol.version]))
-                let bundleID = info["bundleID"] as? String ?? "?"
-                log("已连接：\(bundleID)（\(connection.platformName)）", level: 1)
+                log("🔌 已连接：\(connection.displayName)", level: 1)
+                workQueue.async { [weak self] in
+                    self?.refreshCommandsIfNeeded()
+                }
             }
         case .log:
             if let msg = message.json?["message"] as? String {
                 let level = message.json?["level"] as? Int ?? 0
-                log("[App] \(msg)", level: level)
+                log("[\(connection.shortName)] \(msg)", level: level)
             }
         case .injectResult:
             if let ok = message.json?["ok"] as? Bool, !ok {
                 let msg = message.json?["message"] as? String ?? ""
-                log("App 注入失败：\(msg)", level: 3)
+                log("[\(connection.shortName)] 注入失败：\(msg)", level: 3)
             }
         default:
             break
@@ -260,6 +303,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             guard let self else { return }
             self.connections.removeAll { $0 === connection }
             self.delegate?.engine(self, didUpdateClientCount: self.connections.count)
+            self.log("断开：\(connection.displayName)", level: 2)
         }
     }
 

@@ -22,6 +22,28 @@ public final class ServerConnection {
         let p = platformName
         return p == "simulator" || p == "macosx"
     }
+    /// 关闭时的额外回调（供 DeviceBridge 释放设备占用）
+    public var onClose: (() -> Void)?
+
+    /// 日志用短名：App 可执行文件名
+    public var shortName: String {
+        let executable = clientInfo["executable"] as? String ?? ""
+        let name = (executable as NSString).lastPathComponent
+        return name.isEmpty ? "App" : name
+    }
+
+    /// 展示用名称：App 名 + 平台
+    public var displayName: String {
+        let platformTitle: String
+        switch platformName {
+        case "simulator": platformTitle = "模拟器"
+        case "device": platformTitle = "真机"
+        case "macosx": platformTitle = "macOS"
+        default: platformTitle = platformName
+        }
+        let bundleID = clientInfo["bundleID"] as? String ?? ""
+        return "\(shortName)（\(platformTitle)\(bundleID.isEmpty ? "" : "，\(bundleID)")）"
+    }
 
     private let fd: Int32
     private let queue: DispatchQueue        // 读循环（长期阻塞）
@@ -47,6 +69,8 @@ public final class ServerConnection {
         running = false
         Darwin.close(fd)
         delegate?.connectionDidClose(self)
+        onClose?()
+        onClose = nil
     }
 
     func updateClientInfo(_ info: [String: Any]) {

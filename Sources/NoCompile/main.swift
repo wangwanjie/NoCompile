@@ -85,36 +85,38 @@ func printUsage() {
     """)
 }
 
-// 自检：nocompile selftest <project> <platform> <file>
+// 自检：nocompile selftest <project> <platform> <file> [derivedData]
 // 跑一遍"定位日志 → 解析命令 → 单文件重编 → 链接 → 签名"，用于验证环境
 if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "selftest" {
     let project = CommandLine.arguments[2]
     let platformName = CommandLine.arguments[3]   // iphonesimulator / macosx / iphoneos
     let file = CommandLine.arguments[4]
-    guard let buildLog = BuildLog.locate(projectPath: project) else {
-        print("❌ 未找到构建日志"); exit(1)
+    let derivedData = CommandLine.arguments.count >= 6 ? CommandLine.arguments[5] : nil
+    guard let buildLog = BuildLog.locate(projectPath: project, customDerivedData: derivedData) else {
+        print("❌ 未找到构建日志")
+        exit(1)
     }
     print("✅ DerivedData：\(buildLog.derivedDataPath)")
     let text = buildLog.extractPlainText()
     let identity = ProjectInfo.signingIdentity(fromPlainText: text)
-    print("签名身份：\(identity ?? "（无，模拟器无需）")")
-    let commands = buildLog.parse()
-    print("✅ 解析：\(commands.swiftModules.count) Swift 模块，\(commands.clangFiles.count) ObjC/C 文件")
+    print("签名身份：\(identity ?? "（无）")")
+    let commands = BuildLog.parse(plainText: text)
+    print("✅ 解析：\(commands.swiftModules(for: platformName).count) 条 \(platformName) Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件")
     guard let sdk = ProjectInfo.sdkPath(for: platformName) else {
-        print("❌ 找不到 \(platformName) SDK"); exit(1)
+        print("❌ 找不到 \(platformName) SDK")
+        exit(1)
     }
-    let isSim = platformName == "iphonesimulator"
-    let isDevice = platformName == "iphoneos"
-    let platform = Platform(name: platformName, sdkPath: sdk, arch: "arm64", isSimulator: isSim, isDevice: isDevice)
-    let recompiler = Recompiler(buildLog: buildLog, outputDirectory: NSTemporaryDirectory() + "NoCompileSelfTest")
+    let platform = Platform(name: platformName, sdkPath: sdk, arch: "arm64",
+                            isSimulator: platformName == "iphonesimulator",
+                            isDevice: platformName == "iphoneos")
+    let recompiler = Recompiler(outputDirectory: NSTemporaryDirectory() + "NoCompileSelfTest")
     print("⏳ 重编：\(file)")
     let start = Date()
     let result = recompiler.recompile(sourceFile: file, commands: commands, platform: platform, codesignIdentity: identity)
     let elapsed = String(format: "%.2f", Date().timeIntervalSince(start))
     if let dylib = result.dylibPath {
-        print("✅ 成功，用时 \(elapsed)s → \(dylib)")
-        let size = (try? FileManager.default.attributesOfItem(atPath: dylib)[.size] as? Int) ?? 0
-        print("   dylib 大小：\(size ?? 0) 字节")
+        let size = ((try? FileManager.default.attributesOfItem(atPath: dylib))?[.size] as? Int) ?? 0
+        print("✅ 成功，用时 \(elapsed)s → \(dylib)（\(size) 字节）")
     } else {
         print("❌ 失败：\(result.error ?? "")")
         print(result.log)

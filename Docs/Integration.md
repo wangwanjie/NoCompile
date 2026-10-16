@@ -64,6 +64,18 @@ nocompile --project /path/to/YourApp.xcworkspace
 3. dylib 要用与 App 一致的开发者身份签名。NoCompile 会从构建日志自动提取签名身份，所以需要先在 Xcode 成功跑过一次真机构建。
 4. 若要走 Wi-Fi，设置环境变量 `NOCOMPILE_HOST=<Mac 的 IP>` 后再运行 App。
 
+## 界面如何刷新（零侵入）
+
+业务代码不需要为热重载写任何代码。每次注入完成后，NoCompile 会自动：
+
+1. 找到当前可见、且受本次改动影响的视图控制器。判断依据有两种：控制器自身的类被替换了，或它的视图层级里有被替换的视图类。
+2. 清空这些控制器的视图，再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`，界面按新代码重新构建。重写了 `loadView` 的控制器会重新执行 `loadView`。
+3. 如果改的是模型、工具类、C/C++ 函数这类非界面代码，就刷新最上层的可见业务页面，让新逻辑立即体现出来。
+
+UIKit 和 AppKit 都支持。若想关闭自动刷新，可在调试代码里设置 `NoCompile.autoReloadViewControllers = NO`。
+
+**兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认的重建流程。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
+
 ## SwiftUI 刷新
 
 给需要热重载的视图加上社区的 `@ObserveInjection`（来自 Inject / HotSwiftUI 包）：
@@ -83,13 +95,7 @@ struct ContentView: View {
 
 NoCompile 注入后会发出 `INJECTION_BUNDLE_NOTIFICATION`，与这些包兼容，视图会自动重绘。
 
-若不用 SwiftUI，可让需要刷新的类实现 `injected()`：
-
-```objc
-- (void)injected {
-    [self.view setNeedsLayout];   // 或重建界面
-}
-```
+> SwiftUI 目前还做不到完全零侵入：`body` 的新实现已经被替换进去，但 SwiftUI 只会在状态变化时重新求值，需要上面的观察者来触发一次重绘。
 
 ## 环境变量
 
