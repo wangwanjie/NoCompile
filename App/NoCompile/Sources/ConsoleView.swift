@@ -128,6 +128,25 @@ private struct HeaderBar: View {
                 Label(model.hasProject ? "切换工程" : "选择工程", systemImage: "folder")
             }
 
+            if !model.hasProject, let recent = preferences.recentProjects.first {
+                // 断开后可一键重新打开最近的工程
+                Button {
+                    model.open(project: recent)
+                } label: {
+                    Label("重新打开 \((recent as NSString).lastPathComponent)", systemImage: "arrow.clockwise")
+                }
+                .help(recent)
+            }
+
+            if model.hasProject {
+                Button {
+                    model.closeProject()
+                } label: {
+                    Label("断开工程", systemImage: "xmark.circle")
+                }
+                .help("停止监听当前工程并断开已连接的 App；工程保留在最近打开列表中")
+            }
+
             Button {
                 openSettings()
             } label: {
@@ -303,12 +322,20 @@ private struct ClientCard: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if let issue = client.compatibilityIssue {
+                    // 版本不一致：完整显示原因并提示重新编译，可换行
+                    Label("\(issue)。请重新编译并运行 App", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             }
             Spacer(minLength: 0)
             Circle()
-                .fill(Theme.success)
+                .fill(client.compatibilityIssue == nil ? Theme.success : Theme.warning)
                 .frame(width: 7, height: 7)
-                .help("已连接")
+                .help(client.compatibilityIssue == nil ? "已连接，客户端 \(client.clientVersion ?? "未知版本")" : "版本不一致，需要重新编译 App")
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -374,12 +401,14 @@ private struct RecordRow: View {
                 Text(subtitle)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-                    .lineLimit(2)
+                    // 允许换行完整显示（刷新 / 待重进的页面名可能较长）
+                    .fixedSize(horizontal: false, vertical: true)
                 if !record.success && !record.message.isEmpty {
                     Text(record.message)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(Theme.failure)
-                        .lineLimit(3)
+                        .lineLimit(6)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
             }
@@ -388,7 +417,7 @@ private struct RecordRow: View {
         .padding(.horizontal, 8)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
             .fill(record.success ? Color.clear : Theme.failure.opacity(0.06)))
-        .help(record.message)
+        .help(String(record.message.prefix(1000)))
     }
 
     private var subtitle: String {
@@ -430,13 +459,18 @@ private struct LogConsole: View {
     @State private var search = ""
     @State private var followTail = true
 
-    private var visibleLogs: [LogLine] {
-        model.logs.filter { line in
+    private func filteredLogs() -> [LogLine] {
+        if filter == .all && search.isEmpty {
+            return model.logs
+        }
+        return model.logs.filter { line in
             filter.accepts(line.level) && (search.isEmpty || line.text.localizedCaseInsensitiveContains(search))
         }
     }
 
     var body: some View {
+        // 每次刷新只过滤一次（日志多时反复过滤会拖慢主线程）
+        let visibleLogs = filteredLogs()
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Picker("", selection: $filter) {
@@ -471,6 +505,14 @@ private struct LogConsole: View {
                 .help("在访达中显示日志文件")
 
                 Button {
+                    model.exportDiagnostics()
+                } label: {
+                    Image(systemName: "shippingbox")
+                }
+                .disabled(model.isExportingDiagnostics)
+                .help("导出诊断包（日志、编译失败现场、卡顿采样与当前配置），发给开发者排查问题")
+
+                Button {
                     model.clearLogs()
                 } label: {
                     Image(systemName: "trash")
@@ -502,7 +544,8 @@ private struct LogConsole: View {
                         }
                         .padding(.vertical, 6)
                     }
-                    .onChange(of: model.logs.count) { _ in
+                    // 按最后一行的标识判断：日志达到上限后条数不再变化，按条数判断会停止跟随
+                    .onChange(of: model.logs.last?.id) { _ in
                         if followTail, let last = visibleLogs.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }

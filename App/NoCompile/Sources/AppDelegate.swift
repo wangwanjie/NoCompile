@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 主线程卡顿看门狗：卡住时自动采集调用栈，随诊断包导出
+        HangWatchdog.shared.start()
         // 启动 Sparkle（会按偏好在后台自动检查更新）
         _ = UpdateManager.shared
         applyDockPolicy()
@@ -182,8 +184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(actionItem("打开控制台", #selector(showConsole), "0"))
         menu.addItem(actionItem(model.hasProject ? "切换工程…" : "选择工程…", #selector(chooseProject), "o"))
+        if model.hasProject {
+            menu.addItem(actionItem("断开工程", #selector(closeProject), ""))
+        }
 
-        if preferences.recentProjects.count > 1 {
+        // 断开工程后只剩一个最近工程时也显示，便于重新打开
+        if preferences.recentProjects.count > 1 || (!model.hasProject && !preferences.recentProjects.isEmpty) {
             let recent = NSMenuItem(title: "最近打开", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for path in preferences.recentProjects {
@@ -203,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveItem.state = preferences.injectsOnSave ? .on : .off
         menu.addItem(saveItem)
         menu.addItem(actionItem("偏好设置…", #selector(showSettings), ","))
+        menu.addItem(actionItem("导出诊断包…", #selector(exportDiagnostics), ""))
         menu.addItem(actionItem("检查更新…", #selector(checkForUpdates), ""))
         menu.addItem(.separator())
         menu.addItem(actionItem("退出 NoCompile", #selector(quit), "q"))
@@ -228,6 +235,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.chooseProject()
     }
 
+    @objc private func closeProject() {
+        model.closeProject()
+    }
+
     @objc private func openRecent(_ sender: NSMenuItem) {
         if let path = sender.representedObject as? String {
             model.open(project: path)
@@ -236,6 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleInjectOnSave() {
         preferences.injectsOnSave.toggle()
+    }
+
+    @objc private func exportDiagnostics() {
+        model.exportDiagnostics()
     }
 
     @objc private func checkForUpdates() {
@@ -267,7 +282,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "文件")
         fileMenu.addItem(actionItem("选择工程…", #selector(chooseProject), "o"))
+        fileMenu.addItem(actionItem("断开工程", #selector(closeProject), ""))
         fileMenu.addItem(actionItem("注入待处理改动", #selector(injectPending), "i"))
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(actionItem("导出诊断包…", #selector(exportDiagnostics), ""))
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
 
