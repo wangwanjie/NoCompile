@@ -148,7 +148,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         signingIdentity = ProjectInfo.signingIdentity(fromPlainText: text)
         lastParsedLogDate = latest
 
-        let platforms = Set(commands.swiftModules.map { $0.platform } + commands.clangFiles.values.map { $0.platform })
+        let platforms = Set(commands.swiftModules.map { $0.platform } + commands.allClangCommands.map { $0.platform })
             .filter { $0 != "unknown" }.sorted()
         log("解析完成：\(commands.swiftModules.count) 条 Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件，平台：\(platforms.joined(separator: ", "))", level: 1)
     }
@@ -274,21 +274,22 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         for source in sources.sorted() {
             let name = (source as NSString).lastPathComponent
             notifyStatus("编译中：\(name)", state: 1)
-            // 同一平台的多个连接共用一次编译结果
+            // 同一平台、同一架构的多个连接共用一次编译结果
             var builtByPlatform: [String: (result: RecompileResult, elapsed: TimeInterval)] = [:]
             for connection in connections {
                 guard let platform = platform(for: connection) else {
                     continue
                 }
                 let built: (result: RecompileResult, elapsed: TimeInterval)
-                if let cached = builtByPlatform[platform.name] {
+                let buildKey = "\(platform.name)|\(platform.arch)"
+                if let cached = builtByPlatform[buildKey] {
                     built = cached
                 } else {
                     let start = Date()
                     let result = recompiler.recompile(sourceFile: source, commands: commands,
                                                       platform: platform, codesignIdentity: signingIdentity)
                     built = (result, Date().timeIntervalSince(start))
-                    builtByPlatform[platform.name] = built
+                    builtByPlatform[buildKey] = built
                 }
                 if built.result.succeeded, let dylibPath = built.result.dylibPath {
                     inflight[inflightKey(connection, source)] = (Date(), built.elapsed)
@@ -435,6 +436,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             log("无法定位 \(name) SDK", level: 3)
             return nil
         }
+        // 模拟器 / macOS 的 machine 即 uname 架构（arm64 / x86_64）；真机是机型标识，统一按 arm64
         let arch = connection.machine.hasPrefix("x86") ? "x86_64" : "arm64"
         return Platform(name: name, sdkPath: sdkPath, arch: arch, isSimulator: isSimulator, isDevice: isDevice)
     }

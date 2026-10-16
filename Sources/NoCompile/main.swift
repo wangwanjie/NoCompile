@@ -91,13 +91,34 @@ func printUsage() {
     """)
 }
 
-// 自检：nocompile selftest <project> <platform> <file> [derivedData]
+/// 本机架构（uname machine），模拟器 / macOS App 与之一致
+func hostArch() -> String {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    let machine = withUnsafeBytes(of: &systemInfo.machine) { buffer in
+        String(decoding: buffer.prefix(while: { $0 != 0 }), as: UTF8.self)
+    }
+    return machine.hasPrefix("x86") ? "x86_64" : "arm64"
+}
+
+// 自检：nocompile selftest <project> <platform> <file> [derivedData] [--arch <arm64|x86_64>]
 // 跑一遍"定位日志 → 解析命令 → 单文件重编 → 链接 → 签名"，用于验证环境
 if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "selftest" {
-    let project = CommandLine.arguments[2]
-    let platformName = CommandLine.arguments[3]   // iphonesimulator / macosx / iphoneos
-    let file = CommandLine.arguments[4]
-    let derivedData = CommandLine.arguments.count >= 6 ? CommandLine.arguments[5] : nil
+    // 先取出 --arch，剩下的按位置参数解析
+    var arguments = CommandLine.arguments
+    var arch = hostArch()
+    if let idx = arguments.firstIndex(of: "--arch"), idx + 1 < arguments.count {
+        arch = arguments[idx + 1]
+        arguments.removeSubrange(idx...(idx + 1))
+    }
+    guard arguments.count >= 5 else {
+        print("用法：nocompile selftest <project> <platform> <file> [derivedData] [--arch <arm64|x86_64>]")
+        exit(1)
+    }
+    let project = arguments[2]
+    let platformName = arguments[3]   // iphonesimulator / macosx / iphoneos
+    let file = arguments[4]
+    let derivedData = arguments.count >= 6 ? arguments[5] : nil
     guard let buildLog = BuildLog.locate(projectPath: project, customDerivedData: derivedData) else {
         print("❌ 未找到构建日志")
         exit(1)
@@ -107,12 +128,12 @@ if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "selftest" {
     let identity = ProjectInfo.signingIdentity(fromPlainText: text)
     print("签名身份：\(identity ?? "（无）")")
     let commands = BuildLog.parse(plainText: text)
-    print("✅ 解析：\(commands.swiftModules(for: platformName).count) 条 \(platformName) Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件")
+    print("✅ 解析：\(commands.swiftModules(for: platformName, arch: arch).count) 个 \(platformName) Swift 模块（架构 \(arch)），\(commands.clangFileCount) 个 C/ObjC/C++ 文件")
     guard let sdk = ProjectInfo.sdkPath(for: platformName) else {
         print("❌ 找不到 \(platformName) SDK")
         exit(1)
     }
-    let platform = Platform(name: platformName, sdkPath: sdk, arch: "arm64",
+    let platform = Platform(name: platformName, sdkPath: sdk, arch: arch,
                             isSimulator: platformName == "iphonesimulator",
                             isDevice: platformName == "iphoneos")
     let recompiler = Recompiler(outputDirectory: NSTemporaryDirectory() + "NoCompileSelfTest")

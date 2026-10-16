@@ -21,7 +21,7 @@ public struct RecompileResult {
 public struct Platform {
     public let name: String          // iphonesimulator / iphoneos / macosx
     public let sdkPath: String
-    public let arch: String
+    public let arch: String          // 客户端架构，用于挑选 -target 架构一致的编译命令
     public let isSimulator: Bool
     public let isDevice: Bool
 
@@ -68,13 +68,14 @@ public final class Recompiler {
         var isNewFile = false
         if sourceFile.hasSuffix(".swift") {
             compiled = compileSwift(sourceFile: sourceFile,
-                                    modules: commands.swiftModules(for: platform.name),
+                                    modules: commands.swiftModules(for: platform.name, arch: platform.arch),
                                     objectPath: objectPath,
                                     stem: stem,
                                     isNewFile: &isNewFile)
         } else {
-            var command = commands.clangCommand(for: sourceFile, platform: platform.name)
-            if command == nil, let template = commands.clangTemplate(for: sourceFile, platform: platform.name) {
+            var command = commands.clangCommand(for: sourceFile, platform: platform.name, arch: platform.arch)
+            if command == nil,
+               let template = commands.clangTemplate(for: sourceFile, platform: platform.name, arch: platform.arch) {
                 // 新增文件：借用目录最接近的已有文件的编译命令
                 command = clangCommand(from: template.command, templateSource: template.source, newSource: sourceFile)
                 isNewFile = true

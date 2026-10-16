@@ -216,7 +216,7 @@ public final class ResourceCompiler {
     private func nearestSwiftModule(for file: String, commands: ParsedCommands, platform: Platform) -> RawCompileCommand? {
         let canonical = ParsedCommands.canonicalPath(file)
         var best: (module: RawCompileCommand, depth: Int)? = nil
-        for module in commands.swiftModules(for: platform.name) {
+        for module in commands.swiftModules(for: platform.name, arch: platform.arch) {
             let depth = ParsedCommands.swiftSources(of: module)
                 .map { ParsedCommands.commonDirectoryDepth(ParsedCommands.canonicalPath($0), canonical) }
                 .max() ?? 0

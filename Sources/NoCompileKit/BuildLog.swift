@@ -5,7 +5,8 @@
 //  做法：gunzip 解压日志（SLF 二进制中夹带明文命令），按 \r 切行，
 //  抓取 Swift 模块的 driver 命令（builtin-SwiftDriver -- swiftc ...）
 //  与 ObjC/C/C++ 的 clang 单文件命令（... -c <源文件> ...）。
-//  同一模块 / 文件可能同时存在模拟器、真机、macOS 三套命令，按平台分别保存。
+//  同一模块 / 文件可能同时存在模拟器、真机、macOS 三套命令，按平台分别保存；
+//  同一平台多架构构建（如模拟器同时编 arm64 与 x86_64）时，每个架构的命令都保留。
 //
 
 import Foundation
@@ -23,6 +24,19 @@ public struct RawCompileCommand {
     public let moduleName: String?    // Swift 模块名
     public let platform: String       // iphonesimulator / iphoneos / macosx
     public let target: String?        // -target 三元组，链接时沿用
+
+    /// -target 三元组里的架构，例如 arm64-apple-ios15.0-simulator → arm64
+    public var arch: String? {
+        return Self.arch(forTarget: target)
+    }
+
+    /// 由 -target 三元组取架构（三元组第一段）
+    public static func arch(forTarget target: String?) -> String? {
+        guard let target, let first = target.split(separator: "-").first, !first.isEmpty else {
+            return nil
+        }
+        return String(first)
+    }
 
     /// 由 -target 三元组推断平台名
     public static func platform(forTarget target: String?) -> String {
@@ -47,10 +61,10 @@ public struct RawCompileCommand {
 
 /// 解析结果：按平台索引的编译命令
 public struct ParsedCommands {
-    /// Swift 模块命令（同一模块在不同平台各一条）
+    /// Swift 模块命令（同一模块在不同平台、不同架构各一条，新日志在前）
     public var swiftModules: [RawCompileCommand] = []
-    /// clang 单文件命令，键为 "平台|源文件绝对路径"
-    public var clangFiles: [String: RawCompileCommand] = [:]
+    /// clang 单文件命令，键为 "平台|源文件绝对路径"，值为各架构的命令（新日志在前，每个架构一条）
+    public var clangFiles: [String: [RawCompileCommand]] = [:]
 
     /// ibtool 命令，键为界面文件的规范化路径。nib 格式与模拟器 / 真机无关，不区分平台
     public var ibtoolCommands: [String: RawCompileCommand] = [:]
@@ -65,12 +79,41 @@ public struct ParsedCommands {
         return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
-    public func swiftModules(for platform: String) -> [RawCompileCommand] {
-        return swiftModules.filter { $0.platform == platform }
+    /// 某平台的 Swift 模块命令，每个模块只返回一条：
+    /// 优先 -target 架构与 arch 一致的命令，没有则退回该模块最新的一条
+    public func swiftModules(for platform: String, arch: String? = nil) -> [RawCompileCommand] {
+        let candidates = swiftModules.filter { $0.platform == platform }
+        var result: [RawCompileCommand] = []
+        var indexByModule: [String: Int] = [:]
+        for command in candidates {
+            let moduleKey = command.moduleName ?? "?"
+            guard let index = indexByModule[moduleKey] else {
+                indexByModule[moduleKey] = result.count
+                result.append(command)
+                continue
+            }
+            // 已有的命令架构不匹配、当前命令匹配时替换
+            if let arch, result[index].arch != arch, command.arch == arch {
+                result[index] = command
+            }
+        }
+        return result
     }
 
-    public func clangCommand(for source: String, platform: String) -> RawCompileCommand? {
-        return clangFiles[Self.clangKey(platform: platform, source: source)]
+    /// 某平台某文件的 clang 命令：优先架构匹配的，没有则退回最新的一条
+    public func clangCommand(for source: String, platform: String, arch: String? = nil) -> RawCompileCommand? {
+        guard let commands = clangFiles[Self.clangKey(platform: platform, source: source)] else {
+            return nil
+        }
+        if let arch, let matched = commands.first(where: { $0.arch == arch }) {
+            return matched
+        }
+        return commands.first
+    }
+
+    /// 所有 clang 命令（含各架构）
+    public var allClangCommands: [RawCompileCommand] {
+        return clangFiles.values.flatMap { $0 }
     }
 
     public var clangFileCount: Int {
@@ -83,13 +126,16 @@ public struct ParsedCommands {
 
     /// 新增文件（构建日志里还没有它的命令）借用的 clang 命令模板：
     /// 同平台、同语言、与新文件目录最接近的已有文件。语言不同时退而求其次，由调用方改写 -x
-    public func clangTemplate(for source: String, platform: String) -> (source: String, command: RawCompileCommand)? {
+    /// 多架构构建时优先取与 arch 一致的命令
+    public func clangTemplate(for source: String, platform: String,
+                              arch: String? = nil) -> (source: String, command: RawCompileCommand)? {
         let target = Self.canonicalPath(source)
         let language = Self.clangLanguage(forPath: target)
         var best: (source: String, command: RawCompileCommand, score: Int)? = nil
-        for (key, command) in clangFiles {
+        for key in clangFiles.keys {
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-            guard parts.count == 2, parts[0] == platform, parts[1] != target else {
+            guard parts.count == 2, parts[0] == platform, parts[1] != target,
+                  let command = clangCommand(for: parts[1], platform: platform, arch: arch) else {
                 continue
             }
             // 共同目录层级越深越接近；同语言额外加权，优先保证编译参数（如 -fobjc-arc、-std）一致
@@ -258,7 +304,7 @@ public struct BuildLog {
         return merged
     }
 
-    /// 解析日志明文。新日志在前，同一 (模块, 平台) / (文件, 平台) 只保留最新一条
+    /// 解析日志明文。新日志在前，同一 (模块, 平台, 架构) / (文件, 平台, 架构) 只保留最新一条
     public static func parse(plainText text: String) -> ParsedCommands {
         let lines = text.components(separatedBy: "\n")
         var parsed = ParsedCommands()
@@ -283,7 +329,8 @@ public struct BuildLog {
                 let moduleName = valueForFlag("-module-name", in: tokens)
                 let target = valueForFlag("-target", in: tokens)
                 let platform = RawCompileCommand.platform(forTarget: target)
-                let key = "\(moduleName ?? "?")|\(platform)"
+                let arch = RawCompileCommand.arch(forTarget: target) ?? "?"
+                let key = "\(moduleName ?? "?")|\(platform)|\(arch)"
                 if seenModules.contains(key) {
                     continue
                 }
@@ -322,11 +369,16 @@ public struct BuildLog {
                 let target = valueForFlag("-target", in: tokens)
                 let platform = RawCompileCommand.platform(forTarget: target)
                 let key = ParsedCommands.clangKey(platform: platform, source: source)
-                if parsed.clangFiles[key] == nil {
-                    parsed.clangFiles[key] = RawCompileCommand(
-                        kind: .clangFile, tokens: tokens, workingDirectory: currentWorkingDir,
-                        moduleName: nil, platform: platform, target: target)
+                var existing = parsed.clangFiles[key] ?? []
+                let arch = RawCompileCommand.arch(forTarget: target)
+                // 每个架构只保留最新一条
+                if existing.contains(where: { $0.arch == arch }) {
+                    continue
                 }
+                existing.append(RawCompileCommand(
+                    kind: .clangFile, tokens: tokens, workingDirectory: currentWorkingDir,
+                    moduleName: nil, platform: platform, target: target))
+                parsed.clangFiles[key] = existing
             }
         }
         return parsed
