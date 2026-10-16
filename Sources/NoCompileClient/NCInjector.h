@@ -31,6 +31,12 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 + (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
                           sourceFiles:(nullable NSArray<NSString *> *)sourceFiles;
 
+/// 同上。isNewFile 表示 dylib 来自 App 中原本没有的新增文件：
+/// 以 RTLD_GLOBAL 加载，使之后注入的 dylib 能链接到其中的符号；没有可替换的实现也视为成功
++ (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
+                          sourceFiles:(nullable NSArray<NSString *> *)sourceFiles
+                            isNewFile:(BOOL)isNewFile;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -55,14 +55,27 @@ static const char *NCSelfImagePath(void) {
     return selfPath;
 }
 
+/// 客户端是否位于独立镜像中（动态 framework / bundle / 注入的 dylib），而非被静态链入 App 的主程序或 debug.dylib
+static BOOL NCIsDedicatedClientImagePath(const char *path) {
+    if (strstr(path, "NoCompileClient") != NULL) {
+        return YES;
+    }
+    // CocoaPods / Carthage：NoCompile.framework；bundle 方式：xxxNoCompile.bundle 或拷贝进 App 的 NoCompile.bundle
+    const char *fileName = strrchr(path, '/');
+    fileName = fileName ? fileName + 1 : path;
+    BOOL wrapped = strstr(path, ".framework/") != NULL || strstr(path, ".bundle/") != NULL;
+    return wrapped && strstr(fileName, "NoCompile") != NULL;
+}
+
 /// 判断一个镜像路径是否属于 App 自身
 static BOOL NCIsAppImagePath(const char *path, NSString *bundlePath) {
     if (!path) {
         return NO;
     }
     const char *selfPath = NCSelfImagePath();
-    // 客户端以静态库形式链入主程序时，selfPath 就是主程序，此时不能排除
-    if (selfPath && strcmp(path, selfPath) == 0 && strstr(path, "NoCompileClient") != NULL) {
+    // 客户端以静态库形式链入主程序时，selfPath 就是主程序，此时不能排除；
+    // 只有客户端独占一个镜像时才排除，避免改写客户端自身
+    if (selfPath && strcmp(path, selfPath) == 0 && NCIsDedicatedClientImagePath(path)) {
         return NO;
     }
     NSString *imagePath = @(path);

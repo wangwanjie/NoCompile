@@ -1,0 +1,107 @@
+# NoCompile 客户端的 Xcode 工程（xcodegen 生成，生成结果需提交，Carthage 直接读取）
+#
+# 两类产物：
+#   1. NoCompile.framework（iOS / macOS / tvOS）：供 Carthage 构建，scheme 为共享 scheme。
+#   2. 可加载 bundle（InjectionIII 风格）：由 Scripts/build-client-bundles.sh 构建后放进 NoCompile.app，
+#      接入方无需任何依赖，运行时 Bundle.load() 或 DYLD_INSERT_LIBRARIES 加载即可。
+#
+# 修改后执行：cd Client && xcodegen generate
+name: NoCompileClient
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+    macOS: "12.0"
+    tvOS: "15.0"
+settings:
+  base:
+    # 这些产物本身就只供调试使用，任何配置下都编入客户端代码（不依赖 DEBUG 宏）
+    GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "NOCOMPILE_FORCE_ENABLE=1"]
+    HEADER_SEARCH_PATHS: ["$(inherited)", "$(SRCROOT)/../Sources/NoCompileClient/include"]
+    CLANG_ENABLE_OBJC_ARC: YES
+    SKIP_INSTALL: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: 0.2.0
+    CURRENT_PROJECT_VERSION: 1
+
+targetTemplates:
+  # Carthage 用的动态 framework
+  ClientFramework:
+    type: framework
+    sources:
+      # 内部头文件不公开，只公开 include/NoCompile.h（同名头文件即为 framework 的 umbrella header）
+      - path: ../Sources/NoCompileClient
+        headerVisibility: project
+        excludes:
+          - include
+      - path: ../Sources/NoCompileClient/include
+        headerVisibility: public
+    settings:
+      base:
+        PRODUCT_NAME: NoCompile
+        PRODUCT_BUNDLE_IDENTIFIER: cn.vanjay.NoCompile.client
+        DEFINES_MODULE: YES
+        APPLICATION_EXTENSION_API_ONLY: NO
+        GENERATE_INFOPLIST_FILE: YES
+    scheme: {}
+  # 运行时加载的 bundle。可执行文件做成 MH_DYLIB，这样既能 Bundle.load()，也能经 DYLD_INSERT_LIBRARIES 注入
+  ClientBundle:
+    type: bundle
+    sources:
+      - path: ../Sources/NoCompileClient
+        headerVisibility: project
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cn.vanjay.NoCompile.client.bundle
+        MACH_O_TYPE: mh_dylib
+        LD_DYLIB_INSTALL_NAME: "@rpath/$(EXECUTABLE_PATH)"
+        DYLIB_COMPATIBILITY_VERSION: 1
+        DYLIB_CURRENT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: NoCompile Client
+        WRAPPER_EXTENSION: bundle
+
+targets:
+  NoCompile-iOS:
+    templates: [ClientFramework]
+    platform: iOS
+    dependencies:
+      - sdk: UIKit.framework
+  NoCompile-macOS:
+    templates: [ClientFramework]
+    platform: macOS
+    dependencies:
+      - sdk: AppKit.framework
+  NoCompile-tvOS:
+    templates: [ClientFramework]
+    platform: tvOS
+    dependencies:
+      - sdk: UIKit.framework
+
+  # bundle 的 PRODUCT_NAME 由构建脚本按 SDK 覆盖（iOSNoCompile / iOSDeviceNoCompile 等）
+  NoCompileBundle-iOS:
+    templates: [ClientBundle]
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_NAME: iOSNoCompile
+    dependencies:
+      - sdk: UIKit.framework
+  NoCompileBundle-macOS:
+    templates: [ClientBundle]
+    platform: macOS
+    settings:
+      base:
+        PRODUCT_NAME: macOSNoCompile
+    dependencies:
+      - sdk: AppKit.framework
+  NoCompileBundle-tvOS:
+    templates: [ClientBundle]
+    platform: tvOS
+    settings:
+      base:
+        PRODUCT_NAME: tvOSNoCompile
+    dependencies:
+      - sdk: UIKit.framework

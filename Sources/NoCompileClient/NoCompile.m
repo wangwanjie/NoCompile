@@ -13,6 +13,7 @@ NSString * const NoCompileInjectedFilesKey = @"files";
 
 #import "NCConnection.h"
 #import "NCInjector.h"
+#import "NCResources.h"
 #import "NCSwizzleGuard.h"
 #import "NCLog.h"
 #import "NCHUD.h"
@@ -169,6 +170,9 @@ static NSUInteger gInjectionCount = 0;
         case NCMessageTypeInject:
             [self handleInject:json data:data];
             break;
+        case NCMessageTypeResource:
+            [self handleResource:json data:data];
+            break;
         case NCMessageTypeStatus:
             [self handleStatus:json];
             break;
@@ -251,6 +255,7 @@ static NSUInteger gInjectionCount = 0;
     NSString *dylibName = json[@"dylibName"] ?: @"nocompile_injection.dylib";
     NSArray<NSString *> *sourceFiles = json[@"sourceFiles"];
     NSString *localPath = json[@"localPath"];
+    BOOL isNewFile = [json[@"newFile"] boolValue];
 
     NSString *dylibPath;
     if (localPath.length > 0 && [NSFileManager.defaultManager fileExistsAtPath:localPath]) {
@@ -269,7 +274,7 @@ static NSUInteger gInjectionCount = 0;
         [NCHUD showStatus:@"注入中…" state:1];
     }
 
-    NCInjectResult *result = [NCInjector injectDylibAtPath:dylibPath sourceFiles:sourceFiles];
+    NCInjectResult *result = [NCInjector injectDylibAtPath:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
     BOOL ok = result.status == NCInjectStatusSuccess;
     NSString *fileName = sourceFiles.firstObject.lastPathComponent ?: dylibName;
     NSString *hud;
@@ -278,8 +283,9 @@ static NSUInteger gInjectionCount = 0;
         NSString *refreshed = result.refreshedControllers.count > 0
             ? [NSString stringWithFormat:@"，已刷新 %@", [result.refreshedControllers componentsJoinedByString:@"、"]]
             : @"";
-        NCLogSuccess(@"%@ 注入成功：ObjC 方法 %lu，Swift 槽位 %lu，函数重绑 %lu%@",
+        NCLogSuccess(@"%@%@ 注入成功：ObjC 方法 %lu，Swift 槽位 %lu，函数重绑 %lu%@",
                      fileName,
+                     isNewFile ? @"（新增文件）" : @"",
                      (unsigned long)result.objcMethodsReplaced,
                      (unsigned long)result.swiftSlotsPatched,
                      (unsigned long)result.symbolsRebound,
@@ -293,6 +299,37 @@ static NSUInteger gInjectionCount = 0;
         [NCHUD showStatus:hud state:ok ? 0 : 2];
     }
     [self sendInjectResult:ok message:result.message source:sourceFiles refreshed:result.refreshedControllers];
+}
+
+/// 资源更新：storyboard / xib 编译产物与图片
+- (void)handleResource:(NSDictionary *)json data:(NSData *)data {
+    NSString *source = json[@"source"] ?: @"";
+    NSString *fileName = source.lastPathComponent.length > 0 ? source.lastPathComponent : (json[@"name"] ?: @"资源");
+    if (gShowsHUD) {
+        [NCHUD showStatus:@"更新资源…" state:1];
+    }
+    NCResourceResult *result = [NCResources applyPackage:json data:data];
+    NSString *hud;
+    if (result.ok) {
+        gInjectionCount++;
+        NSString *refreshed = result.refreshedControllers.count > 0
+            ? [NSString stringWithFormat:@"，已刷新 %@", [result.refreshedControllers componentsJoinedByString:@"、"]]
+            : @"";
+        NCLogSuccess(@"%@ 资源已更新%@", fileName, refreshed);
+        hud = [NSString stringWithFormat:@"%@ 已生效", fileName];
+    } else {
+        NCLogError(@"%@ 资源更新失败：%@", fileName, result.message);
+        hud = [NSString stringWithFormat:@"%@ 更新失败", fileName];
+    }
+    if (gShowsHUD) {
+        [NCHUD showStatus:hud state:result.ok ? 0 : 2];
+    }
+    [self.connection sendType:NCMessageTypeResourceResult
+                         json:@{ @"ok": @(result.ok),
+                                 @"message": result.message ?: @"",
+                                 @"sourceFiles": @[source],
+                                 @"refreshed": result.refreshedControllers ?: @[] }
+                         data:nil];
 }
 
 - (void)sendInjectResult:(BOOL)ok message:(NSString *)message source:(NSArray<NSString *> *)source {

@@ -23,6 +23,53 @@ typedef NSViewController NCViewController;
 typedef NSView NCView;
 #endif
 
+#if NC_APPKIT
+/// 重新加载 AppKit storyboard 视图 nib 期间使用的外部对象表（仅在主线程的重载过程中非空）
+static NSDictionary<NSString *, id> *gPendingExternalObjects;
+
+/// AppKit 的 NSNib 没有传入外部对象的公开接口。nib 中的外部对象占位（NSNibExternalObjectPlaceholder）
+/// 在 initWithCoder: 中按标识查找真实对象，重载期间改为从 gPendingExternalObjects 中取
+@interface NCExternalPlaceholderHook : NSObject
+- (id)kg_initWithCoder:(NSCoder *)coder __attribute__((objc_method_family(init)));
+@end
+
+@implementation NCExternalPlaceholderHook
+
+- (id)kg_initWithCoder:(NSCoder *)coder {
+    NSDictionary *table = gPendingExternalObjects;
+    if (table && coder.allowsKeyedCoding) {
+        id identifier = [coder decodeObjectForKey:@"NSExternalObjectPlaceholderIdentifier"];
+        id object = [identifier isKindOfClass:NSString.class] ? table[identifier] : nil;
+        if (object) {
+            return object;
+        }
+    }
+    // 交换后这里调用的是原始的 initWithCoder:
+    return [self kg_initWithCoder:coder];
+}
+
+@end
+
+static BOOL NCInstallExternalPlaceholderHook(void) {
+    static BOOL installed = NO;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class cls = NSClassFromString(@"NSNibExternalObjectPlaceholder");
+        Method original = cls ? class_getInstanceMethod(cls, @selector(initWithCoder:)) : NULL;
+        Method replacement = class_getInstanceMethod(NCExternalPlaceholderHook.class, @selector(kg_initWithCoder:));
+        if (!original || !replacement) {
+            return;
+        }
+        class_addMethod(cls, @selector(initWithCoder:), method_getImplementation(original), method_getTypeEncoding(original));
+        class_addMethod(cls, @selector(kg_initWithCoder:), method_getImplementation(replacement), method_getTypeEncoding(replacement));
+        method_exchangeImplementations(class_getInstanceMethod(cls, @selector(initWithCoder:)),
+                                       class_getInstanceMethod(cls, @selector(kg_initWithCoder:)));
+        installed = YES;
+    });
+    return installed;
+}
+#endif
+
 @implementation NCSweeper
 
 + (NSArray<NSString *> *)refreshAfterPatchingClasses:(NSArray<Class> *)patchedClasses
@@ -59,6 +106,45 @@ typedef NSView NCView;
                                                       object:all userInfo:userInfo];
     [NSNotificationCenter.defaultCenter postNotificationName:NoCompileInjectionBundleNotification
                                                       object:all userInfo:userInfo];
+    return refreshed;
+}
+
++ (NSArray<NSString *> *)refreshAfterResourceKind:(NSString *)kind name:(NSString *)name {
+    NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
+#if NC_UIKIT || NC_APPKIT
+    if (NoCompile.autoReloadViewControllers) {
+        NSArray<NCViewController *> *visible = [self visibleControllers];
+        NSMutableArray<NCViewController *> *targets = [NSMutableArray array];
+        for (NCViewController *controller in visible) {
+            if (![self isAppClass:controller.class] || !controller.isViewLoaded) {
+                continue;
+            }
+            if ([kind isEqualToString:@"storyboard"] && controller.storyboard &&
+                [[self nameOfStoryboard:controller.storyboard] isEqualToString:name]) {
+                [targets addObject:controller];
+            } else if ([kind isEqualToString:@"nib"] && !controller.storyboard &&
+                       ([controller.nibName isEqualToString:name] ||
+                        [controller.nibName hasPrefix:[name stringByAppendingString:@"~"]])) {
+                [targets addObject:controller];
+            }
+        }
+        // xib 用于 cell / 自定义视图、图片被代码引用：刷新最上层的可见业务控制器。
+        // storyboard 没有可见的控制器时无需刷新，之后进入页面时会加载新版本
+        if (targets.count == 0 && ![kind isEqualToString:@"storyboard"]) {
+            NCViewController *top = [self topAppControllerIn:visible];
+            if (top) {
+                [targets addObject:top];
+            }
+        }
+        [refreshed addObjectsFromArray:[self refreshControllers:[self outermostControllers:targets]]];
+    }
+#endif
+    // 通知：object 为空数组（没有类被替换），userInfo 中带上资源名
+    NSDictionary *userInfo = @{ NoCompileInjectedFilesKey: @[name ?: @""] };
+    [NSNotificationCenter.defaultCenter postNotificationName:NoCompileDidInjectNotification
+                                                      object:@[] userInfo:userInfo];
+    [NSNotificationCenter.defaultCenter postNotificationName:NoCompileInjectionBundleNotification
+                                                      object:@[] userInfo:userInfo];
     return refreshed;
 }
 
@@ -172,11 +258,63 @@ typedef NSView NCView;
 
 #pragma mark - 刷新
 
-+ (NSArray<NSString *> *)reloadAffectedControllersForClassNames:(NSSet<NSString *> *)names {
++ (NSArray<NCViewController *> *)visibleControllers {
     NSMutableArray<NCViewController *> *visible = [NSMutableArray array];
     for (NCViewController *root in [self rootControllers]) {
         [self collectVisibleFrom:root into:visible];
     }
+    return visible;
+}
+
+/// 最上层的可见业务控制器
++ (nullable NCViewController *)topAppControllerIn:(NSArray<NCViewController *> *)visible {
+    for (NCViewController *controller in visible.reverseObjectEnumerator) {
+        if ([self isAppClass:controller.class] && controller.isViewLoaded) {
+            return controller;
+        }
+    }
+    return nil;
+}
+
+/// 父控制器重建时会重新创建子控制器，子控制器无需单独处理
++ (NSArray<NCViewController *> *)outermostControllers:(NSArray<NCViewController *> *)targets {
+    NSMutableArray<NCViewController *> *result = [NSMutableArray array];
+    for (NCViewController *controller in targets) {
+        BOOL ancestorIncluded = NO;
+        NCViewController *parent = controller.parentViewController;
+        while (parent) {
+            if ([targets containsObject:parent]) {
+                ancestorIncluded = YES;
+                break;
+            }
+            parent = parent.parentViewController;
+        }
+        if (!ancestorIncluded && ![result containsObject:controller]) {
+            [result addObject:controller];
+        }
+    }
+    return result;
+}
+
+/// 逐个刷新：实现了 -injected 的交给业务自己处理，否则重建界面
++ (NSArray<NSString *> *)refreshControllers:(NSArray<NCViewController *> *)controllers {
+    NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
+    SEL injectedSel = NSSelectorFromString(@"injected");
+    for (NCViewController *controller in controllers) {
+        NSString *name = NSStringFromClass(controller.class);
+        if ([controller respondsToSelector:injectedSel]) {
+            // 兼容项：业务方自定义了刷新逻辑
+            ((void (*)(id, SEL))objc_msgSend)(controller, injectedSel);
+        } else {
+            [self reloadController:controller];
+        }
+        [refreshed addObject:[name componentsSeparatedByString:@"."].lastObject];
+    }
+    return refreshed;
+}
+
++ (NSArray<NSString *> *)reloadAffectedControllersForClassNames:(NSSet<NSString *> *)names {
+    NSArray<NCViewController *> *visible = [self visibleControllers];
 
     // 只处理 App 自己的控制器，系统容器（导航、标签栏等）不重建
     NSMutableArray<NCViewController *> *targets = [NSMutableArray array];
@@ -192,44 +330,12 @@ typedef NSView NCView;
 
     // 被替换的是模型、工具类、C/C++ 函数等非界面代码：刷新最上层的可见业务控制器，让新逻辑立即体现
     if (targets.count == 0) {
-        for (NCViewController *controller in visible.reverseObjectEnumerator) {
-            if ([self isAppClass:controller.class] && controller.isViewLoaded) {
-                [targets addObject:controller];
-                break;
-            }
+        NCViewController *top = [self topAppControllerIn:visible];
+        if (top) {
+            [targets addObject:top];
         }
     }
-
-    // 父控制器重建时会重新创建子控制器，子控制器无需单独处理
-    NSMutableArray<NCViewController *> *finalTargets = [NSMutableArray array];
-    for (NCViewController *controller in targets) {
-        BOOL ancestorIncluded = NO;
-        NCViewController *parent = controller.parentViewController;
-        while (parent) {
-            if ([targets containsObject:parent]) {
-                ancestorIncluded = YES;
-                break;
-            }
-            parent = parent.parentViewController;
-        }
-        if (!ancestorIncluded) {
-            [finalTargets addObject:controller];
-        }
-    }
-
-    NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
-    SEL injectedSel = NSSelectorFromString(@"injected");
-    for (NCViewController *controller in finalTargets) {
-        NSString *name = NSStringFromClass(controller.class);
-        if ([controller respondsToSelector:injectedSel]) {
-            // 兼容项：业务方自定义了刷新逻辑
-            ((void (*)(id, SEL))objc_msgSend)(controller, injectedSel);
-        } else {
-            [self reloadController:controller];
-        }
-        [refreshed addObject:[name componentsSeparatedByString:@"."].lastObject];
-    }
-    return refreshed;
+    return [self refreshControllers:[self outermostControllers:targets]];
 }
 
 /// 判断类是否重写了 -loadView（自定义根视图的控制器需要重新 loadView）
@@ -243,6 +349,15 @@ typedef NSView NCView;
 /// 重建一个控制器的界面
 + (void)reloadController:(NCViewController *)controller {
     if (!controller.isViewLoaded) {
+        return;
+    }
+    // 界面来自 storyboard / xib：重新加载 nib（资源更新后会加载新 nib）。
+    // 重新加载失败时保持原样：清空子视图再走 viewDidLoad 会丢掉 nib 中的全部内容
+    if (controller.nibName.length > 0) {
+        if (![self reloadControllerFromNib:controller]) {
+            NCLogWarn(@"%@ 的界面来自 nib，未能自动重建，返回后重新进入该页面即可看到改动",
+                      NSStringFromClass(controller.class));
+        }
         return;
     }
     NCView *oldView = controller.view;
@@ -259,17 +374,7 @@ typedef NSView NCView;
     }
 #endif
 
-    // 移除子控制器（viewDidLoad 会重新添加）
-    for (NCViewController *child in controller.childViewControllers.copy) {
-#if NC_UIKIT
-        [child willMoveToParentViewController:nil];
-        [child.view removeFromSuperview];
-        [child removeFromParentViewController];
-#else
-        [child.view removeFromSuperview];
-        [child removeFromParentViewController];
-#endif
-    }
+    [self removeChildControllersOf:controller];
 
     if ([self overridesLoadView:controller.class]) {
         // 自定义根视图：重新 loadView，并把新视图放回原位置
@@ -293,6 +398,218 @@ typedef NSView NCView;
     controller.view.needsLayout = YES;
     [controller.view layoutSubtreeIfNeeded];
     [controller viewDidAppear];
+#endif
+}
+
+#pragma mark - 从 nib 重建
+
+/// storyboard 的文件名（私有属性，取不到时返回 nil）
++ (nullable NSString *)nameOfStoryboard:(id)storyboard {
+    for (NSString *key in @[@"name", @"storyboardFileName"]) {
+        @try {
+            id value = [storyboard valueForKey:key];
+            if ([value isKindOfClass:NSString.class]) {
+                return value;
+            }
+        } @catch (NSException *exception) {
+            continue;
+        }
+    }
+    return nil;
+}
+
+/// storyboard 所在 bundle（私有属性，取不到时按主 bundle 处理）。
+/// AppKit 的 NSStoryboard 记录的是 .storyboardc 目录本身，需要换算回包含它的 bundle
++ (NSBundle *)bundleOfStoryboard:(id)storyboard {
+    NSBundle *bundle = nil;
+    @try {
+        id value = [storyboard valueForKey:@"bundle"];
+        if ([value isKindOfClass:NSBundle.class]) {
+            bundle = value;
+        }
+    } @catch (NSException *exception) {
+        bundle = nil;
+    }
+    NSString *path = bundle.bundlePath;
+    if (!bundle || ![path.pathExtension isEqualToString:@"storyboardc"]) {
+        return bundle ?: NSBundle.mainBundle;
+    }
+    // 位于主 bundle 或其镜像 bundle 中：按主 bundle 处理，由 NCResources 决定是否改用镜像
+    if ([path hasPrefix:[NSBundle.mainBundle.bundlePath stringByAppendingString:@"/"]] ||
+        [path containsString:@"/NoCompileResources/mirror_"]) {
+        return NSBundle.mainBundle;
+    }
+    NSSet<NSString *> *bundleExtensions = [NSSet setWithArray:@[@"app", @"framework", @"bundle", @"appex"]];
+    while (path.length > 1) {
+        path = path.stringByDeletingLastPathComponent;
+        if ([bundleExtensions containsObject:path.pathExtension]) {
+            return [NSBundle bundleWithPath:path] ?: NSBundle.mainBundle;
+        }
+    }
+    return NSBundle.mainBundle;
+}
+
+/// 移除子控制器（viewDidLoad 会重新添加）
++ (void)removeChildControllersOf:(NCViewController *)controller {
+    for (NCViewController *child in controller.childViewControllers.copy) {
+#if NC_UIKIT
+        [child willMoveToParentViewController:nil];
+#endif
+        [child.view removeFromSuperview];
+        [child removeFromParentViewController];
+    }
+}
+
+/// 重新实例化控制器的 nib，把新视图换到旧视图的位置并重走生命周期。
+/// 加载入口已被 NCResources hook，资源更新过时会自动改用镜像 bundle 中的新 nib。
+/// 涉及系统私有行为，任何异常都只记录日志并回退到普通刷新，不能让 App 崩溃
++ (BOOL)reloadControllerFromNib:(NCViewController *)controller {
+    @try {
+        return [self unsafeReloadControllerFromNib:controller];
+    } @catch (NSException *exception) {
+        NCLogWarn(@"重新加载 %@ 的 nib 失败：%@", NSStringFromClass(controller.class), exception.reason);
+        return NO;
+    }
+}
+
++ (BOOL)unsafeReloadControllerFromNib:(NCViewController *)controller {
+    NSString *nibName = controller.nibName;
+    id storyboard = controller.storyboard;
+    NCView *oldView = controller.view;
+#if NC_UIKIT
+    UINib *nib = nil;
+    NSDictionary *options = nil;
+    UIStoryboard *freshStoryboard = nil;
+    if (storyboard) {
+        NSString *storyboardName = [self nameOfStoryboard:storyboard];
+        if (!storyboardName) {
+            return NO;
+        }
+        UIStoryboard *fresh = [UIStoryboard storyboardWithName:storyboardName bundle:[self bundleOfStoryboard:storyboard]];
+        SEL nibSel = NSSelectorFromString(@"nibForStoryboardNibNamed:");
+        if (![fresh respondsToSelector:nibSel]) {
+            return NO;
+        }
+        nib = ((UINib *(*)(id, SEL, NSString *))objc_msgSend)(fresh, nibSel, nibName);
+        // storyboard 中视图 nib 不以 File's Owner 引用控制器，而是引用场景里的"上游占位对象"
+        // （UpstreamPlaceholder-N → 控制器等）。UIKit 实例化场景时把这张表存在控制器上，加载视图时作为外部对象传入
+        NSMutableDictionary *external = [NSMutableDictionary dictionary];
+        Ivar tableIvar = class_getInstanceVariable(UIViewController.class, "_externalObjectsTableForViewLoading");
+        id table = tableIvar ? object_getIvar(controller, tableIvar) : nil;
+        if ([table isKindOfClass:NSDictionary.class]) {
+            [external addEntriesFromDictionary:table];
+        }
+        external[@"UIStoryboardPlaceholder"] = fresh;
+        options = @{ UINibExternalObjects: external };
+        freshStoryboard = fresh;
+    } else {
+        nib = [UINib nibWithNibName:nibName bundle:controller.nibBundle];
+    }
+    if (!nib) {
+        return NO;
+    }
+    UIView *superview = oldView.superview;
+    CGRect frame = oldView.frame;
+    UIViewAutoresizing mask = oldView.autoresizingMask;
+    @try {
+        [nib instantiateWithOwner:controller options:options];
+    } @catch (NSException *exception) {
+        NCLogWarn(@"重新加载 %@ 的 nib 失败：%@", NSStringFromClass(controller.class), exception.reason);
+        return NO;
+    }
+    UIView *newView = controller.view;
+    if (newView == oldView) {
+        return NO;
+    }
+    // 之后由该控制器发起的 segue、instantiateViewController 也使用新 storyboard
+    SEL setStoryboardSel = NSSelectorFromString(@"_setStoryboard:");
+    if (freshStoryboard && [controller respondsToSelector:setStoryboardSel]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(controller, setStoryboardSel, freshStoryboard);
+    }
+    [self removeChildControllersOf:controller];
+    newView.frame = frame;
+    newView.autoresizingMask = mask;
+    if (superview) {
+        [superview insertSubview:newView aboveSubview:oldView];
+        [oldView removeFromSuperview];
+    }
+    [controller viewDidLoad];
+    [controller viewWillAppear:NO];
+    [newView setNeedsLayout];
+    [newView layoutIfNeeded];
+    [controller viewDidAppear:NO];
+    return YES;
+#else
+    NSNib *nib = nil;
+    NSDictionary *external = nil;
+    NSStoryboard *freshStoryboard = nil;
+    if (storyboard) {
+        NSString *storyboardName = [self nameOfStoryboard:storyboard];
+        if (!storyboardName) {
+            return NO;
+        }
+        NSStoryboard *fresh = [NSStoryboard storyboardWithName:storyboardName bundle:[self bundleOfStoryboard:storyboard]];
+        SEL nibSel = NSSelectorFromString(@"nibForStoryboardNibNamed:");
+        if (![fresh respondsToSelector:nibSel]) {
+            return NO;
+        }
+        nib = ((NSNib *(*)(id, SEL, NSString *))objc_msgSend)(fresh, nibSel, nibName);
+        // storyboard 的视图 nib 以"上游占位对象"引用场景中的控制器（UpstreamPlaceholder-1），outlet 都从它连出。
+        // AppKit 不像 UIKit 那样在控制器上保存这张表，这里按约定映射；场景中还有其他对象时会解码失败并回退
+        if (!NCInstallExternalPlaceholderHook()) {
+            return NO;
+        }
+        external = @{ @"UpstreamPlaceholder-1": controller };
+        freshStoryboard = fresh;
+    } else {
+        nib = [[NSNib alloc] initWithNibNamed:nibName bundle:controller.nibBundle];
+    }
+    if (!nib) {
+        return NO;
+    }
+    NSWindow *window = oldView.window;
+    BOOL isContentView = window && window.contentView == oldView;
+    NSView *superview = oldView.superview;
+    NSRect frame = oldView.frame;
+    NSAutoresizingMaskOptions mask = oldView.autoresizingMask;
+    NSArray *topLevelObjects = nil;
+    BOOL loaded = NO;
+    gPendingExternalObjects = external;
+    @try {
+        loaded = [nib instantiateWithOwner:controller topLevelObjects:&topLevelObjects];
+    } @catch (NSException *exception) {
+        NCLogWarn(@"重新加载 %@ 的 nib 失败：%@", NSStringFromClass(controller.class), exception.reason);
+        loaded = NO;
+    } @finally {
+        gPendingExternalObjects = nil;
+    }
+    if (!loaded) {
+        return NO;
+    }
+    NSView *newView = controller.view;
+    if (newView == oldView) {
+        return NO;
+    }
+    // 之后由该控制器发起的 segue 也使用新 storyboard
+    SEL setStoryboardSel = NSSelectorFromString(@"setStoryboard:");
+    if (freshStoryboard && [controller respondsToSelector:setStoryboardSel]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(controller, setStoryboardSel, freshStoryboard);
+    }
+    [self removeChildControllersOf:controller];
+    if (isContentView) {
+        window.contentView = newView;
+    } else if (superview) {
+        newView.frame = frame;
+        newView.autoresizingMask = mask;
+        [superview addSubview:newView positioned:NSWindowAbove relativeTo:oldView];
+        [oldView removeFromSuperview];
+    }
+    [controller viewDidLoad];
+    [controller viewWillAppear];
+    newView.needsLayout = YES;
+    [newView layoutSubtreeIfNeeded];
+    [controller viewDidAppear];
+    return YES;
 #endif
 }
 
