@@ -18,6 +18,8 @@ final class Preferences: ObservableObject {
     @Published var injectsOnSave: Bool { didSet { save(injectsOnSave, "injectsOnSave") } }
     /// 监听头文件变更，自动重编依赖它的实现文件
     @Published var watchesHeaders: Bool { didSet { save(watchesHeaders, "watchesHeaders") } }
+    /// 热重载资源文件：storyboard、xib 与图片
+    @Published var watchesResources: Bool { didSet { save(watchesResources, "watchesResources") } }
     /// 在 Dock 中显示图标（关闭后仅在菜单栏显示）
     @Published var showsDockIcon: Bool { didSet { save(showsDockIcon, "showsDockIcon") } }
     /// 启动时打开控制台窗口
@@ -62,6 +64,7 @@ final class Preferences: ObservableObject {
         }
         injectsOnSave = bool("injectsOnSave", true)
         watchesHeaders = bool("watchesHeaders", true)
+        watchesResources = bool("watchesResources", true)
         showsDockIcon = bool("showsDockIcon", true)
         opensConsoleOnLaunch = bool("opensConsoleOnLaunch", true)
         notifiesOnFailure = bool("notifiesOnFailure", true)
@@ -110,6 +113,7 @@ final class Preferences: ObservableObject {
     func resetToDefaults() {
         injectsOnSave = true
         watchesHeaders = true
+        watchesResources = true
         showsDockIcon = true
         opensConsoleOnLaunch = true
         notifiesOnFailure = true

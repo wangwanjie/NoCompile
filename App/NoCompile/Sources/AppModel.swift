@@ -143,6 +143,7 @@ final class AppModel: ObservableObject, EngineDelegate {
     private func applyPreferences(to engine: Engine) {
         engine.injectsOnSave = preferences.injectsOnSave
         engine.watchesHeaders = preferences.watchesHeaders
+        engine.watchesResources = preferences.watchesResources
         engine.excludedKeywords = preferences.excludedKeywordList
         engine.clientConfig = preferences.clientConfig
     }

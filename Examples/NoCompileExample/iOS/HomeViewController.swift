@@ -61,6 +61,11 @@ final class HomeViewController: UIViewController {
         stack.addArrangedSubview(badge)
 
         stack.addArrangedSubview(makeDetailButton())
+
+        // 资源热重载：替换 Assets.xcassets/DemoBadge 或 Images/loose_icon@2x.png 后，这里的图片会更新
+        stack.addArrangedSubview(makeImageRow())
+        stack.addArrangedSubview(makeButton(title: "打开 Storyboard 页面", action: #selector(openStoryboard)))
+        stack.addArrangedSubview(makeButton(title: "打开 Xib 页面", action: #selector(openXib)))
     }
 
     // MARK: - 组件
@@ -162,6 +167,49 @@ final class HomeViewController: UIViewController {
 
     @objc private func openDetail() {
         navigationController?.pushViewController(DetailViewController(), animated: true)
+    }
+
+    private func makeImageRow() -> UIView {
+        let badge = UIImageView(image: UIImage(named: "DemoBadge"))
+        let icon = UIImageView(image: UIImage(named: "loose_icon"))
+        for imageView in [badge, icon] {
+            imageView.contentMode = .scaleAspectFit
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.widthAnchor.constraint(equalToConstant: 60).isActive = true
+            imageView.heightAnchor.constraint(equalToConstant: 60).isActive = true
+        }
+        let caption = UILabel()
+        caption.text = "Asset Catalog 图片 / 单独的图片文件"
+        caption.font = .systemFont(ofSize: 13)
+        caption.textColor = .secondaryLabel
+        caption.numberOfLines = 0
+        let row = UIStackView(arrangedSubviews: [badge, icon, caption])
+        row.spacing = 12
+        row.alignment = .center
+        return row
+    }
+
+    private func makeButton(title: String, action: Selector) -> UIView {
+        var configuration = UIButton.Configuration.tinted()
+        configuration.title = title
+        configuration.baseForegroundColor = themeColor()
+        configuration.baseBackgroundColor = themeColor()
+        configuration.cornerStyle = .large
+        configuration.buttonSize = .large
+        let button = UIButton(configuration: configuration)
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
+    @objc private func openStoryboard() {
+        let storyboard = UIStoryboard(name: "StoryboardDemo", bundle: nil)
+        if let controller = storyboard.instantiateInitialViewController() {
+            navigationController?.pushViewController(controller, animated: true)
+        }
+    }
+
+    @objc private func openXib() {
+        navigationController?.pushViewController(XibDemoViewController(), animated: true)
     }
 }
 

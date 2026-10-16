@@ -4,7 +4,7 @@
 
 一次热重载从保存文件到界面更新，经过这几步：
 
-1. **文件监听**（Mac 端）：FSEvents 捕获到源文件保存（Xcode 保存是原子 rename）。
+1. **文件监听**（Mac 端）：FSEvents 捕获到源文件保存（Xcode 保存是原子 rename）或新建。storyboard、xib、图片走单独的资源流程，见下文「资源热重载」。
 2. **取编译命令**（Mac 端）：从 `.xcactivitylog` 解析出该文件所属模块/目标的编译命令。
 3. **单文件重编**（Mac 端）：只编译这一个文件，生成 `.o`。
 4. **链接**（Mac 端）：把 `.o` 链接成一个 dylib，未定义符号留到运行时解析。
@@ -99,12 +99,44 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 1. 从各窗口的根控制器出发，收集当前可见的控制器。导航控制器只取栈顶，标签栏控制器只取选中项，另外包括被 present 的控制器和子控制器。
 2. 以**类名**判断受影响的控制器。App 里的实例属于旧类，dylib 里的是新类，两者名字相同。命中条件是控制器自身的类被替换，或它的视图层级里有被替换的视图类。系统容器（导航、标签栏等）不重建。
 3. 如果一个控制器都没命中（改的是模型、C/C++ 函数等非界面代码），就刷新最上层的可见业务控制器。
-4. 重建步骤：移除子控制器，清空根视图的子视图（重写了 `loadView` 的则重新 `loadView` 并替换原视图），再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`。根视图是 table / collection view 的，只 `reloadData`。
+4. 重建步骤：移除子控制器，清空根视图的子视图（重写了 `loadView` 的则重新 `loadView` 并替换原视图），再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`。根视图是 table / collection view 的，只 `reloadData`。界面来自 storyboard / xib 的控制器（`nibName` 非空）改为重新实例化 nib，见下文「资源热重载」；重新实例化失败时保持原样，不清空视图。
 5. 发出 `NoCompileDidInjectNotification` 和兼容的 `INJECTION_BUNDLE_NOTIFICATION`，供 SwiftUI 等场景使用。
 
 兼容项：类或控制器如果实现了 InjectionIII 风格的 `+injected` / `-injected`，会优先调用它们，不走默认重建。
 
 整个注入过程（dlopen、替换、刷新）都在主线程串行执行，避免和 UI 代码并发。
+
+## 新增文件
+
+构建日志里只有已存在文件的编译命令。运行期间新建的文件按以下方式补齐：
+
+- **Swift**：选源文件目录与新文件最接近的模块，把新文件追加进模块的输入列表（有 `@filelist` 时写一份追加后的副本），再照常用 `-###` 展开出它的 frontend 命令。编译通过后登记到该模块，之后重编同模块的其他文件时也把它一并作为输入，否则引用不到新文件里声明的类型。
+- **C / ObjC / C++**：借用同平台、目录最接近、优先同语言的已有文件的 clang 命令，替换 `-c` 后的源文件；语言不同时改写 `-x` 并去掉 `-std=`。
+
+App 端以 `RTLD_GLOBAL` 加载新文件生成的 dylib：新文件里的符号在 App 中不存在，之后注入的 dylib（如引用了新类型的旧文件）靠全局符号查找链接到它。没有可替换的实现也视为成功。再次修改新文件时，旧引用会照常通过符号重绑指向新实现。
+
+限制：新增 ObjC 类要被 Swift 使用，需要改桥接头，仍需重新构建。
+
+## 资源热重载
+
+资源文件不经过编译命令，由 `ResourceCompiler.swift` 整理成资源包，以 `resource` 消息下发：
+
+| 资源 | Mac 端 | 资源包中的位置 |
+|---|---|---|
+| `.storyboard` / `.xib` | `ibtool --compile` 编译，优先沿用构建日志里该文件的 ibtool 参数（`--module`、`--target-device` 等），没有时按平台推断 | `[xx.lproj/]名字.storyboardc` / `名字.nib` |
+| 工程中的图片文件 | 连同同目录下同名的其他倍率一起下发 | 与 bundle 中的相对路径一致 |
+| Asset Catalog 图片集 | 读取 `Contents.json`，下发当前平台可用的位图变体及倍率、模板渲染属性 | 只登记名字，不覆盖 bundle 条目 |
+
+界面文件按 `targetRuntime` 区分平台，不下发给另一平台的 App。App 图标、颜色集、矢量图片与外观（暗色）变体运行时无法替换，会跳过或提示重新运行。
+
+App 端（`NCResources.m`）：
+
+1. **镜像 bundle**：真机的 App bundle 只读，因此不改写 bundle，而是在 `tmp/NoCompileResources/mirror_N/` 下生成镜像：被更新的条目指向新文件，其余条目软链接回原 bundle。只有被更新条目的上级目录是真实目录，生成开销与 bundle 大小无关。每次换新路径，避免 `NSBundle` 按路径缓存旧实例。Assets.car 等也在镜像中，nib 里引用的图片照常解析。
+2. **加载入口 hook**：`storyboardWithName:bundle:`、`nibWithNibName:bundle:`（AppKit 为 `initWithNibNamed:bundle:`）、`loadNibNamed:...` 在请求主 bundle 中已更新的资源时改用镜像 bundle；`pathForResource:ofType:`、`URLForResource:withExtension:` 返回新文件路径。之后新打开的页面、UIKit 自己的 `loadView` 都会拿到新 nib。
+3. **图片**：按名字登记新图，hook `imageNamed:` 系列方法直接返回。nib 中的图片在解码时由 `UIImageNibPlaceholder` 生成、不经过 `imageNamed:`，因此另外交换它的 `initWithCoder:`，按 coder 中的 `UIResourceName` 返回新图。
+4. **刷新可见页面**：storyboard / xib 刷新由它加载、当前可见的控制器；xib 没有对应控制器（如用于 cell）或图片更新时刷新最上层的可见业务控制器。重建方式是重新实例化 nib，把新根视图换到旧视图的位置，再走生命周期。storyboard 的视图 nib 不以 File's Owner 引用控制器，而是引用场景中的"上游占位对象"：UIKit 在控制器的 `_externalObjectsTableForViewLoading` 中保存了这张表，作为 `UINibExternalObjects` 传入；AppKit 没有这张表，也没有传入外部对象的公开接口，因此重载期间交换 `NSNibExternalObjectPlaceholder` 的 `initWithCoder:`，把 `UpstreamPlaceholder-1` 映射到控制器。重载成功后把控制器的 storyboard 换成新实例，之后的 segue 也使用新版本。
+
+这部分依赖 UIKit / AppKit 的私有行为，所有调用都做了响应性检查和异常保护，失败时只记录日志并保持原界面。
 
 ## 通信协议
 
@@ -114,5 +146,6 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 magic("NCMP") | type(u32) | jsonLen(u32) | dataLen(u64) | json | data
 ```
 
+- `inject`（10）携带 dylib，`resource`（12）携带资源包：json 描述资源类型、名字、需要覆盖的 bundle 条目与图片变体；模拟器 / macOS 给出 Mac 端已拷进 App tmp 目录的路径，真机则把各文件内容按 `files` 列表顺序拼接在 data 中。
 - 模拟器 / macOS：客户端主动连 Mac 的 21890 端口。
 - 真机：客户端在回环监听 21891，Mac 经 usbmuxd（`DeviceBridge.swift`）连入。

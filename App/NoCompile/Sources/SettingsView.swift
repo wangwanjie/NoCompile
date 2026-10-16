@@ -68,6 +68,9 @@ private struct GeneralSettings: View {
                 SettingToggle(title: "监听头文件变更",
                               detail: "修改 .h 时自动重编依赖它的 .m / .mm / .c / .cpp。",
                               isOn: $preferences.watchesHeaders)
+                SettingToggle(title: "热重载界面与图片资源",
+                              detail: "保存 .storyboard / .xib 后重新编译并刷新对应页面；替换 Asset Catalog 或工程中的图片后，imageNamed: 立即返回新图。",
+                              isOn: $preferences.watchesResources)
             }
             SettingsSection(title: "外观与提醒") {
                 SettingToggle(title: "在 Dock 中显示图标",

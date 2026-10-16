@@ -63,6 +63,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     public var injectsOnSave: Bool = true
     /// 是否监听头文件变更
     public var watchesHeaders: Bool = true
+    /// 是否热重载资源文件（storyboard、xib、图片）
+    public var watchesResources: Bool = true
     /// 路径中包含这些关键字的文件不触发注入（如 "Pods/"、"Tests/"）
     public var excludedKeywords: [String] = []
     /// 下发给 App 端的偏好设置，变更后立即推送给所有已连接的 App
@@ -80,6 +82,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var lastParsedLogDate: Date = .distantPast
     private var signingIdentity: String?
     private let recompiler: Recompiler
+    private let resourceCompiler: ResourceCompiler
     private var server: Server?
     private var deviceBridge: DeviceBridge?
     private var watcher: FileWatcher?
@@ -95,6 +98,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         self.projectPath = projectPath
         self.customDerivedData = customDerivedData
         self.recompiler = Recompiler(outputDirectory: Self.outputDirectory)
+        self.resourceCompiler = ResourceCompiler(outputDirectory: Self.outputDirectory + "/Resources")
     }
 
     // MARK: - 生命周期
@@ -231,13 +235,22 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             return
         }
         refreshCommandsIfNeeded()
-        guard let buildLog else {
+
+        // 资源文件单独处理：不依赖源码编译命令，构建日志缺失时也能下发图片
+        let resources = files.filter { ResourceCompiler.isResource($0) }
+        if !resources.isEmpty {
+            if watchesResources {
+                pushResources(resources.sorted())
+            }
+        }
+        let codeFiles = files.filter { !ResourceCompiler.isResource($0) }
+        guard !codeFiles.isEmpty, let buildLog else {
             return
         }
 
         // 展开头文件变更到实现文件
         var sources = Set<String>()
-        for file in files {
+        for file in codeFiles {
             if file.hasSuffix(".h") || file.hasSuffix(".hpp") {
                 guard watchesHeaders else {
                     continue
@@ -279,8 +292,9 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 }
                 if built.result.succeeded, let dylibPath = built.result.dylibPath {
                     inflight[inflightKey(connection, source)] = (Date(), built.elapsed)
-                    sendInject(dylibPath: dylibPath, source: source, to: connection)
-                    log("⚡ \(name) → \(connection.displayName)（编译 \(String(format: "%.2f", built.elapsed))s）", level: 0)
+                    sendInject(dylibPath: dylibPath, source: source, isNewFile: built.result.isNewFile, to: connection)
+                    let newTag = built.result.isNewFile ? "（新增文件）" : ""
+                    log("⚡ \(name)\(newTag) → \(connection.displayName)（编译 \(String(format: "%.2f", built.elapsed))s）", level: 0)
                 } else {
                     hadError = true
                     let message = built.result.error ?? "重编失败"
@@ -299,11 +313,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         return "\(connection.id)|\(source)"
     }
 
-    private func sendInject(dylibPath: String, source: String, to connection: ServerConnection) {
+    private func sendInject(dylibPath: String, source: String, isNewFile: Bool, to connection: ServerConnection) {
         let dylibName = (dylibPath as NSString).lastPathComponent
         var json: [String: Any] = [
             "dylibName": dylibName,
             "sourceFiles": [source],
+            "newFile": isNewFile,
         ]
         var payload: Data? = nil
         if connection.isLocalFileSystem, let tmp = connection.clientInfo["tmp"] as? String, !tmp.isEmpty {
@@ -321,6 +336,84 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             payload = try? Data(contentsOf: URL(fileURLWithPath: dylibPath))
         }
         connection.send(NCMessage(type: .inject, json: json, data: payload))
+    }
+
+    // MARK: - 资源
+
+    /// 整理并下发资源文件。同一平台的多个连接共用一次 ibtool 编译结果
+    private func pushResources(_ files: [String]) {
+        setState(.working)
+        var hadError = false
+        var handledKeys = Set<String>()
+        for file in files {
+            // 一次保存了同一图片集的多个文件（如 @2x、@3x）时只下发一次
+            guard handledKeys.insert(ResourceCompiler.batchKey(for: file)).inserted else {
+                continue
+            }
+            let name = (file as NSString).lastPathComponent
+            var preparedByPlatform: [String: (result: ResourcePreparation, elapsed: TimeInterval)] = [:]
+            for connection in connections {
+                guard let platform = platform(for: connection) else {
+                    continue
+                }
+                let prepared: (result: ResourcePreparation, elapsed: TimeInterval)
+                if let cached = preparedByPlatform[platform.name] {
+                    prepared = cached
+                } else {
+                    if file.hasSuffix(".storyboard") || file.hasSuffix(".xib") {
+                        notifyStatus("编译中：\(name)", state: 1)
+                    }
+                    let start = Date()
+                    let result = resourceCompiler.prepare(file: file, commands: commands, platform: platform)
+                    prepared = (result, Date().timeIntervalSince(start))
+                    preparedByPlatform[platform.name] = prepared
+                }
+                switch prepared.result {
+                case .ready(let package):
+                    inflight[inflightKey(connection, file)] = (Date(), prepared.elapsed)
+                    sendResource(package, to: connection)
+                    log("🖼 \(name) → \(connection.displayName)（准备 \(String(format: "%.2f", prepared.elapsed))s）", level: 0)
+                case .skipped(let reason):
+                    log("跳过 \(name)（\(connection.displayName)）：\(reason)", level: 0)
+                case .failed(let error):
+                    hadError = true
+                    log("❌ \(name)：\(error)", level: 3)
+                    connection.send(NCMessage(type: .status, json: ["message": "资源处理失败：\(name)", "state": 2]))
+                    record(InjectionRecord(file: name, clientName: connection.shortName,
+                                           platformTitle: connection.platformTitle, success: false,
+                                           duration: prepared.elapsed, message: error, refreshed: []))
+                }
+            }
+        }
+        setState(hadError ? .error("资源处理失败，详见日志") : .idle)
+    }
+
+    /// 发送资源包。模拟器 / macOS 直接拷进 App 的 tmp 目录；真机把各文件内容拼接后随帧传输
+    private func sendResource(_ package: ResourcePackage, to connection: ServerConnection) {
+        var json = package.json
+        var payload: Data? = nil
+        if connection.isLocalFileSystem, let tmp = connection.clientInfo["tmp"] as? String, !tmp.isEmpty {
+            let destination = (tmp as NSString).appendingPathComponent("NoCompileIncoming/\((package.rootDirectory as NSString).lastPathComponent)_\(UUID().uuidString.prefix(8))")
+            try? FileManager.default.createDirectory(atPath: (destination as NSString).deletingLastPathComponent,
+                                                     withIntermediateDirectories: true)
+            if (try? FileManager.default.copyItem(atPath: package.rootDirectory, toPath: destination)) != nil {
+                json["localRoot"] = destination
+            }
+        }
+        if json["localRoot"] == nil {
+            var data = Data()
+            var entries: [[String: Any]] = []
+            for file in package.files {
+                guard let content = FileManager.default.contents(atPath: "\(package.rootDirectory)/\(file)") else {
+                    continue
+                }
+                entries.append(["path": file, "length": content.count])
+                data.append(content)
+            }
+            json["files"] = entries
+            payload = data
+        }
+        connection.send(NCMessage(type: .resource, json: json, data: payload))
     }
 
     private func platform(for connection: ServerConnection) -> Platform? {
@@ -385,7 +478,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 let level = message.json?["level"] as? Int ?? 0
                 log("[\(connection.shortName)] \(msg)", level: level)
             }
-        case .injectResult:
+        case .injectResult, .resourceResult:
             let json = message.json ?? [:]
             workQueue.async { [weak self] in
                 self?.handleInjectResult(json, from: connection)

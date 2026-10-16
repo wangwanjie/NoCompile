@@ -15,6 +15,7 @@ public struct RawCompileCommand {
     public enum Kind {
         case swiftModule    // 整个模块的 swiftc driver 命令
         case clangFile      // 单个 .m/.mm/.c/.cpp 的 clang 命令
+        case ibtool         // 单个 .storyboard/.xib 的 ibtool 编译命令
     }
     public let kind: Kind
     public let tokens: [String]       // 已切分的参数数组
@@ -51,6 +52,9 @@ public struct ParsedCommands {
     /// clang 单文件命令，键为 "平台|源文件绝对路径"
     public var clangFiles: [String: RawCompileCommand] = [:]
 
+    /// ibtool 命令，键为界面文件的规范化路径。nib 格式与模拟器 / 真机无关，不区分平台
+    public var ibtoolCommands: [String: RawCompileCommand] = [:]
+
     public static func clangKey(platform: String, source: String) -> String {
         return "\(platform)|\(canonicalPath(source))"
     }
@@ -71,6 +75,79 @@ public struct ParsedCommands {
 
     public var clangFileCount: Int {
         return Set(clangFiles.keys.map { $0.components(separatedBy: "|").last ?? $0 }).count
+    }
+
+    public func ibtoolCommand(for source: String) -> RawCompileCommand? {
+        return ibtoolCommands[Self.canonicalPath(source)]
+    }
+
+    /// 新增文件（构建日志里还没有它的命令）借用的 clang 命令模板：
+    /// 同平台、同语言、与新文件目录最接近的已有文件。语言不同时退而求其次，由调用方改写 -x
+    public func clangTemplate(for source: String, platform: String) -> (source: String, command: RawCompileCommand)? {
+        let target = Self.canonicalPath(source)
+        let language = Self.clangLanguage(forPath: target)
+        var best: (source: String, command: RawCompileCommand, score: Int)? = nil
+        for (key, command) in clangFiles {
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == platform, parts[1] != target else {
+                continue
+            }
+            // 共同目录层级越深越接近；同语言额外加权，优先保证编译参数（如 -fobjc-arc、-std）一致
+            var score = Self.commonDirectoryDepth(parts[1], target) * 2
+            if Self.clangLanguage(forPath: parts[1]) == language {
+                score += 1
+            }
+            if best == nil || score > best!.score {
+                best = (parts[1], command, score)
+            }
+        }
+        return best.map { ($0.source, $0.command) }
+    }
+
+    /// 取模块命令涉及的所有 swift 源文件（含 @filelist）
+    public static func swiftSources(of module: RawCompileCommand) -> Set<String> {
+        var sources = Set<String>()
+        for token in module.tokens {
+            if token.hasSuffix(".swift") {
+                sources.insert(token)
+            } else if token.hasPrefix("@") {
+                let listPath = String(token.dropFirst())
+                if let content = try? String(contentsOfFile: listPath, encoding: .utf8) {
+                    for line in content.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        if trimmed.hasSuffix(".swift") {
+                            sources.insert(trimmed)
+                        }
+                    }
+                }
+            }
+        }
+        return sources
+    }
+
+    /// 按扩展名推断 clang 的 -x 语言名
+    public static func clangLanguage(forPath path: String) -> String {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "m":
+            return "objective-c"
+        case "mm":
+            return "objective-c++"
+        case "c":
+            return "c"
+        default:
+            return "c++"
+        }
+    }
+
+    /// 两个文件所在目录的共同层级数
+    public static func commonDirectoryDepth(_ a: String, _ b: String) -> Int {
+        let lhs = (a as NSString).deletingLastPathComponent.split(separator: "/")
+        let rhs = (b as NSString).deletingLastPathComponent.split(separator: "/")
+        var depth = 0
+        while depth < lhs.count, depth < rhs.count, lhs[depth] == rhs[depth] {
+            depth += 1
+        }
+        return depth
     }
 }
 
@@ -214,6 +291,22 @@ public struct BuildLog {
                 parsed.swiftModules.append(RawCompileCommand(
                     kind: .swiftModule, tokens: tokens, workingDirectory: currentWorkingDir,
                     moduleName: moduleName, platform: platform, target: target))
+                continue
+            }
+            // ibtool 编译 storyboard / xib 的命令：取最后一个界面文件参数作为源文件
+            if line.contains("/ibtool "), line.contains(".storyboard") || line.contains(".xib") {
+                let tokens = CommandTokenizer.tokenize(line)
+                guard let executable = tokens.first, executable.hasSuffix("/ibtool"),
+                      !tokens.contains("--link"),
+                      let source = tokens.last(where: { $0.hasSuffix(".storyboard") || $0.hasSuffix(".xib") }) else {
+                    continue
+                }
+                let key = ParsedCommands.canonicalPath(source)
+                if parsed.ibtoolCommands[key] == nil {
+                    parsed.ibtoolCommands[key] = RawCompileCommand(
+                        kind: .ibtool, tokens: tokens, workingDirectory: currentWorkingDir,
+                        moduleName: valueForFlag("--module", in: tokens), platform: "unknown", target: nil)
+                }
                 continue
             }
             // clang 单文件命令：行首必须就是 clang 可执行文件，排除 builtin-ScanDependencies 等包装行

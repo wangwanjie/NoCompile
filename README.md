@@ -28,6 +28,7 @@
 | **语言支持** | 部分工具不支持 C++，Swift 仅支持函数替换 | C / C++ / ObjC / Swift 统一支持。C/C++ 自由函数通过 GOT 重绑覆盖 |
 | **进程内替换** | ObjC swizzle、Dobby inline hook、vtable patch 各自为政 | 统一三层：ObjC `class_replaceMethod` + Swift vtable 覆写 + fishhook 式符号重绑 |
 | **触发方式** | 部分工具默认要手动按快捷键 | 保存即注入，FSEvents 自动触发 |
+| **资源与新文件** | storyboard / xib 仅限模拟器且依赖 Xcode 先编译，不支持图片与新增文件 | storyboard、xib、图片保存即生效（含真机）；运行中新建的源文件也能注入 |
 | **中文 / 空格路径** | 明确不支持中文路径，空格路径也会出错 | 全程用参数数组传递给子进程，不拼接 shell 字符串，天然支持 |
 | **真机连接** | 靠 UDP 广播找 Mac，常连不上 | 以 USB（usbmuxd）为主通道，稳定可靠 |
 | **类型判定** | 注入后 `isKindOfClass:` / `as?` 可能失效 | 登记新旧类等价关系并修正判定 |
@@ -131,6 +132,7 @@ NoCompile 会检测到布局变化并拒绝注入，以避免崩溃，而不是�
 其他要点：
 
 - 必须先在 Xcode 完整构建过一次，NoCompile 才能从构建日志拿到编译命令。
+- storyboard、xib、图片与新增源文件也支持热重载，范围与限制见 [接入指南](Docs/Integration.md#资源与新增文件)。
 - 真机注入需要 iOS 13+，并用与 App 一致的开发者身份签名（NoCompile 会从构建日志自动提取签名身份）。
 - 暂不兼容 Whole Module Optimization 和编译缓存（`COMPILATION_CACHE_ENABLE_CACHING`），Debug 配置默认关闭它们即可。
 

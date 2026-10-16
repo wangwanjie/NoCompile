@@ -1,7 +1,7 @@
 //
 //  FileWatcher.swift
-//  基于 FSEvents 监听源码目录，源文件保存后触发回调。
-//  Xcode 保存文件是原子 rename，这里只关注 rename / modified 事件。
+//  基于 FSEvents 监听源码目录，源文件与界面 / 图片资源保存后触发回调。
+//  Xcode 保存文件是原子 rename，这里关注 rename / modified / created 事件（created 覆盖新增文件）。
 //
 
 import Foundation
@@ -10,7 +10,19 @@ import CoreServices
 public final class FileWatcher {
 
     /// 关注的源文件扩展名
-    public static let watchedExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx", "swift", "h", "hpp"]
+    public static let sourceExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx", "swift", "h", "hpp"]
+    /// 关注的资源文件扩展名：界面文件与位图（xcassets 中的 Contents.json 单独判断）
+    public static let resourceExtensions: Set<String> = ["storyboard", "xib", "png", "jpg", "jpeg", "gif", "heic", "heif", "webp"]
+
+    /// 是否为需要关注的文件
+    public static func isWatched(_ path: String) -> Bool {
+        let ext = (path as NSString).pathExtension.lowercased()
+        if sourceExtensions.contains(ext) || resourceExtensions.contains(ext) {
+            return true
+        }
+        // 图片集的描述文件变化（如修改 scale、渲染模式）也需要重新下发
+        return ext == "json" && path.contains(".imageset/")
+    }
 
     private var stream: FSEventStreamRef?
     private let directories: [String]
@@ -42,6 +54,7 @@ public final class FileWatcher {
                 let flag = flags[i]
                 let interesting = (flag & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0
                     || (flag & UInt32(kFSEventStreamEventFlagItemModified)) != 0
+                    || (flag & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
                 if interesting {
                     changed.append(path)
                 }
@@ -69,11 +82,14 @@ public final class FileWatcher {
         let now = Date()
         var accepted: [String] = []
         for path in paths {
-            let ext = (path as NSString).pathExtension.lowercased()
-            guard Self.watchedExtensions.contains(ext) else {
+            guard Self.isWatched(path) else {
                 continue
             }
             if path.contains("/DerivedData/") || path.contains("/.git/") {
+                continue
+            }
+            // 构建产物里的资源（工程目录下的 .app、编译后的 nib 等）不是源文件
+            if path.contains(".app/") || path.contains(".xcarchive/") || path.contains(".storyboardc/") || path.contains(".nib/") {
                 continue
             }
             // 编辑器保存时产生的临时 / 备份文件：如 Xcode 的 "Foo~.m"、隐藏文件、".sb-xxxx" 安全保存文件

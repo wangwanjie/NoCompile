@@ -48,6 +48,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.example.ios
         TARGETED_DEVICE_FAMILY: "1,2"
+        # 示例的 Asset Catalog 只用于演示图片热重载，不包含 App 图标
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
   ExampleMac:
     type: application
     platform: macOS

@@ -45,6 +45,10 @@ typedef NS_ENUM(uint32_t, NCMessageType) {
     NCMessageTypeInject = 10,
     /// 客户端 → Mac：注入结果
     NCMessageTypeInjectResult = 11,
+    /// Mac → 客户端：资源更新（storyboard / xib 编译产物、图片），data 为各文件内容的拼接
+    NCMessageTypeResource = 12,
+    /// 客户端 → Mac：资源更新结果
+    NCMessageTypeResourceResult = 13,
     /// 双向心跳
     NCMessageTypePing = 20,
     NCMessageTypePong = 21,

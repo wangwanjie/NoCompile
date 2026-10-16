@@ -3,7 +3,7 @@
 //  nocompile 命令行工具：启动引擎，监听工程并热重载。
 //
 //  用法：
-//    nocompile --project <path> [--derived-data <path>] [--no-headers] [--manual]
+//    nocompile --project <path> [--derived-data <path>] [--no-headers] [--no-resources] [--manual]
 //    nocompile <file.swift> ...   # 在运行中的实例外，一次性重编指定文件（配合 --project）
 //
 
@@ -36,10 +36,11 @@ final class CLIDelegate: EngineDelegate {
     }
 }
 
-func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?, headers: Bool, manual: Bool) {
+func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?, headers: Bool, resources: Bool, manual: Bool) {
     var project: String? = nil
     var derivedData: String? = nil
     var headers = true
+    var resources = true
     var manual = false
     var i = 1
     while i < args.count {
@@ -52,6 +53,8 @@ func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?
             if i < args.count { derivedData = args[i] }
         case "--no-headers":
             headers = false
+        case "--no-resources":
+            resources = false
         case "--manual":
             manual = true
         case "--help", "-h":
@@ -62,7 +65,7 @@ func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?
         }
         i += 1
     }
-    return (project, derivedData, headers, manual)
+    return (project, derivedData, headers, resources, manual)
 }
 
 func printUsage() {
@@ -76,6 +79,7 @@ func printUsage() {
       -p, --project <path>        .xcodeproj / .xcworkspace 路径（必填）
       -d, --derived-data <path>   自定义 DerivedData 路径
           --no-headers            不监听头文件变更
+          --no-resources          不热重载 storyboard / xib / 图片资源
           --manual                关闭保存即注入，仅手动触发
       -h, --help                  显示帮助
 
@@ -147,6 +151,7 @@ let engine = Engine(projectPath: absolutePath(project),
 engine.delegate = delegate
 engine.injectsOnSave = !parsed.manual
 engine.watchesHeaders = parsed.headers
+engine.watchesResources = parsed.resources
 engine.start()
 
 print("NoCompile 正在监听：\(project)")

@@ -13,6 +13,8 @@ public struct RecompileResult {
     public let dylibPath: String?
     public let log: String
     public let error: String?
+    /// 是否为构建日志里还没有的新增文件（客户端需全局导出其符号，供之后的注入引用）
+    public var isNewFile: Bool = false
     public var succeeded: Bool { dylibPath != nil }
 }
 
@@ -39,6 +41,9 @@ public final class Recompiler {
     private var counter: Int = 0
     /// 会话标识：保证引擎重启后 dylib 文件名也不重复（dlopen 对同路径会直接返回旧镜像）
     private let sessionID: String
+    /// 本次会话中新增、但还不在构建日志文件列表里的 Swift 文件，键为 "模块名|平台"。
+    /// 之后重编同模块的其他文件时要把它们一并作为输入，否则引用不到新文件里声明的类型
+    private var addedSwiftSources: [String: Set<String>] = [:]
 
     public init(outputDirectory: String) {
         self.outputDirectory = outputDirectory
@@ -60,14 +65,21 @@ public final class Recompiler {
         let dylibPath = "\(outputDirectory)/\(stem).dylib"
 
         let compiled: (error: String?, log: String, target: String?)
+        var isNewFile = false
         if sourceFile.hasSuffix(".swift") {
             compiled = compileSwift(sourceFile: sourceFile,
                                     modules: commands.swiftModules(for: platform.name),
-                                    objectPath: objectPath)
+                                    objectPath: objectPath,
+                                    stem: stem,
+                                    isNewFile: &isNewFile)
         } else {
-            compiled = compileClang(sourceFile: sourceFile,
-                                    command: commands.clangCommand(for: sourceFile, platform: platform.name),
-                                    objectPath: objectPath)
+            var command = commands.clangCommand(for: sourceFile, platform: platform.name)
+            if command == nil, let template = commands.clangTemplate(for: sourceFile, platform: platform.name) {
+                // 新增文件：借用目录最接近的已有文件的编译命令
+                command = clangCommand(from: template.command, templateSource: template.source, newSource: sourceFile)
+                isNewFile = true
+            }
+            compiled = compileClang(sourceFile: sourceFile, command: command, objectPath: objectPath)
         }
         if let error = compiled.error {
             return RecompileResult(dylibPath: nil, log: compiled.log, error: error)
@@ -81,19 +93,38 @@ public final class Recompiler {
         if let signError = codesign(dylibPath: dylibPath, platform: platform, identity: codesignIdentity) {
             return RecompileResult(dylibPath: nil, log: compiled.log, error: signError)
         }
-        return RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil)
+        return RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil, isNewFile: isNewFile)
     }
 
     // MARK: - Swift
 
     private func compileSwift(sourceFile: String,
                               modules: [RawCompileCommand],
-                              objectPath: String) -> (error: String?, log: String, target: String?) {
-        guard let module = swiftModule(for: sourceFile, in: modules) else {
+                              objectPath: String,
+                              stem: String,
+                              isNewFile: inout Bool) -> (error: String?, log: String, target: String?) {
+        guard let match = swiftModule(for: sourceFile, in: modules) else {
             return ("未在构建日志中找到包含该文件的 Swift 模块命令（请先为该平台完整构建一次）", "", nil)
         }
+        let module = match.module
+        isNewFile = !match.isMember
+        let moduleKey = "\(module.moduleName ?? "?")|\(module.platform)"
         // 1. 清洗 driver 参数，去掉增量 / 整模块 / 产物输出相关项
-        let cleaned = cleanedSwiftDriverTokens(module.tokens)
+        var cleaned = cleanedSwiftDriverTokens(module.tokens)
+        // 新增文件（含本次与此前新增的）补进模块的输入文件列表
+        var extras = addedSwiftSources[moduleKey] ?? []
+        if isNewFile {
+            extras.insert(sourceFile)
+        }
+        let existingSources = match.sources
+        let missing = extras.filter { path in
+            FileManager.default.fileExists(atPath: path)
+                && !existingSources.contains(path)
+                && !existingSources.contains(where: { ParsedCommands.canonicalPath($0) == ParsedCommands.canonicalPath(path) })
+        }
+        if !missing.isEmpty {
+            cleaned = appendingSwiftSources(missing.sorted(), to: cleaned, stem: stem)
+        }
         // 2. 用 -### 展开 frontend 命令
         var expandArgs = Array(cleaned.dropFirst())
         expandArgs.append("-###")
@@ -113,41 +144,53 @@ public final class Recompiler {
             return (extractCompileError(compile.stderr + compile.stdout) ?? "Swift 编译失败",
                     compile.stdout + compile.stderr, nil)
         }
+        // 编译通过才登记新文件，避免它的语法错误连累同模块其他文件的重编
+        if isNewFile {
+            addedSwiftSources[moduleKey, default: []].insert(sourceFile)
+        }
         return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", module.target)
     }
 
-    /// 找到包含该源文件的模块命令
-    private func swiftModule(for sourceFile: String, in modules: [RawCompileCommand]) -> RawCompileCommand? {
+    /// 找到包含该源文件的模块命令。
+    /// 新增文件不在任何模块的文件列表中：选源文件目录与它最接近的模块，isMember 为 false
+    private func swiftModule(for sourceFile: String,
+                             in modules: [RawCompileCommand]) -> (module: RawCompileCommand, sources: Set<String>, isMember: Bool)? {
         let canonicalSource = ParsedCommands.canonicalPath(sourceFile)
+        var best: (module: RawCompileCommand, sources: Set<String>, depth: Int)? = nil
         for module in modules {
-            let sources = swiftSources(of: module)
+            let sources = ParsedCommands.swiftSources(of: module)
             if sources.contains(sourceFile) || sources.contains(where: { ParsedCommands.canonicalPath($0) == canonicalSource }) {
-                return module
+                return (module, sources, true)
+            }
+            let depth = sources.map { ParsedCommands.commonDirectoryDepth(ParsedCommands.canonicalPath($0), canonicalSource) }.max() ?? 0
+            if best == nil || depth > best!.depth {
+                best = (module, sources, depth)
             }
         }
-        // 新增文件不在旧的文件列表中：模块只有一个时直接用它
-        return modules.count == 1 ? modules.first : nil
+        guard let best else {
+            return nil
+        }
+        return (best.module, best.sources, false)
     }
 
-    /// 取模块命令涉及的所有 swift 源文件（含 @filelist）
-    private func swiftSources(of module: RawCompileCommand) -> Set<String> {
-        var sources = Set<String>()
-        for token in module.tokens {
-            if token.hasSuffix(".swift") {
-                sources.insert(token)
-            } else if token.hasPrefix("@") {
-                let listPath = String(token.dropFirst())
-                if let content = try? String(contentsOfFile: listPath, encoding: .utf8) {
-                    for line in content.components(separatedBy: .newlines) {
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        if trimmed.hasSuffix(".swift") {
-                            sources.insert(trimmed)
-                        }
-                    }
+    /// 把额外的 Swift 源文件加入 driver 命令：有 @filelist 时写一份追加了新文件的副本，否则直接追加到参数末尾
+    private func appendingSwiftSources(_ files: [String], to tokens: [String], stem: String) -> [String] {
+        var result = tokens
+        if let index = result.firstIndex(where: { $0.hasPrefix("@") && $0.hasSuffix(".SwiftFileList") })
+            ?? result.firstIndex(where: { $0.hasPrefix("@") }) {
+            let listPath = String(result[index].dropFirst())
+            if let content = try? String(contentsOfFile: listPath, encoding: .utf8) {
+                var lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+                lines.append(contentsOf: files)
+                let newList = "\(outputDirectory)/\(stem).SwiftFileList"
+                if (try? (lines.joined(separator: "\n") + "\n").write(toFile: newList, atomically: true, encoding: .utf8)) != nil {
+                    result[index] = "@" + newList
+                    return result
                 }
             }
         }
-        return sources
+        result.append(contentsOf: files)
+        return result
     }
 
     /// 去掉会干扰单文件重编的 driver 参数
@@ -274,6 +317,34 @@ public final class Recompiler {
     }
 
     // MARK: - ObjC / C / C++
+
+    /// 由模板文件的 clang 命令生成新文件的命令：替换 -c 后的源文件，语言不同时改写 -x 并去掉语言标准参数
+    private func clangCommand(from template: RawCompileCommand, templateSource: String, newSource: String) -> RawCompileCommand {
+        let languageChanged = ParsedCommands.clangLanguage(forPath: templateSource) != ParsedCommands.clangLanguage(forPath: newSource)
+        var tokens: [String] = []
+        var i = 0
+        while i < template.tokens.count {
+            let token = template.tokens[i]
+            if token == "-c", i + 1 < template.tokens.count {
+                tokens.append(contentsOf: ["-c", newSource])
+                i += 2
+                continue
+            }
+            if token == "-x", i + 1 < template.tokens.count {
+                tokens.append(contentsOf: ["-x", ParsedCommands.clangLanguage(forPath: newSource)])
+                i += 2
+                continue
+            }
+            if languageChanged, token.hasPrefix("-std=") {
+                i += 1
+                continue
+            }
+            tokens.append(token)
+            i += 1
+        }
+        return RawCompileCommand(kind: .clangFile, tokens: tokens, workingDirectory: template.workingDirectory,
+                                 moduleName: template.moduleName, platform: template.platform, target: template.target)
+    }
 
     private func compileClang(sourceFile: String,
                               command: RawCompileCommand?,

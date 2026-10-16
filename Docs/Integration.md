@@ -212,6 +212,21 @@ UIKit 和 AppKit 都支持。若想关闭自动刷新，可在调试代码里设
 
 **兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认的重建流程。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
 
+## 资源与新增文件
+
+除了源码，以下改动保存后也会热重载，无需额外接入（可在偏好设置的「热重载界面与图片资源」或命令行 `--no-resources` 关闭）：
+
+- **storyboard / xib**：Mac 端用 ibtool 重新编译后下发，当前可见、由它加载的页面会按新 nib 重建；之后打开的页面也会使用新版本。
+- **图片**：替换 Asset Catalog 图片集里的位图或工程中的图片文件后，`UIImage(named:)` / `NSImage(named:)` 和 nib 中引用的图片都会返回新图，当前页面会刷新。
+- **新增源文件**：运行中新建的 Swift / ObjC / C / C++ 文件保存后会被编译注入，之后修改的已有文件可以直接使用其中的新类型和函数。
+
+限制：
+
+- 只覆盖主 bundle 中的资源；framework、资源 bundle 中的资源需要重新运行。
+- App 图标、颜色集、矢量（PDF / SVG）图片、暗色等外观变体、`Localizable.strings` 不在热重载范围内。
+- SwiftUI 的 `Image("name")` 不经过 `imageNamed:`，不会拿到新图。
+- 新增的 ObjC 类要被 Swift 使用，需要修改桥接头并重新构建。
+
 ## SwiftUI 刷新
 
 给需要热重载的视图加上社区的 `@ObserveInjection`（来自 Inject / HotSwiftUI 包）：

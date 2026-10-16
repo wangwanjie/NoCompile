@@ -4,7 +4,7 @@
 
 | Target | 平台 | 覆盖的场景 |
 |---|---|---|
-| `ExampleiOS` | iOS 15+，真机与模拟器 | Swift 页面、ObjC 页面、ObjC 自定义视图、Swift / ObjC / C / C++ 函数 |
+| `ExampleiOS` | iOS 15+，真机与模拟器 | Swift 页面、ObjC 页面、ObjC 自定义视图、Swift / ObjC / C / C++ 函数、storyboard / xib 页面、图片资源、新增文件 |
 | `ExampleMac` | macOS 12+ | Swift 页面（自定义 `loadView`）、Swift / ObjC / C / C++ 函数 |
 
 业务代码里没有任何 NoCompile 相关的 `import`、调用或 `injected()` 方法。客户端随 Debug 构建链入后会自动启动，热重载后由 NoCompile 自动重建受影响的可见页面。
@@ -52,6 +52,10 @@ App 启动后，NoCompile 终端会打印 `🔌 已连接：ExampleiOS（真机�
 | 6 | `buildContent` 中的颜色 / 文案 | `iOS/ObjCBadgeView.m` | 首页橙色卡片变化（视图类被替换 → 所在页面重建） |
 | 7 | 进入「打开 Objective-C 页面」，改 `viewDidLoad` | `iOS/DetailViewController.m` | 停留在该页即可看到背景色、文案变化 |
 | 8 | `themeColor()` / `headline()` | `macOS/MainViewController.swift` | Mac 窗口内容变化（自定义 `loadView` 也能重建） |
+| 9 | 进入「打开 Storyboard 页面」，改文案或背景色 | `iOS/Base.lproj/StoryboardDemo.storyboard` | 停留在该页即可看到界面按新 storyboard 重建 |
+| 10 | 进入「打开 Xib 页面」，改文案或背景色 | `iOS/XibDemoViewController.xib` | 停留在该页即可看到界面按新 xib 重建 |
+| 11 | 替换图片 | `iOS/Assets.xcassets/DemoBadge.imageset`、`iOS/Images/loose_icon@2x.png` | 首页图片行及 storyboard / xib 页面中的图片更新 |
+| 12 | 新建一个 Swift 文件（如 `iOS/NewHelper.swift`，声明 `enum NewHelper { static func text() -> String }`），再在 `SwiftGreeter.swift` 中调用它 | 新文件 + `Shared/SwiftGreeter.swift` | 新文件保存后即被注入，Swift 卡片显示新文件返回的文案 |
 
 两个 App 都在运行时修改 `Shared/` 下的文件，NoCompile 会分别为 iOS 和 macOS 各编译一份并推送，两边同时生效。
 

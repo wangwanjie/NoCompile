@@ -24,6 +24,8 @@ public enum NCMessageType: UInt32 {
     case config = 5
     case inject = 10
     case injectResult = 11
+    case resource = 12
+    case resourceResult = 13
     case ping = 20
     case pong = 21
 }

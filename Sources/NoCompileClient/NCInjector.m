@@ -167,21 +167,27 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
 }
 
 + (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath sourceFiles:(NSArray<NSString *> *)sourceFiles {
+    return [self injectDylibAtPath:dylibPath sourceFiles:sourceFiles isNewFile:NO];
+}
+
++ (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
+                          sourceFiles:(NSArray<NSString *> *)sourceFiles
+                            isNewFile:(BOOL)isNewFile {
     __block NCInjectResult *result = nil;
     // 串行化多次注入；实际替换在主线程执行，避免与 UI 代码并发
     dispatch_sync([self injectionQueue], ^{
         if (NSThread.isMainThread) {
-            result = [self performInject:dylibPath sourceFiles:sourceFiles];
+            result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
         } else {
             dispatch_sync(dispatch_get_main_queue(), ^{
-                result = [self performInject:dylibPath sourceFiles:sourceFiles];
+                result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
             });
         }
     });
     return result;
 }
 
-+ (NCInjectResult *)performInject:(NSString *)dylibPath sourceFiles:(NSArray<NSString *> *)sourceFiles {
++ (NCInjectResult *)performInject:(NSString *)dylibPath sourceFiles:(NSArray<NSString *> *)sourceFiles isNewFile:(BOOL)isNewFile {
     NCInjectResult *result = [NCInjectResult new];
 
     // dlopen 会执行新镜像的 +load；加载期间拦截其中的 swizzling，避免 hook 链自我指向
@@ -189,7 +195,8 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
     if (guard) {
         NCSwizzleGuardBegin();
     }
-    void *handle = dlopen(dylibPath.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+    // 新增文件的符号在 App 中不存在，之后的注入（如引用了新类型的旧文件）要靠全局查找链接到它
+    void *handle = dlopen(dylibPath.fileSystemRepresentation, RTLD_NOW | (isNewFile ? RTLD_GLOBAL : RTLD_LOCAL));
     if (guard) {
         NCSwizzleGuardEnd();
     }
@@ -312,7 +319,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
                           [layoutChanged componentsJoinedByString:@", "]];
         return result;
     }
-    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && addedClasses.count == 0) {
+    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && addedClasses.count == 0 && !isNewFile) {
         result.status = NCInjectStatusNothingInjected;
         result.message = @"未替换任何实现。请确认 Debug 配置的 Other Linker Flags 含 -Xlinker -interposable";
         return result;
@@ -361,7 +368,8 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
     NSUInteger valid = 0;
     for (NSUInteger i = 0; i < count; i++) {
         const char *name = names[i].UTF8String;
-        // 新镜像以 RTLD_LOCAL 打开，RTLD_DEFAULT 只会找到 App 中的旧实现
+        // RTLD_DEFAULT 按加载顺序查找：普通文件找到 App 中的旧实现；
+        // 新增文件在 App 中没有该符号，会找到它第一次注入时（RTLD_GLOBAL）的镜像，同样保留了状态
         void *oldImpl = dlsym(RTLD_DEFAULT, name + 1);
         if (oldImpl) {
             rebindings[valid].name = name;
