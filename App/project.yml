@@ -1,0 +1,91 @@
+name: NoCompile
+options:
+  bundleIdPrefix: cn.vanjay
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "12.0"
+packages:
+  # 根目录的 Swift Package：提供 NoCompileKit 引擎（客户端包本身保持零依赖）
+  NoCompileCore:
+    path: ..
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.8.0
+settings:
+  base:
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: X6B6C6U6QV
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    MACOSX_DEPLOYMENT_TARGET: "12.0"
+targets:
+  NoCompile:
+    type: application
+    platform: macOS
+    sources:
+      - path: NoCompile/Sources
+      - path: NoCompile/Assets.xcassets
+    info:
+      path: NoCompile/Info.plist
+      properties:
+        CFBundleDisplayName: NoCompile
+        CFBundleName: NoCompile
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: Copyright © 2026 wangwanjie. Released under the MIT License.
+        # Sparkle 自动更新
+        SUFeedURL: https://raw.githubusercontent.com/wangwanjie/NoCompile/main/appcast.xml
+        SUPublicEDKey: U2EEM5pK1JnZsls5noJVVS3hg45rSX/QXbmQyJ3bCQg=
+        SUEnableAutomaticChecks: true
+        SUAllowsAutomaticUpdates: true
+        SUVerifyUpdateBeforeExtraction: true
+        NoCompileGitHubURL: https://github.com/wangwanjie/NoCompile
+    entitlements:
+      path: NoCompile/NoCompile.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+    dependencies:
+      - package: NoCompileCore
+        product: NoCompileKit
+      - package: Sparkle
+      # 命令行工具嵌入 Contents/Helpers（不能放 Contents/MacOS：文件系统不区分大小写，会与主程序 NoCompile 重名）
+      - target: nocompile-cli
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+    settings:
+      base:
+        PRODUCT_NAME: NoCompile
+        PRODUCT_BUNDLE_IDENTIFIER: cn.vanjay.NoCompile
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+  nocompile-cli:
+    type: tool
+    platform: macOS
+    sources:
+      - path: ../Sources/nocompile
+    dependencies:
+      - package: NoCompileCore
+        product: NoCompileKit
+    settings:
+      base:
+        PRODUCT_NAME: nocompile
+        PRODUCT_MODULE_NAME: nocompile_cli
+        PRODUCT_BUNDLE_IDENTIFIER: cn.vanjay.NoCompile.cli
+        SKIP_INSTALL: YES
+schemes:
+  NoCompile:
+    build:
+      targets:
+        NoCompile: all
+    run:
+      config: Debug
+    archive:
+      config: Release

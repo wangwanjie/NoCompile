@@ -141,19 +141,13 @@ private struct HeaderBar: View {
     }
 }
 
-/// 左上角的应用徽标
+/// 左上角的应用徽标：直接使用 App 图标
 private struct AppBadge: View {
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: [Theme.accent, Color(red: 0.70, green: 0.35, blue: 0.95)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.white)
-        }
-        .frame(width: 40, height: 40)
-        .shadow(color: Theme.accent.opacity(0.35), radius: 6, y: 2)
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 46, height: 46)
     }
 }
 

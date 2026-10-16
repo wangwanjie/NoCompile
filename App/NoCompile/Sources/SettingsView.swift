@@ -32,10 +32,35 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @ObservedObject var preferences: Preferences
+    @ObservedObject var updater = UpdateManager.shared
     @State private var launchAtLogin = false
 
     var body: some View {
         SettingsPage {
+            SettingsSection(title: "更新") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("当前版本 \(UpdateManager.versionDescription)")
+                            .font(.system(size: 13))
+                        if let date = updater.lastCheckDate {
+                            Text("上次检查：\(date.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("检查更新…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                }
+                SettingToggle(title: "自动检查更新",
+                              detail: "通过 GitHub Releases 获取新版本。",
+                              isOn: $updater.automaticallyChecksForUpdates)
+                SettingToggle(title: "自动下载并安装更新",
+                              detail: "后台下载，下次退出时自动安装。",
+                              isOn: $updater.automaticallyDownloadsUpdates)
+            }
             SettingsSection(title: "热重载") {
                 SettingToggle(title: "保存即注入",
                               detail: "保存源文件后自动编译并注入。关闭后改动会累积，在控制台手动注入。",

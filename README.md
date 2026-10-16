@@ -1,10 +1,14 @@
 <div align="center">
 
-# ⚡ NoCompile
+<img src="Docs/images/AppIcon.png" width="160" alt="NoCompile">
+
+# NoCompile
 
 **iOS / macOS 热重载工具，支持 C、C++、Objective-C、Swift**
 
 修改代码，保存，立即在运行中的 App 看到效果，无需等待整个工程重新编译。
+
+[下载最新版](https://github.com/wangwanjie/NoCompile/releases/latest) · [接入指南](Docs/Integration.md) · [架构与原理](Docs/Architecture.md) · [示例工程](Examples/NoCompileExample)
 
 </div>
 
@@ -21,7 +25,7 @@
 | 维度 | 现有工具的短板 | NoCompile 的做法 |
 |---|---|---|
 | **获取编译命令** | 纯正则扫描 `.xcactivitylog`，Xcode 升级后格式一变就失效；或改写 Xcode 工具链、依赖 SourceKit 私有日志 | 解析日志拿到模块的 driver 命令后，交给官方 `swiftc -###` 展开出单文件的 frontend 命令。参数由编译器自己生成，Xcode 升级能自动跟随 |
-| **语言支持** | 内部工具不支持 C++，Swift 仅支持函数替换 | C / C++ / ObjC / Swift 统一支持。C/C++ 自由函数通过 GOT 重绑覆盖 |
+| **语言支持** | 部分工具不支持 C++，Swift 仅支持函数替换 | C / C++ / ObjC / Swift 统一支持。C/C++ 自由函数通过 GOT 重绑覆盖 |
 | **进程内替换** | ObjC swizzle、Dobby inline hook、vtable patch 各自为政 | 统一三层：ObjC `class_replaceMethod` + Swift vtable 覆写 + fishhook 式符号重绑 |
 | **触发方式** | 部分工具默认要手动按快捷键 | 保存即注入，FSEvents 自动触发 |
 | **中文 / 空格路径** | 明确不支持中文路径，空格路径也会出错 | 全程用参数数组传递给子进程，不拼接 shell 字符串，天然支持 |
@@ -51,17 +55,19 @@
 
 ## 快速开始
 
-### 1. 构建并启动 NoCompile
+### 1. 安装 NoCompile
+
+从 [Releases](https://github.com/wangwanjie/NoCompile/releases/latest) 下载 `NoCompile_vX.Y.Z.dmg`，拖入「应用程序」即可。安装包已经过 Apple 公证，后续版本会通过 Sparkle 自动更新。
+
+也可以从源码构建（需要 [XcodeGen](https://github.com/yonaskolb/XcodeGen)）：
 
 ```bash
 Scripts/build-app.sh --open
 ```
 
-脚本用 SwiftPM 命令行打包出 `build/NoCompile.app`（菜单栏 App，内含命令行工具 `Contents/Helpers/nocompile`），全程不经过 Xcode。加 `--install` 会安装到 `/Applications`。
+> 不要在 Xcode 里打开 NoCompile 的 `Package.swift` 来运行它。Xcode 不允许同一个本地包被两个窗口同时打开，会和以本地包方式引用 NoCompile 的 App 工程冲突。
 
-> 不要在 Xcode 里打开 NoCompile 的 `Package.swift` 来运行它。Xcode 不允许同一个本地包同时被两个窗口打开，而你的 App 工程以本地包方式引用 NoCompile 时会和它冲突。
-
-首次运行时，如果工程在「文稿」「桌面」「下载」目录下，macOS 会弹窗询问是否允许 NoCompile 访问，请点「允许」。脚本会优先用钥匙串里的 Apple Development 证书签名，授权一次后重新打包也不会再问。
+首次运行时，如果工程在「文稿」「桌面」「下载」目录下，macOS 会弹窗询问是否允许 NoCompile 访问，请点「允许」。
 
 ### 2. 接入 App 工程
 
@@ -130,15 +136,35 @@ SwiftUI 视图的刷新依赖通知。每次注入后，NoCompile 会发出 `NoC
 ## 目录结构
 
 ```
+Package.swift        接入方使用的 Swift Package（零第三方依赖）
 Sources/
   NoCompileClient/   App 进程内客户端（ObjC/C）
   NoCompileKit/      Mac 端引擎（Swift）
   nocompile/         命令行工具
-  NoCompileApp/      菜单栏 App
-Docs/
-  Architecture.md    架构与原理
-  Integration.md     详细接入指南
+App/                 NoCompile.app（Xcode 工程由 project.yml 生成，集成 Sparkle）
+Examples/            iOS / macOS 示例工程
+Scripts/             构建、图标、打包、公证、发布脚本
+Docs/                架构、接入指南、发布说明
 ```
+
+## 发布新版本
+
+1. 修改 `App/project.yml` 中的 `MARKETING_VERSION` 与 `CURRENT_PROJECT_VERSION`。
+2. 构建、签名并公证 DMG：
+
+   ```bash
+   Scripts/build_dmg.sh
+   ```
+
+3. 创建 GitHub Release、上传 DMG，并更新 Sparkle 的 `appcast.xml`：
+
+   ```bash
+   Scripts/publish_github_release.sh --notes-file Docs/ReleaseNotes/X.Y.Z.md
+   ```
+
+4. 提交并推送 `appcast.xml`，已安装的用户会收到更新提示。
+
+App 图标由 `swift Scripts/generate_icons.swift` 程序化生成。
 
 ## 许可证
 

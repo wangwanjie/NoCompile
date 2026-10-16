@@ -18,7 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.applicationIconImage = StatusIcon.appIcon()
+        // 启动 Sparkle（会按偏好在后台自动检查更新）
+        _ = UpdateManager.shared
         applyDockPolicy()
         buildMainMenu()
         setupStatusItem()
@@ -202,6 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveItem.state = preferences.injectsOnSave ? .on : .off
         menu.addItem(saveItem)
         menu.addItem(actionItem("偏好设置…", #selector(showSettings), ","))
+        menu.addItem(actionItem("检查更新…", #selector(checkForUpdates), ""))
         menu.addItem(.separator())
         menu.addItem(actionItem("退出 NoCompile", #selector(quit), "q"))
     }
@@ -236,6 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.injectsOnSave.toggle()
     }
 
+    @objc private func checkForUpdates() {
+        NSApp.activate(ignoringOtherApps: true)
+        UpdateManager.shared.checkForUpdates()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -248,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "关于 NoCompile", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        appMenu.addItem(actionItem("检查更新…", #selector(checkForUpdates), ""))
         appMenu.addItem(.separator())
         appMenu.addItem(actionItem("偏好设置…", #selector(showSettings), ","))
         appMenu.addItem(.separator())

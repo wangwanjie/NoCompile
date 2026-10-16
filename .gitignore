@@ -7,3 +7,5 @@ Examples/**/*.xcodeproj
 Examples/**/DD/
 build/
 .build-app/
+App/NoCompile.xcodeproj/xcuserdata/
+App/NoCompile.xcodeproj/project.xcworkspace/xcuserdata/

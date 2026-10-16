@@ -1,13 +1,13 @@
 #!/bin/bash
 #
 # build-app.sh
-# 用 SwiftPM 命令行构建 NoCompile 菜单栏 App，并打包成 NoCompile.app。
+# 本地开发用：用 xcodebuild 构建 NoCompile 菜单栏 App（Release，本机签名），不涉及公证与发布。
+# 发布请使用 Scripts/build_dmg.sh + Scripts/publish_github_release.sh。
 #
-# 全程不经过 Xcode，因此可以和"引用了 NoCompile 本地包的 App 工程"同时使用，
-# 避免 Xcode "同一个本地包不能被两个窗口打开" 的冲突。
+# 全程命令行构建，可以和"以本地包方式引用 NoCompile 的 App 工程"同时在 Xcode 中打开，互不冲突。
 #
 # 用法：
-#   Scripts/build-app.sh                 # 构建到 build/NoCompile.app
+#   Scripts/build-app.sh                 # 构建到 build/DerivedData/Build/Products/Release/NoCompile.app
 #   Scripts/build-app.sh --install       # 构建并安装到 /Applications
 #   Scripts/build-app.sh --open          # 构建并启动
 #   Scripts/build-app.sh --open --project /path/to/App.xcodeproj   # 构建、启动并直接监听该工程
@@ -16,10 +16,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUTPUT_DIR="$ROOT/build"
-APP="$OUTPUT_DIR/NoCompile.app"
-# 独立的构建目录，不与 Xcode / 日常 swift build 的 .build 互相干扰
-SCRATCH="$ROOT/.build-app"
+DERIVED_DATA="$ROOT/build/DerivedData"
+APP="$DERIVED_DATA/Build/Products/Release/NoCompile.app"
 
 INSTALL=0
 OPEN=0
@@ -44,64 +42,24 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-echo "⚙️  构建 NoCompile（release）…"
-swift build -c release --package-path "$ROOT" --scratch-path "$SCRATCH" --product NoCompileApp
-swift build -c release --package-path "$ROOT" --scratch-path "$SCRATCH" --product nocompile
-BIN_DIR="$(swift build -c release --package-path "$ROOT" --scratch-path "$SCRATCH" --show-bin-path)"
+command -v xcodegen >/dev/null 2>&1 || { echo "错误：未找到 xcodegen（brew install xcodegen）"; exit 1; }
 
-echo "📦 打包 NoCompile.app…"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
-cp "$BIN_DIR/NoCompileApp" "$APP/Contents/MacOS/NoCompile"
-# 命令行工具一并放进 App，便于终端使用。
-# 注意：macOS 文件系统默认不区分大小写，nocompile 与主程序 NoCompile 同名，不能放在同一目录
-cp "$BIN_DIR/nocompile" "$APP/Contents/Helpers/nocompile"
+echo "⚙️  生成 Xcode 工程…"
+(cd "$ROOT/App" && xcodegen generate >/dev/null)
 
-VERSION="$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo "0.1.0")"
-cat > "$APP/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>NoCompile</string>
-    <key>CFBundleDisplayName</key>
-    <string>NoCompile</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.nocompile.app</string>
-    <key>CFBundleExecutable</key>
-    <string>NoCompile</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${VERSION}</string>
-    <key>CFBundleVersion</key>
-    <string>${VERSION}</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
-    <!-- 只在菜单栏显示，不占 Dock -->
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+echo "⚙️  构建 NoCompile（Release）…"
+xcodebuild -project "$ROOT/App/NoCompile.xcodeproj" \
+    -scheme NoCompile \
+    -configuration Release \
+    -derivedDataPath "$DERIVED_DATA" \
+    -destination "generic/platform=macOS" \
+    build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" || true
 
-# ad-hoc 签名，保证在 Apple Silicon 上可直接运行
-# 签名身份：优先用环境变量 NOCOMPILE_SIGN_IDENTITY，其次用钥匙串中的 Apple Development 证书，最后退回 ad-hoc。
-# 用固定证书签名后，系统隐私授权（访问"文稿"等目录）只需授予一次；ad-hoc 签名每次重新打包都会被当作新 App 重新询问
-SIGN_IDENTITY="${NOCOMPILE_SIGN_IDENTITY:-}"
-if [ -z "$SIGN_IDENTITY" ]; then
-    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | grep "Apple Development" | head -1 | awk '{print $2}')"
+if [ ! -d "$APP" ]; then
+    echo "❌ 构建失败，未找到 $APP"
+    exit 1
 fi
-if [ -z "$SIGN_IDENTITY" ]; then
-    SIGN_IDENTITY="-"
-fi
-codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/nocompile" >/dev/null
-codesign --force --sign "$SIGN_IDENTITY" "$APP" >/dev/null
-echo "✅ 已生成：$APP（签名：$SIGN_IDENTITY）"
+echo "✅ 已生成：$APP"
 echo "   命令行工具：$APP/Contents/Helpers/nocompile"
 
 TARGET_APP="$APP"
@@ -121,5 +79,5 @@ if [ "$OPEN" -eq 1 ]; then
     else
         open "$TARGET_APP"
     fi
-    echo "⚡ NoCompile 已启动，请查看菜单栏右上角的闪电图标"
+    echo "⚡ NoCompile 已启动"
 fi

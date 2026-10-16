@@ -17,7 +17,7 @@
 
 现有工具有三条路线，各有短板：
 
-- **纯正则扫日志**（CocoaHotReload）：写死正则匹配 `.xcactivitylog` 里的命令，Xcode 升级改格式就失效。
+- **纯正则扫日志**：写死正则匹配 `.xcactivitylog` 里的命令，Xcode 升级改格式就失效。
 - **改 Xcode 工具链**（InjectionNext 的 Intercept 模式）：把 `swift-frontend` 换成脚本，破坏 Xcode 签名完整性，升级后要重打补丁。
 - **解析 SourceKit 私有日志**（InjectionNext 主模式）：依赖未公开的 `SOURCEKIT_LOGGING` 格式，且必须由工具启动 Xcode。
 

@@ -13,10 +13,8 @@ let package = Package(
         .library(name: "NoCompile", targets: ["NoCompileClient"]),
         // Mac 端引擎，供 CLI 与菜单栏 App 复用
         .library(name: "NoCompileKit", targets: ["NoCompileKit"]),
-        // 命令行工具
+        // 命令行工具（Mac App 见 App/project.yml，单独集成 Sparkle，避免接入方解析多余依赖）
         .executable(name: "nocompile", targets: ["nocompile"]),
-        // 菜单栏 App
-        .executable(name: "NoCompileApp", targets: ["NoCompileApp"]),
     ],
     targets: [
         .target(
@@ -37,11 +35,6 @@ let package = Package(
             name: "nocompile",
             dependencies: ["NoCompileKit"],
             path: "Sources/nocompile"
-        ),
-        .executableTarget(
-            name: "NoCompileApp",
-            dependencies: ["NoCompileKit"],
-            path: "Sources/NoCompileApp"
         ),
     ]
 )
