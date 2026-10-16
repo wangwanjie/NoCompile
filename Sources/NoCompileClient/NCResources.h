@@ -17,6 +17,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *message;
 /// 资源更新后被刷新的视图控制器类名
 @property (nonatomic, copy) NSArray<NSString *> *refreshedControllers;
+/// 受影响但未自动重建的已加载视图控制器类名，需提示用户退出页面后重新进入
+@property (nonatomic, copy) NSArray<NSString *> *pendingControllers;
 @end
 
 @interface NCResources : NSObject

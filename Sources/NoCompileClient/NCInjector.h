@@ -26,6 +26,8 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 @property (nonatomic, copy) NSArray<NSString *> *layoutChangedClasses;
 /// 注入后被自动刷新的视图控制器类名
 @property (nonatomic, copy) NSArray<NSString *> *refreshedControllers;
+/// 受影响但未自动重建的已加载视图控制器类名，需提示用户退出页面后重新进入
+@property (nonatomic, copy) NSArray<NSString *> *pendingControllers;
 @end
 
 @interface NCInjector : NSObject

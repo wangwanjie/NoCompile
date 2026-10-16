@@ -206,8 +206,8 @@ private struct InjectionSettings: View {
     var body: some View {
         SettingsPage {
             SettingsSection(title: "App 端行为（修改后立即下发到已连接的 App）") {
-                SettingToggle(title: "自动刷新受影响的页面",
-                              detail: "注入后自动重建当前可见、受改动影响的页面，业务代码无需实现 injected()。",
+                SettingToggle(title: "自动重建已加载的页面",
+                              detail: "默认关闭：已打开的页面保持原样，退出页面后重新进入即可看到改动。开启后注入时原地重建当前可见、受改动影响的页面（会重跑 viewDidLoad）。",
                               isOn: $preferences.autoReloadViewControllers)
                 SettingToggle(title: "保留静态与全局状态",
                               detail: "单例、static 变量沿用注入前的值，不会被重新初始化。",

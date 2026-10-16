@@ -614,7 +614,9 @@ static BOOL NCRebuildMirrorBundle(void) {
     }
 
     // 3. 刷新可见界面
-    result.refreshedControllers = [NCSweeper refreshAfterResourceKind:kind name:name];
+    NSArray<NSString *> *pending = nil;
+    result.refreshedControllers = [NCSweeper refreshAfterResourceKind:kind name:name pendingControllers:&pending];
+    result.pendingControllers = pending ?: @[];
     result.ok = YES;
 }
 

@@ -34,6 +34,8 @@ public struct InjectionRecord: Identifiable {
     public let duration: TimeInterval
     public let message: String
     public let refreshed: [String]
+    /// 受影响但未自动重建的已加载页面，需退出页面后重新进入才能看到改动
+    public var pending: [String] = []
     public let date = Date()
 }
 
@@ -495,16 +497,19 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         let ok = json["ok"] as? Bool ?? false
         let source = (json["sourceFiles"] as? [String])?.first ?? ""
         let refreshed = json["refreshed"] as? [String] ?? []
+        let pending = json["pending"] as? [String] ?? []
         let key = inflightKey(connection, source)
         let started = inflight.removeValue(forKey: key)
         let total = started.map { $0.compile + Date().timeIntervalSince($0.start) } ?? 0
-        record(InjectionRecord(file: (source as NSString).lastPathComponent,
-                               clientName: connection.shortName,
-                               platformTitle: connection.platformTitle,
-                               success: ok,
-                               duration: total,
-                               message: json["message"] as? String ?? "",
-                               refreshed: refreshed))
+        var item = InjectionRecord(file: (source as NSString).lastPathComponent,
+                                   clientName: connection.shortName,
+                                   platformTitle: connection.platformTitle,
+                                   success: ok,
+                                   duration: total,
+                                   message: json["message"] as? String ?? "",
+                                   refreshed: refreshed)
+        item.pending = pending
+        record(item)
     }
 
     public func connectionDidClose(_ connection: ServerConnection) {

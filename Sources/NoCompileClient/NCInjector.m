@@ -353,11 +353,14 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     result.layoutChangedClasses = [layoutChanged copy];
     result.injectedClasses = [patchedClasses arrayByAddingObjectsFromArray:addedClasses];
 
-    // 5. 零侵入刷新可见界面，并发出通知（当前已在主线程）
+    // 5. 处理受影响的可见界面，并发出通知（当前已在主线程）
+    NSArray<NSString *> *pending = nil;
     result.refreshedControllers = [NCSweeper refreshAfterPatchingClasses:patchedClasses
                                                             addedClasses:addedClasses
                                                      layoutChangedClasses:[NSSet setWithArray:layoutChanged]
-                                                             sourceFiles:sourceFiles];
+                                                             sourceFiles:sourceFiles
+                                                      pendingControllers:&pending];
+    result.pendingControllers = pending ?: @[];
     return result;
 }
 

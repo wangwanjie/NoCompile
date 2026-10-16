@@ -399,6 +399,10 @@ private struct RecordRow: View {
         if !record.refreshed.isEmpty {
             parts.append("刷新 \(record.refreshed.joined(separator: "、"))")
         }
+        if !record.pending.isEmpty {
+            // 已加载的页面未自动重建，提示退出后重新进入
+            parts.append("退出重进 \(record.pending.joined(separator: "、")) 即可看到")
+        }
         return parts.joined(separator: " · ")
     }
 }

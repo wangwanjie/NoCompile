@@ -43,7 +43,7 @@ final class Preferences: ObservableObject {
     // MARK: - 注入（下发到 App 端）
 
     /// 注入后自动重建受影响的可见页面
-    @Published var autoReloadViewControllers: Bool { didSet { save(autoReloadViewControllers, "autoReloadViewControllers") } }
+    @Published var autoReloadViewControllers: Bool { didSet { save(autoReloadViewControllers, "rebuildsLoadedViewControllers") } }
     /// 保留静态 / 全局变量的状态，避免单例被重建
     @Published var preserveStaticState: Bool { didSet { save(preserveStaticState, "preserveStaticState") } }
     /// 在 App 内显示注入状态浮层
@@ -73,7 +73,8 @@ final class Preferences: ObservableObject {
         recentProjects = defaults.stringArray(forKey: "recentProjects") ?? []
         customDerivedData = defaults.string(forKey: "customDerivedData") ?? ""
         excludedKeywords = defaults.string(forKey: "excludedKeywords") ?? ""
-        autoReloadViewControllers = bool("autoReloadViewControllers", true)
+        // 0.2.1 起默认不重建已加载的页面，换用新键，旧版本保存的 true 不再沿用
+        autoReloadViewControllers = bool("rebuildsLoadedViewControllers", false)
         preserveStaticState = bool("preserveStaticState", true)
         showsHUD = bool("showsHUD", true)
         suppressSwizzlingDuringLoad = bool("suppressSwizzlingDuringLoad", true)
@@ -120,7 +121,7 @@ final class Preferences: ObservableObject {
         playsSounds = false
         customDerivedData = ""
         excludedKeywords = ""
-        autoReloadViewControllers = true
+        autoReloadViewControllers = false
         preserveStaticState = true
         showsHUD = true
         suppressSwizzlingDuringLoad = true

@@ -75,7 +75,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
 + (NSArray<NSString *> *)refreshAfterPatchingClasses:(NSArray<Class> *)patchedClasses
                                         addedClasses:(NSArray<Class> *)addedClasses
                                   layoutChangedClasses:(NSSet<NSString *> *)layoutChangedClasses
-                                         sourceFiles:(NSArray<NSString *> *)sourceFiles {
+                                         sourceFiles:(NSArray<NSString *> *)sourceFiles
+                                  pendingControllers:(NSArray<NSString *> **)outPending {
     // 以类名作为匹配依据：App 中的实例属于旧类，dylib 中的是新类，二者名字相同
     NSMutableSet<NSString *> *names = [NSMutableSet set];
     for (Class cls in patchedClasses) {
@@ -92,13 +93,17 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
         }
     }
 
+    NSMutableArray<NSString *> *pending = [NSMutableArray array];
 #if NC_UIKIT || NC_APPKIT
-    // 2. 默认：零侵入刷新受影响的可见视图控制器
-    if (NoCompile.autoReloadViewControllers) {
-        [refreshed addObjectsFromArray:[self reloadAffectedControllersForClassNames:names
-                                                                 layoutChangedClasses:layoutChangedClasses]];
-    }
+    // 2. 处理受影响的可见视图控制器：默认不重建已加载的控制器，只记下类名提示用户重进页面；
+    //    开启 autoReloadViewControllers 后才原地重建
+    [refreshed addObjectsFromArray:[self reloadAffectedControllersForClassNames:names
+                                                             layoutChangedClasses:layoutChangedClasses
+                                                                          pending:pending]];
 #endif
+    if (outPending) {
+        *outPending = [pending copy];
+    }
 
     // 3. 通知：供 SwiftUI 或其他需要自定义刷新的场景使用
     NSMutableArray *all = [patchedClasses mutableCopy];
@@ -111,10 +116,13 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return refreshed;
 }
 
-+ (NSArray<NSString *> *)refreshAfterResourceKind:(NSString *)kind name:(NSString *)name {
++ (NSArray<NSString *> *)refreshAfterResourceKind:(NSString *)kind
+                                             name:(NSString *)name
+                               pendingControllers:(NSArray<NSString *> **)outPending {
     NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
+    NSMutableArray<NSString *> *pending = [NSMutableArray array];
 #if NC_UIKIT || NC_APPKIT
-    if (NoCompile.autoReloadViewControllers) {
+    {
         NSArray<NCViewController *> *visible = [self visibleControllers];
         NSMutableArray<NCViewController *> *targets = [NSMutableArray array];
         for (NCViewController *controller in visible) {
@@ -139,9 +147,13 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
             }
         }
         [refreshed addObjectsFromArray:[self refreshControllers:[self outermostControllers:targets]
-                                             layoutChangedClasses:nil]];
+                                             layoutChangedClasses:nil
+                                                          pending:pending]];
     }
 #endif
+    if (outPending) {
+        *outPending = [pending copy];
+    }
     // 通知：object 为空数组（没有类被替换），userInfo 中带上资源名
     NSDictionary *userInfo = @{ NoCompileInjectedFilesKey: @[name ?: @""] };
     [NSNotificationCenter.defaultCenter postNotificationName:NoCompileDidInjectNotification
@@ -299,11 +311,15 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return result;
 }
 
-/// 逐个刷新：实现了 -injected 的交给业务自己处理，否则重建界面。
-/// 控制器自身发生布局变化（增删方法或存储属性）时，不在旧实例上重跑 viewDidLoad——
-/// 旧实例的 vtable 槽位数与大小都已固定，新代码按新布局访问会越界。这类控制器跳过刷新并提示
+/// 逐个处理受影响的控制器，返回已刷新的类名：
+/// - 实现了 -injected 的交给业务自己处理；
+/// - 控制器自身发生布局变化（增删方法或存储属性）时，不在旧实例上重跑 viewDidLoad——
+///   旧实例的 vtable 槽位数与大小都已固定，新代码按新布局访问会越界。这类控制器跳过并提示；
+/// - 其余控制器默认不重建（已加载的页面保持原样），类名放入 pending，由调用方提示用户退出页面后重新进入；
+///   开启 autoReloadViewControllers 后才原地重建界面
 + (NSArray<NSString *> *)refreshControllers:(NSArray<NCViewController *> *)controllers
-                       layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses {
+                       layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses
+                                    pending:(NSMutableArray<NSString *> *)pending {
     NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
     SEL injectedSel = NSSelectorFromString(@"injected");
     for (NCViewController *controller in controllers) {
@@ -313,19 +329,27 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
             NCLogWarn(@"%@ 增删了方法/存储属性，屏幕上的旧实例布局已固定，为避免越界未在其上刷新：重新运行 App，或返回后重新进入该页面即可用新代码", name);
             continue;
         }
+        NSString *shortName = [name componentsSeparatedByString:@"."].lastObject;
         if ([controller respondsToSelector:injectedSel]) {
             // 兼容项：业务方自定义了刷新逻辑
             ((void (*)(id, SEL))objc_msgSend)(controller, injectedSel);
-        } else {
+        } else if (NoCompile.autoReloadViewControllers) {
             [self reloadController:controller];
+        } else {
+            // 默认不自动重建已加载的控制器：新代码已生效，重新进入页面（新建实例）即可看到改动
+            if (![pending containsObject:shortName]) {
+                [pending addObject:shortName];
+            }
+            continue;
         }
-        [refreshed addObject:[name componentsSeparatedByString:@"."].lastObject];
+        [refreshed addObject:shortName];
     }
     return refreshed;
 }
 
 + (NSArray<NSString *> *)reloadAffectedControllersForClassNames:(NSSet<NSString *> *)names
-                                             layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses {
+                                             layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses
+                                                          pending:(NSMutableArray<NSString *> *)pending {
     NSArray<NCViewController *> *visible = [self visibleControllers];
 
     // 只处理 App 自己的控制器，系统容器（导航、标签栏等）不重建
@@ -348,7 +372,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
         }
     }
     return [self refreshControllers:[self outermostControllers:targets]
-                 layoutChangedClasses:layoutChangedClasses];
+                 layoutChangedClasses:layoutChangedClasses
+                              pending:pending];
 }
 
 /// 判断类是否重写了 -loadView（自定义根视图的控制器需要重新 loadView）

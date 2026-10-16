@@ -98,11 +98,12 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 
 1. 从各窗口的根控制器出发，收集当前可见的控制器。导航控制器只取栈顶，标签栏控制器只取选中项，另外包括被 present 的控制器和子控制器。
 2. 以**类名**判断受影响的控制器。App 里的实例属于旧类，dylib 里的是新类，两者名字相同。命中条件是控制器自身的类被替换，或它的视图层级里有被替换的视图类。系统容器（导航、标签栏等）不重建。
-3. 如果一个控制器都没命中（改的是模型、C/C++ 函数等非界面代码），就刷新最上层的可见业务控制器。
-4. 重建步骤：移除子控制器，清空根视图的子视图（重写了 `loadView` 的则重新 `loadView` 并替换原视图），再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`。根视图是 table / collection view 的，只 `reloadData`。界面来自 storyboard / xib 的控制器（`nibName` 非空）改为重新实例化 nib，见下文「资源热重载」；重新实例化失败时保持原样，不清空视图。
-5. 发出 `NoCompileDidInjectNotification` 和兼容的 `INJECTION_BUNDLE_NOTIFICATION`，供 SwiftUI 等场景使用。
+3. 如果一个控制器都没命中（改的是模型、C/C++ 函数等非界面代码），就取最上层的可见业务控制器。
+4. **默认不重建已加载的控制器**：命中的控制器类名作为 `pending` 回报，日志、HUD 与 Mac 控制台提示「退出页面后重新进入」，新建的实例直接使用新代码。在已加载的实例上重跑 `viewDidLoad` 容易带来重复注册通知 / KVO、状态丢失等副作用，所以只有开启 `autoReloadViewControllers`（偏好设置「自动重建已加载的页面」）后才执行第 5 步。
+5. 重建步骤（需开启自动重建）：移除子控制器，清空根视图的子视图（重写了 `loadView` 的则重新 `loadView` 并替换原视图），再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`。根视图是 table / collection view 的，只 `reloadData`。界面来自 storyboard / xib 的控制器（`nibName` 非空）改为重新实例化 nib，见下文「资源热重载」；重新实例化失败时保持原样，不清空视图。
+6. 发出 `NoCompileDidInjectNotification` 和兼容的 `INJECTION_BUNDLE_NOTIFICATION`，供 SwiftUI 等场景使用。
 
-兼容项：类或控制器如果实现了 InjectionIII 风格的 `+injected` / `-injected`，会优先调用它们，不走默认重建。
+兼容项：类或控制器如果实现了 InjectionIII 风格的 `+injected` / `-injected`，会优先调用它们（无论是否开启自动重建），不走默认流程。
 
 ## 布局变化时为何不动旧实例
 
@@ -143,7 +144,7 @@ App 端（`NCResources.m`）：
 1. **镜像 bundle**：真机的 App bundle 只读，因此不改写 bundle，而是在 `tmp/NoCompileResources/mirror_N/` 下生成镜像：被更新的条目指向新文件，其余条目软链接回原 bundle。只有被更新条目的上级目录是真实目录，生成开销与 bundle 大小无关。每次换新路径，避免 `NSBundle` 按路径缓存旧实例。Assets.car 等也在镜像中，nib 里引用的图片照常解析。
 2. **加载入口 hook**：`storyboardWithName:bundle:`、`nibWithNibName:bundle:`（AppKit 为 `initWithNibNamed:bundle:`）、`loadNibNamed:...` 在请求主 bundle 中已更新的资源时改用镜像 bundle；`pathForResource:ofType:`、`URLForResource:withExtension:` 返回新文件路径。之后新打开的页面、UIKit 自己的 `loadView` 都会拿到新 nib。
 3. **图片**：按名字登记新图，hook `imageNamed:` 系列方法直接返回。nib 中的图片在解码时由 `UIImageNibPlaceholder` 生成、不经过 `imageNamed:`，因此另外交换它的 `initWithCoder:`，按 coder 中的 `UIResourceName` 返回新图。
-4. **刷新可见页面**：storyboard / xib 刷新由它加载、当前可见的控制器；xib 没有对应控制器（如用于 cell）或图片更新时刷新最上层的可见业务控制器。重建方式是重新实例化 nib，把新根视图换到旧视图的位置，再走生命周期。storyboard 的视图 nib 不以 File's Owner 引用控制器，而是引用场景中的"上游占位对象"：UIKit 在控制器的 `_externalObjectsTableForViewLoading` 中保存了这张表，作为 `UINibExternalObjects` 传入；AppKit 没有这张表，也没有传入外部对象的公开接口，因此重载期间交换 `NSNibExternalObjectPlaceholder` 的 `initWithCoder:`，把 `UpstreamPlaceholder-1` 映射到控制器。重载成功后把控制器的 storyboard 换成新实例，之后的 segue 也使用新版本。
+4. **刷新可见页面**（需开启自动重建，默认只提示退出页面重进）：storyboard / xib 刷新由它加载、当前可见的控制器；xib 没有对应控制器（如用于 cell）或图片更新时刷新最上层的可见业务控制器。重建方式是重新实例化 nib，把新根视图换到旧视图的位置，再走生命周期。storyboard 的视图 nib 不以 File's Owner 引用控制器，而是引用场景中的"上游占位对象"：UIKit 在控制器的 `_externalObjectsTableForViewLoading` 中保存了这张表，作为 `UINibExternalObjects` 传入；AppKit 没有这张表，也没有传入外部对象的公开接口，因此重载期间交换 `NSNibExternalObjectPlaceholder` 的 `initWithCoder:`，把 `UpstreamPlaceholder-1` 映射到控制器。重载成功后把控制器的 storyboard 换成新实例，之后的 segue 也使用新版本。
 
 这部分依赖 UIKit / AppKit 的私有行为，所有调用都做了响应性检查和异常保护，失败时只记录日志并保持原界面。
 

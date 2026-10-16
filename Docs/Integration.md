@@ -202,22 +202,22 @@ nocompile --project /path/to/YourApp.xcworkspace
 
 ## 界面如何刷新（零侵入）
 
-业务代码不需要为热重载写任何代码。每次注入完成后，NoCompile 会自动：
+业务代码不需要为热重载写任何代码。每次注入完成后，新代码立即生效，NoCompile 会：
 
-1. 找到当前可见、且受本次改动影响的视图控制器。判断依据有两种：控制器自身的类被替换了，或它的视图层级里有被替换的视图类。
-2. 清空这些控制器的视图，再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`，界面按新代码重新构建。重写了 `loadView` 的控制器会重新执行 `loadView`。
-3. 如果改的是模型、工具类、C/C++ 函数这类非界面代码，就刷新最上层的可见业务页面，让新逻辑立即体现出来。
+1. 找到当前可见、且受本次改动影响的视图控制器。判断依据有两种：控制器自身的类被替换了，或它的视图层级里有被替换的视图类。改的是模型、工具类、C/C++ 函数这类非界面代码时，取最上层的可见业务页面。
+2. **默认不重建这些已加载的页面**，在日志、App 顶部浮层和 Mac 控制台提示「退出页面重进即可看到」。返回后重新进入页面（新建实例）就会按新代码构建，避免在旧实例上重跑 `viewDidLoad` 导致的重复注册通知 / KVO、页面状态丢失等问题。
+3. 需要原地刷新（例如改的是无法退出的根页面）时，在偏好设置开启「自动重建已加载的页面」，或在调试代码里设置 `NoCompile.autoReloadViewControllers = YES`。开启后会清空这些控制器的视图，再依次调用 `viewDidLoad`、`viewWillAppear`、`viewDidAppear`；重写了 `loadView` 的控制器会重新执行 `loadView`，来自 storyboard / xib 的页面会重新加载 nib。
 
-UIKit 和 AppKit 都支持。若想关闭自动刷新，可在调试代码里设置 `NoCompile.autoReloadViewControllers = NO`。
+UIKit 和 AppKit 都支持。
 
-**兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认的重建流程。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
+**兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认流程（无论是否开启自动重建）。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
 
 ## 资源与新增文件
 
 除了源码，以下改动保存后也会热重载，无需额外接入（可在偏好设置的「热重载界面与图片资源」或命令行 `--no-resources` 关闭）：
 
-- **storyboard / xib**：Mac 端用 ibtool 重新编译后下发，当前可见、由它加载的页面会按新 nib 重建；之后打开的页面也会使用新版本。
-- **图片**：替换 Asset Catalog 图片集里的位图或工程中的图片文件后，`UIImage(named:)` / `NSImage(named:)` 和 nib 中引用的图片都会返回新图，当前页面会刷新。
+- **storyboard / xib**：Mac 端用 ibtool 重新编译后下发，之后打开的页面使用新版本；当前可见的页面退出重进即可看到（开启自动重建后原地按新 nib 重建）。
+- **图片**：替换 Asset Catalog 图片集里的位图或工程中的图片文件后，`UIImage(named:)` / `NSImage(named:)` 和 nib 中引用的图片都会返回新图，当前页面退出重进即可看到。
 - **新增源文件**：运行中新建的 Swift / ObjC / C / C++ 文件保存后会被编译注入，之后修改的已有文件可以直接使用其中的新类型和函数。
 
 限制：
