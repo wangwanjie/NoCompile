@@ -35,7 +35,7 @@ NSString * const NoCompileInjectedFilesKey = @"files";
 
 @implementation NoCompile
 
-static BOOL gAutoReloadViewControllers = YES;
+static BOOL gAutoReloadViewControllers = NO;
 static BOOL gPreserveStaticState = YES;
 static BOOL gShowsHUD = YES;
 static BOOL gSuppressSwizzlingDuringLoad = YES;
@@ -290,7 +290,11 @@ static NSUInteger gInjectionCount = 0;
                      (unsigned long)result.swiftSlotsPatched,
                      (unsigned long)result.symbolsRebound,
                      refreshed);
-        hud = [NSString stringWithFormat:@"%@ 已生效", fileName];
+        if (result.layoutChangedClasses.count > 0) {
+            NCLogWarn(@"%@ 增删了方法/属性：ObjC/@objc 方法已即时生效；纯 Swift 的增删需重新运行 App 才会在新实例上体现",
+                      [result.layoutChangedClasses componentsJoinedByString:@"、"]);
+        }
+        hud = [self successHUDForFile:fileName pending:result.pendingControllers];
     } else {
         NCLogError(@"%@ 注入失败：%@", fileName, result.message);
         hud = [NSString stringWithFormat:@"%@ 注入失败", fileName];
@@ -298,7 +302,21 @@ static NSUInteger gInjectionCount = 0;
     if (gShowsHUD) {
         [NCHUD showStatus:hud state:ok ? 0 : 2];
     }
-    [self sendInjectResult:ok message:result.message source:sourceFiles refreshed:result.refreshedControllers];
+    [self sendInjectResult:ok
+                   message:result.message
+                    source:sourceFiles
+                 refreshed:result.refreshedControllers
+                   pending:result.pendingControllers];
+}
+
+/// 成功提示：有未自动重建的已加载页面时，打印日志并在浮层提示用户退出页面后重新进入
+- (NSString *)successHUDForFile:(NSString *)fileName pending:(NSArray<NSString *> *)pending {
+    if (pending.count == 0) {
+        return [NSString stringWithFormat:@"%@ 已生效", fileName];
+    }
+    NCLogWarn(@"%@ 已加载，未自动重建：退出该页面后重新进入即可看到改动",
+              [pending componentsJoinedByString:@"、"]);
+    return [NSString stringWithFormat:@"%@ 已生效，退出页面重进即可看到", fileName];
 }
 
 /// 资源更新：storyboard / xib 编译产物与图片
@@ -316,7 +334,7 @@ static NSUInteger gInjectionCount = 0;
             ? [NSString stringWithFormat:@"，已刷新 %@", [result.refreshedControllers componentsJoinedByString:@"、"]]
             : @"";
         NCLogSuccess(@"%@ 资源已更新%@", fileName, refreshed);
-        hud = [NSString stringWithFormat:@"%@ 已生效", fileName];
+        hud = [self successHUDForFile:fileName pending:result.pendingControllers];
     } else {
         NCLogError(@"%@ 资源更新失败：%@", fileName, result.message);
         hud = [NSString stringWithFormat:@"%@ 更新失败", fileName];
@@ -328,23 +346,26 @@ static NSUInteger gInjectionCount = 0;
                          json:@{ @"ok": @(result.ok),
                                  @"message": result.message ?: @"",
                                  @"sourceFiles": @[source],
-                                 @"refreshed": result.refreshedControllers ?: @[] }
+                                 @"refreshed": result.refreshedControllers ?: @[],
+                                 @"pending": result.pendingControllers ?: @[] }
                          data:nil];
 }
 
 - (void)sendInjectResult:(BOOL)ok message:(NSString *)message source:(NSArray<NSString *> *)source {
-    [self sendInjectResult:ok message:message source:source refreshed:nil];
+    [self sendInjectResult:ok message:message source:source refreshed:nil pending:nil];
 }
 
 - (void)sendInjectResult:(BOOL)ok
                  message:(NSString *)message
                   source:(NSArray<NSString *> *)source
-               refreshed:(NSArray<NSString *> *)refreshed {
+               refreshed:(NSArray<NSString *> *)refreshed
+                 pending:(NSArray<NSString *> *)pending {
     [self.connection sendType:NCMessageTypeInjectResult
                          json:@{ @"ok": @(ok),
                                  @"message": message ?: @"",
                                  @"sourceFiles": source ?: @[],
-                                 @"refreshed": refreshed ?: @[] }
+                                 @"refreshed": refreshed ?: @[],
+                                 @"pending": pending ?: @[] }
                          data:nil];
 }
 

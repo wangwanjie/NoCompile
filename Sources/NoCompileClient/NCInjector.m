@@ -128,15 +128,30 @@ static NSUInteger NCSwizzleObjCMethods(Class oldClass, Class newClass) {
     return replaced;
 }
 
-/// Swift vtable 覆写。返回替换的槽位数；布局不一致返回 -1
-static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
+/// Swift vtable 覆写。返回替换的槽位数（>=0）。
+///
+/// outLayoutChanged 置为 YES 表示新旧 classSize 或 classAddressPoint 不一致，即发生了
+/// vtable 布局变化（增删/重排方法）。这种情况下**不覆写**：旧实例仍指向旧元数据，其
+/// vtable 槽位数是旧的；Debug（-Onone）下方法一律走 vtable 静态派发，若覆写后的旧方法体
+/// 调用了新增方法，会按新槽位下标访问越界而崩溃。因此布局变化时跳过 vtable，仅加载新代码，
+/// 由调用方提示重新运行；新增/删方法只对重新运行后、走新元数据的实例生效。
+///
+/// 布局未变（仅改方法体）时按下标逐个覆写，立即在既有实例上生效。
+static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutChanged) {
+    if (outLayoutChanged) {
+        *outLayoutChanged = NO;
+    }
     if (!NCIsSwiftClass(oldClass) || !NCIsSwiftClass(newClass)) {
         return 0;
     }
     NCSwiftClassMetadata *oldMeta = (__bridge NCSwiftClassMetadata *)oldClass;
     NCSwiftClassMetadata *newMeta = (__bridge NCSwiftClassMetadata *)newClass;
-    if (oldMeta->classSize != newMeta->classSize || oldMeta->classAddressPoint != newMeta->classAddressPoint) {
-        return -1;
+    if (oldMeta->classSize != newMeta->classSize ||
+        oldMeta->classAddressPoint != newMeta->classAddressPoint) {
+        if (outLayoutChanged) {
+            *outLayoutChanged = YES;
+        }
+        return 0;
     }
     long slots = NCSwiftVTableSlotCount(oldMeta);
     NCSwiftImpl *oldVTable = NCSwiftVTable(oldMeta);
@@ -256,6 +271,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
     NSMutableArray<Class> *addedClasses = [NSMutableArray array];
     NSUInteger objcReplaced = 0;
     long swiftPatched = 0;
+    // 发生布局变化（增删方法或存储属性）的类名：既不覆写其 vtable，也不在其旧实例上重跑生命周期
     NSMutableArray<NSString *> *layoutChanged = [NSMutableArray array];
 
     for (NSString *symbol in classSymbols) {
@@ -271,15 +287,20 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
             continue;
         }
         for (Class oldClass in oldClasses) {
-            long patched = NCPatchSwiftVTable(oldClass, newClass);
-            if (patched < 0) {
-                [layoutChanged addObject:@(className)];
-                continue;
-            }
-            if (class_getInstanceSize(oldClass) != class_getInstanceSize(newClass)) {
-                NCLogWarn(@"%s 的实例大小发生变化（增删了存储属性），已有对象访问新属性可能异常，建议重新运行", className);
+            // 布局变化（增删方法改变 vtable，或增删存储属性改变实例大小）时不再拒绝注入，但也不能
+            // 动旧实例：旧元数据的 vtable 槽位数、实例大小都已固定，覆写或重跑生命周期都会越界崩溃。
+            // 这里只加载新代码、登记类别名、并替换 ObjC/@objc 方法（动态派发，增删方法是安全的）。
+            // 纯 Swift 的增删方法/属性要重新运行 App 后、由走新元数据的新实例体现。
+            BOOL vtableLayoutChanged = NO;
+            long patched = NCPatchSwiftVTable(oldClass, newClass, &vtableLayoutChanged);
+            BOOL sizeChanged = class_getInstanceSize(oldClass) != class_getInstanceSize(newClass);
+            if (vtableLayoutChanged || sizeChanged) {
+                if (![layoutChanged containsObject:@(className)]) {
+                    [layoutChanged addObject:@(className)];
+                }
             }
             swiftPatched += patched;
+            // ObjC / @objc 方法：动态派发，新增或改写都能即时安全生效
             objcReplaced += NCSwizzleObjCMethods(oldClass, newClass);
             objcReplaced += NCSwizzleObjCMethods(object_getClass(oldClass), object_getClass(newClass));
             NCRegisterClassAlias(newClass, oldClass);
@@ -313,19 +334,15 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
         [self rebindStaticAddressors:staticAddressors inImage:newImage];
     }
 
-    if (layoutChanged.count > 0 && objcReplaced == 0 && swiftPatched == 0 && rebound == 0) {
-        result.status = NCInjectStatusLayoutChanged;
-        result.message = [NSString stringWithFormat:@"%@ 的方法表布局发生变化（增删了方法或存储属性），为避免崩溃已跳过，请重新运行 App",
-                          [layoutChanged componentsJoinedByString:@", "]];
-        return result;
-    }
     if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && addedClasses.count == 0 && !isNewFile) {
         result.status = NCInjectStatusNothingInjected;
         result.message = @"未替换任何实现。请确认 Debug 配置的 Other Linker Flags 含 -Xlinker -interposable";
         return result;
     }
     if (layoutChanged.count > 0) {
-        NCLogWarn(@"%@ 的方法表布局变化，这些类的 Swift 方法未更新，请重新运行 App",
+        // 布局已变化：新代码已加载，ObjC/@objc 方法的增改已即时生效；纯 Swift 的增删方法/属性
+        // 需重新运行 App 后由新实例体现。已在屏幕上的旧实例保持原样，不在其上刷新以免越界
+        NCLogWarn(@"%@ 增删了方法或存储属性：新代码已加载，ObjC/@objc 方法即时生效；纯 Swift 的增删需重新运行 App 才会在新实例上体现（屏幕上的旧实例保持原样）",
                   [layoutChanged componentsJoinedByString:@", "]);
     }
 
@@ -333,12 +350,17 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass) {
     result.objcMethodsReplaced = objcReplaced;
     result.swiftSlotsPatched = (NSUInteger)swiftPatched;
     result.symbolsRebound = rebound;
+    result.layoutChangedClasses = [layoutChanged copy];
     result.injectedClasses = [patchedClasses arrayByAddingObjectsFromArray:addedClasses];
 
-    // 5. 零侵入刷新可见界面，并发出通知（当前已在主线程）
+    // 5. 处理受影响的可见界面，并发出通知（当前已在主线程）
+    NSArray<NSString *> *pending = nil;
     result.refreshedControllers = [NCSweeper refreshAfterPatchingClasses:patchedClasses
                                                             addedClasses:addedClasses
-                                                             sourceFiles:sourceFiles];
+                                                     layoutChangedClasses:[NSSet setWithArray:layoutChanged]
+                                                             sourceFiles:sourceFiles
+                                                      pendingControllers:&pending];
+    result.pendingControllers = pending ?: @[];
     return result;
 }
 

@@ -36,7 +36,8 @@ FOUNDATION_EXPORT NSString * const NoCompileInjectedFilesKey;
 /// 指定 Mac 地址启动，适用于真机通过 Wi-Fi 连接的场景
 + (void)startWithHost:(NSString *)host;
 
-/// 注入后是否自动刷新当前可见、且未实现 -injected 的视图控制器，默认 YES
+/// 注入后是否自动重建当前可见、且未实现 -injected 的视图控制器，默认 NO。
+/// 关闭时已加载的页面保持原样，NoCompile 会提示退出页面后重新进入（新建实例即用上新代码）
 @property (class, nonatomic) BOOL autoReloadViewControllers;
 
 /// 注入后是否把旧镜像中的静态 / 全局变量值迁移到新镜像，默认 YES（避免单例被重建）

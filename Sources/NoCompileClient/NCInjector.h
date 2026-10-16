@@ -11,7 +11,7 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
     NCInjectStatusSuccess = 0,
     NCInjectStatusLoadFailed,       // dlopen 失败
     NCInjectStatusNothingInjected,  // 加载成功但未替换任何实现（通常缺少 -interposable）
-    NCInjectStatusLayoutChanged,    // 内存布局变化（增删存储属性 / 方法），拒绝注入
+    NCInjectStatusLayoutChanged,    // 已弃用：内存布局变化不再拒绝注入，改为尽力注入并重建界面（见 layoutChangedClasses）
 };
 
 @interface NCInjectResult : NSObject
@@ -21,8 +21,13 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 @property (nonatomic) NSUInteger swiftSlotsPatched;
 @property (nonatomic) NSUInteger symbolsRebound;
 @property (nonatomic, copy) NSArray<Class> *injectedClasses;
+/// 发生内存布局变化（增删方法 / 存储属性）的类名。注入仍会进行，这些类的旧实例若未被重建，
+/// 访问新成员可能异常，建议重新运行 App
+@property (nonatomic, copy) NSArray<NSString *> *layoutChangedClasses;
 /// 注入后被自动刷新的视图控制器类名
 @property (nonatomic, copy) NSArray<NSString *> *refreshedControllers;
+/// 受影响但未自动重建的已加载视图控制器类名，需提示用户退出页面后重新进入
+@property (nonatomic, copy) NSArray<NSString *> *pendingControllers;
 @end
 
 @interface NCInjector : NSObject
