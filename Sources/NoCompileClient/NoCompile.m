@@ -290,6 +290,10 @@ static NSUInteger gInjectionCount = 0;
                      (unsigned long)result.swiftSlotsPatched,
                      (unsigned long)result.symbolsRebound,
                      refreshed);
+        if (result.layoutChangedClasses.count > 0) {
+            NCLogWarn(@"%@ 增删了方法/属性：ObjC/@objc 方法已即时生效；纯 Swift 的增删需重新运行 App 才会在新实例上体现",
+                      [result.layoutChangedClasses componentsJoinedByString:@"、"]);
+        }
         hud = [NSString stringWithFormat:@"%@ 已生效", fileName];
     } else {
         NCLogError(@"%@ 注入失败：%@", fileName, result.message);

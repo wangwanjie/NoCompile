@@ -74,6 +74,7 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
 
 + (NSArray<NSString *> *)refreshAfterPatchingClasses:(NSArray<Class> *)patchedClasses
                                         addedClasses:(NSArray<Class> *)addedClasses
+                                  layoutChangedClasses:(NSSet<NSString *> *)layoutChangedClasses
                                          sourceFiles:(NSArray<NSString *> *)sourceFiles {
     // 以类名作为匹配依据：App 中的实例属于旧类，dylib 中的是新类，二者名字相同
     NSMutableSet<NSString *> *names = [NSMutableSet set];
@@ -94,7 +95,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
 #if NC_UIKIT || NC_APPKIT
     // 2. 默认：零侵入刷新受影响的可见视图控制器
     if (NoCompile.autoReloadViewControllers) {
-        [refreshed addObjectsFromArray:[self reloadAffectedControllersForClassNames:names]];
+        [refreshed addObjectsFromArray:[self reloadAffectedControllersForClassNames:names
+                                                                 layoutChangedClasses:layoutChangedClasses]];
     }
 #endif
 
@@ -136,7 +138,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
                 [targets addObject:top];
             }
         }
-        [refreshed addObjectsFromArray:[self refreshControllers:[self outermostControllers:targets]]];
+        [refreshed addObjectsFromArray:[self refreshControllers:[self outermostControllers:targets]
+                                             layoutChangedClasses:nil]];
     }
 #endif
     // 通知：object 为空数组（没有类被替换），userInfo 中带上资源名
@@ -296,12 +299,20 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return result;
 }
 
-/// 逐个刷新：实现了 -injected 的交给业务自己处理，否则重建界面
-+ (NSArray<NSString *> *)refreshControllers:(NSArray<NCViewController *> *)controllers {
+/// 逐个刷新：实现了 -injected 的交给业务自己处理，否则重建界面。
+/// 控制器自身发生布局变化（增删方法或存储属性）时，不在旧实例上重跑 viewDidLoad——
+/// 旧实例的 vtable 槽位数与大小都已固定，新代码按新布局访问会越界。这类控制器跳过刷新并提示
++ (NSArray<NSString *> *)refreshControllers:(NSArray<NCViewController *> *)controllers
+                       layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses {
     NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
     SEL injectedSel = NSSelectorFromString(@"injected");
     for (NCViewController *controller in controllers) {
         NSString *name = NSStringFromClass(controller.class);
+        if ([layoutChangedClasses containsObject:name]) {
+            // 控制器自身增删了方法/存储属性：旧实例布局已固定，跳过原地刷新以免越界崩溃
+            NCLogWarn(@"%@ 增删了方法/存储属性，屏幕上的旧实例布局已固定，为避免越界未在其上刷新：重新运行 App，或返回后重新进入该页面即可用新代码", name);
+            continue;
+        }
         if ([controller respondsToSelector:injectedSel]) {
             // 兼容项：业务方自定义了刷新逻辑
             ((void (*)(id, SEL))objc_msgSend)(controller, injectedSel);
@@ -313,7 +324,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return refreshed;
 }
 
-+ (NSArray<NSString *> *)reloadAffectedControllersForClassNames:(NSSet<NSString *> *)names {
++ (NSArray<NSString *> *)reloadAffectedControllersForClassNames:(NSSet<NSString *> *)names
+                                             layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses {
     NSArray<NCViewController *> *visible = [self visibleControllers];
 
     // 只处理 App 自己的控制器，系统容器（导航、标签栏等）不重建
@@ -335,7 +347,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
             [targets addObject:top];
         }
     }
-    return [self refreshControllers:[self outermostControllers:targets]];
+    return [self refreshControllers:[self outermostControllers:targets]
+                 layoutChangedClasses:layoutChangedClasses];
 }
 
 /// 判断类是否重写了 -loadView（自定义根视图的控制器需要重新 loadView）

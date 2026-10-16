@@ -64,7 +64,7 @@ clang -arch <arch> -isysroot <sdk> -dynamiclib \
 
 Swift 类方法通过 vtable 静态派发。Swift 类的元数据布局（见 `NCSwiftMetadata.h`）里，vtable 紧跟在 `IVarDestroyer` 字段之后，长度由 `classSize` 决定。把新类元数据的 vtable 槽位逐个复制进旧类元数据即可。
 
-如果新旧 `classSize` 不一致，说明增删了方法或改了布局，这时拒绝覆写并上报，避免崩溃。
+如果新旧 `classSize`（或 `classAddressPoint`）不一致，说明增删了方法或改了 vtable 布局。这时**不覆写** vtable：旧实例仍指向旧元数据，其 vtable 槽位数是旧的；Debug（`-Onone`）下方法一律走 vtable 静态派发，若覆写后的旧方法体调用了新增方法，会按新槽位下标越界崩溃。所以布局变化时只加载新代码、登记类别名，并照常替换 ObjC / `@objc` 方法（动态派发，增删安全）。纯 Swift 的增删方法要重新运行 App 后，由走新元数据的新实例体现。发生布局变化的类名会上报（`layoutChangedClasses`），刷新环节据此跳过这些类在屏幕上的旧实例，避免在其上重跑生命周期。
 
 ### 3. 符号重绑（interpose）
 
@@ -103,6 +103,15 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 5. 发出 `NoCompileDidInjectNotification` 和兼容的 `INJECTION_BUNDLE_NOTIFICATION`，供 SwiftUI 等场景使用。
 
 兼容项：类或控制器如果实现了 InjectionIII 风格的 `+injected` / `-injected`，会优先调用它们，不走默认重建。
+
+## 布局变化时为何不动旧实例
+
+增删方法改变 vtable 槽位数，增删存储属性改变实例大小。这两者都在旧实例分配时就定死了：旧元数据的 vtable 缓冲区无法扩容，旧对象的内存块无法扩容。曾尝试两条路线，都会崩溃，已放弃：
+
+- 覆写旧 vtable 的共有前缀：Debug 下 `self.新方法()` 走 vtable 静态派发，覆写后的旧方法体一旦调用新增方法，就按新槽位下标访问越界（`EXC_BAD_ACCESS`）。
+- 用新类重新实例化换进容器：Swift 控制器常自定义 `init()` 而不继承 `init(nibName:bundle:)`，调用未继承的初始化器会触发 Swift 运行时陷阱（`EXC_BREAKPOINT`），而且这是陷阱不是 ObjC 异常，`@try` 拦不住，直接杀进程。
+
+所以布局变化时的策略是：加载新代码、登记类别名、替换 ObjC/`@objc` 方法（动态派发安全），并把发生布局变化的类名交给 sweeper，让它跳过这些类在屏幕上的旧实例（不重跑生命周期）。纯 Swift 的增删方法/属性在重新运行 App 后由新实例体现。这与 InjectionIII 的取舍一致，区别是 NoCompile 不再直接拒绝或放任崩溃，而是安全加载并明确提示。
 
 整个注入过程（dlopen、替换、刷新）都在主线程串行执行，避免和 UI 代码并发。
 

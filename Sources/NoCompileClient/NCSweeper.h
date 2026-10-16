@@ -18,8 +18,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// 在主线程执行刷新，返回被刷新的视图控制器类名（用于提示）
 /// @param patchedClasses 被替换实现的旧类（App 中正在使用的类对象）
 /// @param addedClasses   本次新增的类
+/// @param layoutChangedClasses 发生布局变化（增删方法或存储属性）的控制器类名集合。
+///        这些控制器在屏幕上的旧实例，其 vtable 槽位数与实例大小都已固定，重跑 viewDidLoad
+///        可能按新槽位越界或访问越界，刷新时会跳过它们并提示（重新运行 App 或返回后重新进入）。
+///        仅改方法体、布局未变的类照常原地刷新，立即生效
 + (NSArray<NSString *> *)refreshAfterPatchingClasses:(NSArray<Class> *)patchedClasses
                                         addedClasses:(NSArray<Class> *)addedClasses
+                                layoutChangedClasses:(nullable NSSet<NSString *> *)layoutChangedClasses
                                          sourceFiles:(nullable NSArray<NSString *> *)sourceFiles;
 
 /// 资源更新后在主线程刷新界面，返回被刷新的视图控制器类名
