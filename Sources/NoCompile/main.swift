@@ -124,10 +124,10 @@ if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "selftest" {
         exit(1)
     }
     print("✅ DerivedData：\(buildLog.derivedDataPath)")
-    let text = buildLog.extractPlainText()
-    let identity = ProjectInfo.signingIdentity(fromPlainText: text)
-    print("签名身份：\(identity ?? "（无）")")
-    let commands = BuildLog.parse(plainText: text)
+    let parseStart = Date()
+    let commands = buildLog.parseAll()
+    let identity = commands.signingIdentity
+    print("签名身份：\(identity ?? "（无）")，解析用时 \(String(format: "%.2f", Date().timeIntervalSince(parseStart)))s")
     print("✅ 解析：\(commands.swiftModules(for: platformName, arch: arch).count) 个 \(platformName) Swift 模块（架构 \(arch)），\(commands.clangFileCount) 个 C/ObjC/C++ 文件")
     guard let sdk = ProjectInfo.sdkPath(for: platformName) else {
         print("❌ 找不到 \(platformName) SDK")

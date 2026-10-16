@@ -69,6 +69,41 @@ public struct ParsedCommands {
     /// ibtool 命令，键为界面文件的规范化路径。nib 格式与模拟器 / 真机无关，不区分平台
     public var ibtoolCommands: [String: RawCompileCommand] = [:]
 
+    /// 最近一次构建使用的代码签名身份（真机注入需要）
+    public var signingIdentity: String?
+
+    public init() {}
+
+    /// 用较新的解析结果覆盖较旧的：同一 (模块, 平台, 架构)、(文件, 平台, 架构) 以较新的为准。
+    /// 增量解析时只解析新出现的日志，再与之前的结果合并，避免每次都重新解析全部日志
+    public func merging(older: ParsedCommands) -> ParsedCommands {
+        var result = self
+        var seenModules = Set(swiftModules.map(Self.moduleKey))
+        for command in older.swiftModules {
+            if seenModules.insert(Self.moduleKey(command)).inserted {
+                result.swiftModules.append(command)
+            }
+        }
+        for (key, commands) in older.clangFiles {
+            var merged = result.clangFiles[key] ?? []
+            for command in commands where !merged.contains(where: { $0.arch == command.arch }) {
+                merged.append(command)
+            }
+            result.clangFiles[key] = merged
+        }
+        for (key, command) in older.ibtoolCommands where result.ibtoolCommands[key] == nil {
+            result.ibtoolCommands[key] = command
+        }
+        if result.signingIdentity == nil {
+            result.signingIdentity = older.signingIdentity
+        }
+        return result
+    }
+
+    static func moduleKey(_ command: RawCompileCommand) -> String {
+        return "\(command.moduleName ?? "?")|\(command.platform)|\(command.arch ?? "?")"
+    }
+
     public static func clangKey(platform: String, source: String) -> String {
         return "\(platform)|\(canonicalPath(source))"
     }
@@ -76,7 +111,7 @@ public struct ParsedCommands {
     /// 解析符号链接后的路径。文件监听给出的是真实路径（如 /private/tmp/...），
     /// 构建日志里可能是带符号链接的写法（如 /tmp/...），比较前需统一
     public static func canonicalPath(_ path: String) -> String {
-        return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return CanonicalPathCache.shared.resolve(path)
     }
 
     /// 某平台的 Swift 模块命令，每个模块只返回一条：
@@ -206,14 +241,13 @@ public struct BuildLog {
     public static func locate(projectPath: String, customDerivedData: String? = nil) -> BuildLog? {
         let fm = FileManager.default
         let projectURL = URL(fileURLWithPath: projectPath)
-        let projectName = projectURL.deletingPathExtension().lastPathComponent
 
         // 1. 显式指定的 DerivedData：既可能是工程自己的目录，也可能是全局根目录
         if let customDerivedData, !customDerivedData.isEmpty {
-            if let log = buildLog(forProjectName: projectName, inDerivedDataRoot: customDerivedData, exactRoot: true) {
+            if let log = buildLog(forProject: projectPath, inDerivedDataRoot: customDerivedData, exactRoot: true) {
                 return log
             }
-            if let log = buildLog(forProjectName: projectName, inDerivedDataRoot: customDerivedData, exactRoot: false) {
+            if let log = buildLog(forProject: projectPath, inDerivedDataRoot: customDerivedData, exactRoot: false) {
                 return log
             }
         }
@@ -233,15 +267,16 @@ public struct BuildLog {
             guard fm.fileExists(atPath: root, isDirectory: &isDir), isDir.boolValue else {
                 continue
             }
-            if let log = buildLog(forProjectName: projectName, inDerivedDataRoot: root, exactRoot: false) {
+            if let log = buildLog(forProject: projectPath, inDerivedDataRoot: root, exactRoot: false) {
                 return log
             }
         }
         return nil
     }
 
-    private static func buildLog(forProjectName name: String, inDerivedDataRoot root: String, exactRoot: Bool) -> BuildLog? {
+    private static func buildLog(forProject projectPath: String, inDerivedDataRoot root: String, exactRoot: Bool) -> BuildLog? {
         let fm = FileManager.default
+        let name = URL(fileURLWithPath: projectPath).deletingPathExtension().lastPathComponent
         func logsDir(in dataPath: String) -> String? {
             let dir = "\(dataPath)/Logs/Build"
             var isDir: ObjCBool = false
@@ -265,7 +300,33 @@ public struct BuildLog {
             .map { "\(root)/\($0)" }
             .filter { logsDir(in: $0) != nil }
             .sorted { modificationDate(of: $0) > modificationDate(of: $1) }
-        if let best = matched.first, let dir = logsDir(in: best) {
+        // 不同目录下的同名工程（如两份 kugou.xcworkspace）会各有一个 "kugou-xxx" 目录：
+        // 优先取 info.plist 中 WorkspacePath 与当前工程一致的，避免用错另一份工程的构建日志
+        // 登记了其他工程路径的目录一律排除；没有登记（info.plist 缺失）的作为退路
+        let target = ParsedCommands.canonicalPath(projectPath)
+        let targetDirectory = (target as NSString).deletingLastPathComponent
+        var exact: String? = nil
+        var sibling: String? = nil
+        var unknown: [String] = []
+        for dataPath in matched {
+            guard let info = NSDictionary(contentsOfFile: "\(dataPath)/info.plist"),
+                  let workspace = info["WorkspacePath"] as? String else {
+                unknown.append(dataPath)
+                continue
+            }
+            let canonicalWorkspace = ParsedCommands.canonicalPath(workspace)
+            if canonicalWorkspace == target {
+                exact = dataPath
+                break
+            }
+            // 同目录下的 .xcodeproj 与 .xcworkspace（选了工程文件、却用 workspace 构建）也算同一工程
+            if sibling == nil, (canonicalWorkspace as NSString).deletingLastPathComponent == targetDirectory {
+                sibling = dataPath
+                continue
+            }
+            Diagnostics.shared.log("定位日志", "跳过同名工程的 DerivedData：\(dataPath)（属于 \(workspace)）", level: .debug)
+        }
+        if let best = exact ?? sibling ?? unknown.first, let dir = logsDir(in: best) {
             return BuildLog(derivedDataPath: best, logsDirectory: dir)
         }
         return nil
@@ -291,106 +352,44 @@ public struct BuildLog {
         return logFiles().first.map { Self.modificationDate(of: $0) } ?? .distantPast
     }
 
-    /// 解压并合并所有日志的明文，按修改时间从新到旧
-    public func extractPlainText() -> String {
-        var merged = ""
-        for log in logFiles() {
-            let result = Shell.run("/usr/bin/gunzip", ["-c", log])
-            if result.succeeded {
-                merged += result.stdout.replacingOccurrences(of: "\r", with: "\n")
-                merged += "\n"
+    /// 逐份流式解析日志（按传入顺序，应为新→旧），不把解压后的明文整体读进内存。
+    /// 大型工程单份全量构建日志解压后可超过 1GB，整体读入再按行切分会占用数 GB 内存、耗时数分钟
+    public static func parse(logs: [String]) -> ParsedCommands {
+        let parser = LogLineParser()
+        for log in logs {
+            let start = Date()
+            parser.beginLog()
+            let ok = LineSplitter.forEachLine(ofGzip: log) { line in
+                parser.handle(line)
             }
+            parser.endLog()
+            let elapsed = String(format: "%.2f", Date().timeIntervalSince(start))
+            Diagnostics.shared.log("解析日志", "\((log as NSString).lastPathComponent)：\(ok ? "完成" : "gunzip 异常退出")，"
+                + "用时 \(elapsed)s，累计 \(parser.parsed.swiftModules.count) 条 Swift 模块命令、\(parser.parsed.clangFiles.count) 条 clang 命令",
+                level: ok ? .info : .warning)
         }
-        return merged
+        return parser.parsed
     }
 
-    /// 解析日志明文。新日志在前，同一 (模块, 平台, 架构) / (文件, 平台, 架构) 只保留最新一条
+    /// 解析全部日志（新→旧）
+    public func parseAll() -> ParsedCommands {
+        return Self.parse(logs: logFiles())
+    }
+
+    /// 解析日志明文（测试与兼容用途）。新日志在前，同一 (模块, 平台, 架构) / (文件, 平台, 架构) 只保留最新一条
     public static func parse(plainText text: String) -> ParsedCommands {
-        let lines = text.components(separatedBy: "\n")
-        var parsed = ParsedCommands()
-        var seenModules = Set<String>()
-        var currentWorkingDir = NSHomeDirectory()
-
-        for rawLine in lines {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("cd ") {
-                let dir = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                if dir.hasPrefix("/") {
-                    currentWorkingDir = CommandTokenizer.tokenize(dir).first ?? dir
-                }
-                continue
-            }
-            // Swift 模块 driver 命令
-            if let range = line.range(of: "builtin-SwiftDriver -- ") {
-                let tokens = CommandTokenizer.tokenize(String(line[range.upperBound...]))
-                guard tokens.count > 1 else {
-                    continue
-                }
-                let moduleName = valueForFlag("-module-name", in: tokens)
-                let target = valueForFlag("-target", in: tokens)
-                let platform = RawCompileCommand.platform(forTarget: target)
-                let arch = RawCompileCommand.arch(forTarget: target) ?? "?"
-                let key = "\(moduleName ?? "?")|\(platform)|\(arch)"
-                if seenModules.contains(key) {
-                    continue
-                }
-                seenModules.insert(key)
-                parsed.swiftModules.append(RawCompileCommand(
-                    kind: .swiftModule, tokens: tokens, workingDirectory: currentWorkingDir,
-                    moduleName: moduleName, platform: platform, target: target))
-                continue
-            }
-            // ibtool 编译 storyboard / xib 的命令：取最后一个界面文件参数作为源文件
-            if line.contains("/ibtool "), line.contains(".storyboard") || line.contains(".xib") {
-                let tokens = CommandTokenizer.tokenize(line)
-                guard let executable = tokens.first, executable.hasSuffix("/ibtool"),
-                      !tokens.contains("--link"),
-                      let source = tokens.last(where: { $0.hasSuffix(".storyboard") || $0.hasSuffix(".xib") }) else {
-                    continue
-                }
-                let key = ParsedCommands.canonicalPath(source)
-                if parsed.ibtoolCommands[key] == nil {
-                    parsed.ibtoolCommands[key] = RawCompileCommand(
-                        kind: .ibtool, tokens: tokens, workingDirectory: currentWorkingDir,
-                        moduleName: valueForFlag("--module", in: tokens), platform: "unknown", target: nil)
-                }
-                continue
-            }
-            // clang 单文件命令：行首必须就是 clang 可执行文件，排除 builtin-ScanDependencies 等包装行
-            if line.contains(" -c ") {
-                let tokens = CommandTokenizer.tokenize(line)
-                guard let executable = tokens.first,
-                      executable.hasSuffix("/clang") || executable.hasSuffix("/clang++") || executable == "clang" else {
-                    continue
-                }
-                guard let source = clangPrimarySource(in: tokens) else {
-                    continue
-                }
-                let target = valueForFlag("-target", in: tokens)
-                let platform = RawCompileCommand.platform(forTarget: target)
-                let key = ParsedCommands.clangKey(platform: platform, source: source)
-                var existing = parsed.clangFiles[key] ?? []
-                let arch = RawCompileCommand.arch(forTarget: target)
-                // 每个架构只保留最新一条
-                if existing.contains(where: { $0.arch == arch }) {
-                    continue
-                }
-                existing.append(RawCompileCommand(
-                    kind: .clangFile, tokens: tokens, workingDirectory: currentWorkingDir,
-                    moduleName: nil, platform: platform, target: target))
-                parsed.clangFiles[key] = existing
-            }
+        let parser = LogLineParser()
+        parser.beginLog()
+        var text = text
+        text.withUTF8 { bytes in
+            LineSplitter.split(bytes, carry: nil) { parser.handle($0) }
         }
-        return parsed
-    }
-
-    /// 便捷方法：解压并解析
-    public func parse() -> ParsedCommands {
-        return Self.parse(plainText: extractPlainText())
+        parser.endLog()
+        return parser.parsed
     }
 
     /// 从 clang 命令里取 `-c` 后的源文件（仅限用户源码扩展名）
-    private static func clangPrimarySource(in tokens: [String]) -> String? {
+    static func clangPrimarySource(in tokens: [String]) -> String? {
         guard let idx = tokens.firstIndex(of: "-c"), idx + 1 < tokens.count else {
             return nil
         }
@@ -407,5 +406,266 @@ public struct BuildLog {
             return nil
         }
         return tokens[idx + 1]
+    }
+}
+
+// MARK: - 路径规范化缓存
+
+/// 规范化路径的缓存。解析日志时上万条命令都要规范化源文件路径，逐级 lstat 开销可观；
+/// 同一目录下的文件共享目录的解析结果，文件本身只需一次 lstat 判断是否为符号链接
+final class CanonicalPathCache {
+    static let shared = CanonicalPathCache()
+
+    private var directories: [String: String] = [:]
+    private let lock = NSLock()
+
+    func resolve(_ path: String) -> String {
+        guard path.hasPrefix("/") else {
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+        let directory = (path as NSString).deletingLastPathComponent
+        let name = (path as NSString).lastPathComponent
+        lock.lock()
+        let cached = directories[directory]
+        lock.unlock()
+        let resolvedDirectory: String
+        if let cached {
+            resolvedDirectory = cached
+        } else {
+            resolvedDirectory = URL(fileURLWithPath: directory).resolvingSymlinksInPath().path
+            lock.lock()
+            directories[directory] = resolvedDirectory
+            lock.unlock()
+        }
+        let candidate = resolvedDirectory == "/" ? "/\(name)" : "\(resolvedDirectory)/\(name)"
+        // 文件本身是符号链接时再完整解析一次
+        var info = stat()
+        if lstat(candidate, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK {
+            return URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
+        }
+        // 与 resolvingSymlinksInPath 行为保持一致：存在时去掉 /private 前缀（/private/tmp → /tmp）
+        if candidate.hasPrefix("/private/") {
+            return URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
+        }
+        return candidate
+    }
+}
+
+// MARK: - 按行切分
+
+/// 把字节流按 \r / \n 切成行。xcactivitylog 是 SLF 二进制，命令行以 \r 分隔夹在其中
+enum LineSplitter {
+
+    private static let maxCarry = 16 * 1024 * 1024
+
+    /// 流式解压 gzip 日志并逐行回调
+    static func forEachLine(ofGzip path: String, _ body: (UnsafeBufferPointer<UInt8>) -> Void) -> Bool {
+        var carry: [UInt8] = []
+        let ok = Shell.stream("/usr/bin/gunzip", ["-c", path]) { chunk in
+            split(chunk, carry: &carry, body)
+        }
+        if !carry.isEmpty {
+            carry.withUnsafeBufferPointer { body($0) }
+        }
+        return ok
+    }
+
+    /// 切分一块数据；上一块末尾不完整的行放在 carry 中，与本块开头拼接
+    static func split(_ bytes: UnsafeBufferPointer<UInt8>, carry: inout [UInt8], _ body: (UnsafeBufferPointer<UInt8>) -> Void) {
+        let count = bytes.count
+        var lineStart = 0
+        var index = 0
+        while index < count {
+            let byte = bytes[index]
+            if byte == 0x0A || byte == 0x0D {
+                if carry.isEmpty {
+                    if index > lineStart {
+                        body(UnsafeBufferPointer(rebasing: bytes[lineStart ..< index]))
+                    }
+                } else {
+                    carry.append(contentsOf: bytes[lineStart ..< index])
+                    carry.withUnsafeBufferPointer { body($0) }
+                    carry.removeAll(keepingCapacity: true)
+                }
+                lineStart = index + 1
+            }
+            index += 1
+        }
+        if lineStart < count {
+            // 超长的无分隔数据不可能是命令行，丢弃以免占用过多内存
+            if carry.count + (count - lineStart) <= maxCarry {
+                carry.append(contentsOf: bytes[lineStart ..< count])
+            } else {
+                carry.removeAll(keepingCapacity: false)
+            }
+        }
+    }
+
+    /// 无 carry 的便捷版本（整块数据）
+    static func split(_ bytes: UnsafeBufferPointer<UInt8>, carry: [UInt8]?, _ body: (UnsafeBufferPointer<UInt8>) -> Void) {
+        var local = carry ?? []
+        split(bytes, carry: &local, body)
+        if !local.isEmpty {
+            local.withUnsafeBufferPointer { body($0) }
+        }
+    }
+}
+
+// MARK: - 逐行解析
+
+/// 构建日志的行解析器。先按字节做廉价的关键字预筛，只有可能是命令的行才切分参数
+final class LogLineParser {
+
+    private(set) var parsed = ParsedCommands()
+    private var seenModules = Set<String>()
+    private var currentWorkingDir = NSHomeDirectory()
+    /// 当前日志里最后出现的 codesign 身份 / EXPANDED_CODE_SIGN_IDENTITY
+    private var identityInLog: String?
+    private var expandedIdentityInLog: String?
+
+    private static let swiftDriverMarker = Array("builtin-SwiftDriver -- ".utf8)
+    private static let ibtoolMarker = Array("/ibtool ".utf8)
+    private static let storyboardMarker = Array(".storyboard".utf8)
+    private static let xibMarker = Array(".xib".utf8)
+    private static let compileMarker = Array(" -c ".utf8)
+    private static let codesignMarker = Array("codesign".utf8)
+    private static let signFlagMarker = Array("--sign".utf8)
+    private static let expandedIdentityMarker = Array("EXPANDED_CODE_SIGN_IDENTITY=".utf8)
+
+    func beginLog() {
+        currentWorkingDir = NSHomeDirectory()
+        identityInLog = nil
+        expandedIdentityInLog = nil
+    }
+
+    /// 一份日志解析完毕：日志按新→旧传入，签名身份以最新日志里的为准
+    func endLog() {
+        if parsed.signingIdentity == nil {
+            parsed.signingIdentity = identityInLog ?? expandedIdentityInLog
+        }
+    }
+
+    func handle(_ raw: UnsafeBufferPointer<UInt8>) {
+        // 去掉首尾空格 / 制表符
+        var lower = 0
+        var upper = raw.count
+        while lower < upper, raw[lower] == 0x20 || raw[lower] == 0x09 {
+            lower += 1
+        }
+        while upper > lower, raw[upper - 1] == 0x20 || raw[upper - 1] == 0x09 {
+            upper -= 1
+        }
+        guard upper - lower >= 4 else {
+            return
+        }
+        let line = UnsafeBufferPointer(rebasing: raw[lower ..< upper])
+
+        // cd <目录>：之后的命令在该目录下执行
+        if line[0] == UInt8(ascii: "c"), line[1] == UInt8(ascii: "d"), line[2] == 0x20 {
+            let dir = UnsafeBufferPointer(rebasing: line[3...])
+            let tokens = CommandTokenizer.tokenize(bytes: dir)
+            if let first = tokens.first, first.hasPrefix("/") {
+                currentWorkingDir = first
+            }
+            return
+        }
+        // Swift 模块 driver 命令
+        if let offset = Self.find(Self.swiftDriverMarker, in: line) {
+            let rest = UnsafeBufferPointer(rebasing: line[(offset + Self.swiftDriverMarker.count)...])
+            handleSwiftDriver(CommandTokenizer.tokenize(bytes: rest))
+            return
+        }
+        // ibtool 编译 storyboard / xib 的命令
+        if Self.find(Self.ibtoolMarker, in: line) != nil,
+           Self.find(Self.storyboardMarker, in: line) != nil || Self.find(Self.xibMarker, in: line) != nil {
+            handleIBTool(CommandTokenizer.tokenize(bytes: line))
+            return
+        }
+        // 代码签名：记录本日志最后一次使用的身份
+        if Self.find(Self.codesignMarker, in: line) != nil, Self.find(Self.signFlagMarker, in: line) != nil {
+            let tokens = CommandTokenizer.tokenize(bytes: line)
+            if let idx = tokens.firstIndex(of: "--sign"), idx + 1 < tokens.count, tokens[idx + 1] != "-" {
+                identityInLog = tokens[idx + 1]
+            }
+            return
+        }
+        if let offset = Self.find(Self.expandedIdentityMarker, in: line) {
+            let rest = UnsafeBufferPointer(rebasing: line[(offset + Self.expandedIdentityMarker.count)...])
+            if let identity = CommandTokenizer.tokenize(bytes: rest).first, !identity.isEmpty, identity != "-" {
+                expandedIdentityInLog = identity
+            }
+            return
+        }
+        // clang 单文件命令：行首必须就是 clang 可执行文件，排除 builtin-ScanDependencies 等包装行
+        if Self.find(Self.compileMarker, in: line) != nil {
+            handleClang(CommandTokenizer.tokenize(bytes: line))
+        }
+    }
+
+    private func handleSwiftDriver(_ tokens: [String]) {
+        guard tokens.count > 1 else {
+            return
+        }
+        let moduleName = BuildLog.valueForFlag("-module-name", in: tokens)
+        let target = BuildLog.valueForFlag("-target", in: tokens)
+        let platform = RawCompileCommand.platform(forTarget: target)
+        let arch = RawCompileCommand.arch(forTarget: target) ?? "?"
+        let key = "\(moduleName ?? "?")|\(platform)|\(arch)"
+        guard seenModules.insert(key).inserted else {
+            return
+        }
+        parsed.swiftModules.append(RawCompileCommand(
+            kind: .swiftModule, tokens: tokens, workingDirectory: currentWorkingDir,
+            moduleName: moduleName, platform: platform, target: target))
+    }
+
+    private func handleIBTool(_ tokens: [String]) {
+        guard let executable = tokens.first, executable.hasSuffix("/ibtool"),
+              !tokens.contains("--link"),
+              let source = tokens.last(where: { $0.hasSuffix(".storyboard") || $0.hasSuffix(".xib") }) else {
+            return
+        }
+        let key = ParsedCommands.canonicalPath(source)
+        if parsed.ibtoolCommands[key] == nil {
+            parsed.ibtoolCommands[key] = RawCompileCommand(
+                kind: .ibtool, tokens: tokens, workingDirectory: currentWorkingDir,
+                moduleName: BuildLog.valueForFlag("--module", in: tokens), platform: "unknown", target: nil)
+        }
+    }
+
+    private func handleClang(_ tokens: [String]) {
+        guard let executable = tokens.first,
+              executable.hasSuffix("/clang") || executable.hasSuffix("/clang++") || executable == "clang" else {
+            return
+        }
+        guard let source = BuildLog.clangPrimarySource(in: tokens) else {
+            return
+        }
+        let target = BuildLog.valueForFlag("-target", in: tokens)
+        let platform = RawCompileCommand.platform(forTarget: target)
+        let key = ParsedCommands.clangKey(platform: platform, source: source)
+        var existing = parsed.clangFiles[key] ?? []
+        let arch = RawCompileCommand.arch(forTarget: target)
+        // 每个架构只保留最新一条
+        if existing.contains(where: { $0.arch == arch }) {
+            return
+        }
+        existing.append(RawCompileCommand(
+            kind: .clangFile, tokens: tokens, workingDirectory: currentWorkingDir,
+            moduleName: nil, platform: platform, target: target))
+        parsed.clangFiles[key] = existing
+    }
+
+    /// 字节子串查找，返回起始偏移
+    static func find(_ needle: [UInt8], in haystack: UnsafeBufferPointer<UInt8>) -> Int? {
+        guard let base = haystack.baseAddress, haystack.count >= needle.count else {
+            return nil
+        }
+        return needle.withUnsafeBufferPointer { pattern -> Int? in
+            guard let found = memmem(base, haystack.count, pattern.baseAddress!, pattern.count) else {
+                return nil
+            }
+            return base.distance(to: found.assumingMemoryBound(to: UInt8.self))
+        }
     }
 }

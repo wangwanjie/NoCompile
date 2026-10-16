@@ -6,54 +6,72 @@
 //  含空格的路径有时用双引号包裹。这里按这两种规则还原出原始参数，
 //  之后全部用数组方式传给子进程，避免二次 shell 解析。
 //
+//  按 UTF-8 字节切分：大型工程的构建日志里有上万条长命令，逐 Character 遍历非常慢。
+//  引号、反斜杠、空格都是 ASCII，不会出现在多字节字符内部，按字节处理与按字符处理结果一致。
+//
 
 import Foundation
 
 public enum CommandTokenizer {
+
+    private static let backslash = UInt8(ascii: "\\")
+    private static let doubleQuote = UInt8(ascii: "\"")
+    private static let singleQuote = UInt8(ascii: "'")
+    private static let space = UInt8(ascii: " ")
+    private static let tab = UInt8(ascii: "\t")
+
     /// 把一行命令切分为 [可执行文件, 参数...]
     public static func tokenize(_ line: String) -> [String] {
-        var tokens: [String] = []
-        var current = ""
-        var hasToken = false
-        var index = line.startIndex
-        var quote: Character? = nil
+        var line = line
+        return line.withUTF8 { tokenize(bytes: $0) }
+    }
 
-        while index < line.endIndex {
-            let ch = line[index]
+    /// 字节版本，供构建日志解析直接使用，省去一次 String 转换
+    public static func tokenize(bytes: UnsafeBufferPointer<UInt8>) -> [String] {
+        var tokens: [String] = []
+        var current: [UInt8] = []
+        current.reserveCapacity(256)
+        var hasToken = false
+        var quote: UInt8? = nil
+        var index = 0
+        let count = bytes.count
+
+        while index < count {
+            let byte = bytes[index]
             if let q = quote {
-                if ch == q {
+                if byte == q {
                     quote = nil
-                } else if ch == "\\", let next = line.index(index, offsetBy: 1, limitedBy: line.endIndex), next < line.endIndex {
+                } else if byte == backslash, index + 1 < count {
                     // 引号内的反斜杠转义
-                    current.append(line[next])
-                    index = next
+                    index += 1
+                    current.append(bytes[index])
                 } else {
-                    current.append(ch)
+                    current.append(byte)
                 }
                 hasToken = true
-            } else if ch == "\"" || ch == "'" {
-                quote = ch
+            } else if byte == doubleQuote || byte == singleQuote {
+                quote = byte
                 hasToken = true
-            } else if ch == "\\" {
-                if let next = line.index(index, offsetBy: 1, limitedBy: line.endIndex), next < line.endIndex {
-                    current.append(line[next])
-                    index = next
+            } else if byte == backslash {
+                if index + 1 < count {
+                    index += 1
+                    current.append(bytes[index])
                     hasToken = true
                 }
-            } else if ch == " " || ch == "\t" {
+            } else if byte == space || byte == tab {
                 if hasToken {
-                    tokens.append(current)
-                    current = ""
+                    tokens.append(String(decoding: current, as: UTF8.self))
+                    current.removeAll(keepingCapacity: true)
                     hasToken = false
                 }
             } else {
-                current.append(ch)
+                current.append(byte)
                 hasToken = true
             }
-            index = line.index(after: index)
+            index += 1
         }
         if hasToken {
-            tokens.append(current)
+            tokens.append(String(decoding: current, as: UTF8.self))
         }
         return tokens
     }

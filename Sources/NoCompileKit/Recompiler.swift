@@ -37,7 +37,16 @@ public struct Platform {
 public final class Recompiler {
 
     private let outputDirectory: String
-    private let toolchainBin: String
+    /// 工具链目录。首次使用时才查询：Engine 在主线程创建 Recompiler，
+    /// xcrun 首次运行可能要好几秒（未接受 Xcode 许可时甚至一直不返回），不能放在初始化里卡住界面
+    private lazy var toolchainBin: String = {
+        let result = Shell.run("/usr/bin/xcrun", ["--find", "swiftc"], timeout: 60)
+        let swiftc = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if swiftc.isEmpty {
+            Diagnostics.shared.log("工具链", "xcrun --find swiftc 失败，退回 /usr/bin：\(result.stderr)", level: .error)
+        }
+        return swiftc.isEmpty ? "/usr/bin" : (swiftc as NSString).deletingLastPathComponent
+    }()
     private var counter: Int = 0
     /// 会话标识：保证引擎重启后 dylib 文件名也不重复（dlopen 对同路径会直接返回旧镜像）
     private let sessionID: String
@@ -48,9 +57,6 @@ public final class Recompiler {
     public init(outputDirectory: String) {
         self.outputDirectory = outputDirectory
         try? FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
-        let swiftc = Shell.run("/usr/bin/xcrun", ["--find", "swiftc"]).stdout
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        self.toolchainBin = swiftc.isEmpty ? "/usr/bin" : (swiftc as NSString).deletingLastPathComponent
         self.sessionID = String(Int(Date().timeIntervalSince1970) % 1_000_000)
     }
 
@@ -87,11 +93,15 @@ public final class Recompiler {
         }
 
         let linkResult = link(objectPath: objectPath, dylibPath: dylibPath, platform: platform, target: compiled.target)
-        guard linkResult.succeeded else {
-            return RecompileResult(dylibPath: nil, log: compiled.log + "\n" + linkResult.stderr,
-                                   error: "链接失败：\(linkResult.stderr)")
+        guard linkResult.result.succeeded else {
+            Diagnostics.shared.failure(stage: "链接", file: sourceFile, summary: "链接失败",
+                                       command: ["\(toolchainBin)/clang"] + linkResult.arguments,
+                                       workingDirectory: outputDirectory, output: linkResult.result.stdout + linkResult.result.stderr)
+            return RecompileResult(dylibPath: nil, log: compiled.log + "\n" + linkResult.result.stderr,
+                                   error: "链接失败：\(linkResult.result.stderr)")
         }
         if let signError = codesign(dylibPath: dylibPath, platform: platform, identity: codesignIdentity) {
+            Diagnostics.shared.failure(stage: "签名", file: sourceFile, summary: signError)
             return RecompileResult(dylibPath: nil, log: compiled.log, error: signError)
         }
         return RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil, isNewFile: isNewFile)
@@ -105,7 +115,10 @@ public final class Recompiler {
                               stem: String,
                               isNewFile: inout Bool) -> (error: String?, log: String, target: String?) {
         guard let match = swiftModule(for: sourceFile, in: modules) else {
-            return ("未在构建日志中找到包含该文件的 Swift 模块命令（请先为该平台完整构建一次）", "", nil)
+            let message = "未在构建日志中找到包含该文件的 Swift 模块命令（请先为该平台完整构建一次）"
+            Diagnostics.shared.failure(stage: "查找命令", file: sourceFile,
+                                       summary: "\(message)；当前平台可用的 Swift 模块：\(modules.compactMap { $0.moduleName }.joined(separator: ", "))")
+            return (message, "", nil)
         }
         let module = match.module
         isNewFile = !match.isMember
@@ -131,10 +144,16 @@ public final class Recompiler {
         expandArgs.append("-###")
         let expand = Shell.run(cleaned[0], expandArgs, workingDirectory: module.workingDirectory)
         guard expand.succeeded else {
+            Diagnostics.shared.failure(stage: "展开命令", file: sourceFile, summary: "无法展开 Swift 编译命令",
+                                       command: [cleaned[0]] + expandArgs, workingDirectory: module.workingDirectory,
+                                       output: expand.stdout + expand.stderr)
             return ("无法展开 Swift 编译命令：\(expand.stderr)", expand.stdout + expand.stderr, nil)
         }
         // 3. 找到以目标文件为 -primary-file 的那条 frontend 命令
         guard let frontendLine = frontendLine(for: sourceFile, in: expand.stdout) else {
+            Diagnostics.shared.failure(stage: "展开命令", file: sourceFile, summary: "展开结果中未找到该文件的 frontend 命令",
+                                       command: [cleaned[0]] + expandArgs, workingDirectory: module.workingDirectory,
+                                       output: expand.stdout)
             return ("展开结果中未找到该文件的 frontend 命令", expand.stdout, nil)
         }
         var tokens = rewriteFrontendOutput(CommandTokenizer.tokenize(frontendLine), objectPath: objectPath)
@@ -142,8 +161,10 @@ public final class Recompiler {
         tokens.append(contentsOf: ["-D", "INJECTING"])
         let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: module.workingDirectory)
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
-            return (extractCompileError(compile.stderr + compile.stdout) ?? "Swift 编译失败",
-                    compile.stdout + compile.stderr, nil)
+            let message = extractCompileError(compile.stderr + compile.stdout) ?? "Swift 编译失败"
+            Diagnostics.shared.failure(stage: "编译", file: sourceFile, summary: message, command: tokens,
+                                       workingDirectory: module.workingDirectory, output: compile.stdout + compile.stderr)
+            return (message, compile.stdout + compile.stderr, nil)
         }
         // 编译通过才登记新文件，避免它的语法错误连累同模块其他文件的重编
         if isNewFile {
@@ -351,7 +372,9 @@ public final class Recompiler {
                               command: RawCompileCommand?,
                               objectPath: String) -> (error: String?, log: String, target: String?) {
         guard let command else {
-            return ("未在构建日志中找到该文件的 clang 命令（请先为该平台完整构建一次）", "", nil)
+            let message = "未在构建日志中找到该文件的 clang 命令（请先为该平台完整构建一次）"
+            Diagnostics.shared.failure(stage: "查找命令", file: sourceFile, summary: message)
+            return (message, "", nil)
         }
         var tokens: [String] = []
         var i = 0
@@ -390,15 +413,17 @@ public final class Recompiler {
         tokens.append(contentsOf: ["-Xclang", "-fno-validate-pch"])
         let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
-            return (extractCompileError(compile.stderr + compile.stdout) ?? "编译失败",
-                    compile.stdout + compile.stderr, nil)
+            let message = extractCompileError(compile.stderr + compile.stdout) ?? "编译失败"
+            Diagnostics.shared.failure(stage: "编译", file: sourceFile, summary: message, command: tokens,
+                                       workingDirectory: command.workingDirectory, output: compile.stdout + compile.stderr)
+            return (message, compile.stdout + compile.stderr, nil)
         }
         return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", command.target)
     }
 
     // MARK: - 链接与签名
 
-    private func link(objectPath: String, dylibPath: String, platform: Platform, target: String?) -> ShellResult {
+    private func link(objectPath: String, dylibPath: String, platform: Platform, target: String?) -> (result: ShellResult, arguments: [String]) {
         let swiftLibDir = "\(toolchainBin)/../lib/swift/\(platform.name)"
         var args: [String] = []
         // 优先沿用编译时的 -target，保证平台与最低系统版本一致
@@ -423,7 +448,7 @@ public final class Recompiler {
         // C++ 代码需要 libc++
         args.append("-lc++")
         args.append(contentsOf: [objectPath, "-o", dylibPath])
-        return Shell.run("\(toolchainBin)/clang", args, workingDirectory: outputDirectory)
+        return (Shell.run("\(toolchainBin)/clang", args, workingDirectory: outputDirectory), args)
     }
 
     private func needsProfileRuntime(objectPath: String) -> Bool {

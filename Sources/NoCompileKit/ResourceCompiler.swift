@@ -132,12 +132,16 @@ public final class ResourceCompiler {
                                                  withIntermediateDirectories: true)
 
         let arguments = ibtoolArguments(for: file, commands: commands, platform: platform) + ["--compile", output, file]
+        // ibtool 首次运行要拉起 ibtoold 守护进程，较慢；限时 120 秒，防止卡住引擎队列
         let result = Shell.run("/usr/bin/xcrun", ["ibtool"] + arguments,
-                               workingDirectory: (file as NSString).deletingLastPathComponent)
+                               workingDirectory: (file as NSString).deletingLastPathComponent, timeout: 120)
         let combined = result.stdout + result.stderr
         let errors = combined.components(separatedBy: "\n").filter { $0.contains(": error:") }
         guard result.succeeded, errors.isEmpty, FileManager.default.fileExists(atPath: output) else {
             let message = errors.isEmpty ? combined.trimmingCharacters(in: .whitespacesAndNewlines) : errors.prefix(10).joined(separator: "\n")
+            Diagnostics.shared.failure(stage: "ibtool", file: file, summary: message.isEmpty ? "未生成产物" : message,
+                                       command: ["/usr/bin/xcrun", "ibtool"] + arguments,
+                                       workingDirectory: (file as NSString).deletingLastPathComponent, output: combined)
             return .failed("ibtool 编译失败：\(message.isEmpty ? "未生成产物" : message)")
         }
         return .ready(ResourcePackage(kind: isStoryboard ? .storyboard : .nib,
