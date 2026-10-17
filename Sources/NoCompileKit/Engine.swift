@@ -404,6 +404,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 guard let platform = platform(for: connection) else {
                     continue
                 }
+                // 文件只属于其他平台的目标（如 macOS 源文件遇到 iOS 客户端）：该客户端无需处理，静默跳过
+                if commands.isOnlyBuiltForOtherPlatforms(source, platform: platform.name) {
+                    Diagnostics.shared.log("重编", "\(name) 不属于 \(platform.name) 平台的目标，跳过 \(connection.displayName)", level: .debug)
+                    continue
+                }
                 let built: (result: RecompileResult, elapsed: TimeInterval)
                 let buildKey = "\(platform.name)|\(platform.arch)"
                 if let cached = builtByPlatform[buildKey] {

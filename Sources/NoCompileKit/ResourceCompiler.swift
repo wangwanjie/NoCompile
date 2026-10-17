@@ -108,6 +108,8 @@ public final class ResourceCompiler {
     public func prepare(file: String,
                         commands: ParsedCommands,
                         platform: Platform) -> ResourcePreparation {
+        // 按目标平台的视角判断资源归属：iOS 与 macOS 共用的源码目录里，只属于某一平台 App 的资源不会下发给另一平台
+        let commands = commands.scopingResources(to: platform.name)
         let result = prepareCore(file: file, commands: commands, platform: platform)
         guard case .ready(var package) = result else {
             // 没有产出资源包：清掉暂存目录

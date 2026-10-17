@@ -73,6 +73,11 @@ public struct ParsedCommands: Codable {
     /// 用来知道一个资源最终落在哪个 bundle（App、framework、资源 bundle）里，以及 framework 头文件的副本在哪
     public var resourceDestinations: [String: String] = [:]
 
+    /// 按平台拆分的资源目标位置：平台 → (源文件 → 构建产物路径)。
+    /// 同一份资源被 iOS 与 macOS 两个 App 各拷一份时，resourceDestinations 只留先出现的那个，
+    /// 这里把每个平台自己的目标都保留下来。旧版命令缓存里没有该字段，保持 nil
+    public var platformResourceDestinations: [String: [String: String]]? = nil
+
     /// 最近一次构建使用的代码签名身份（真机注入需要）
     public var signingIdentity: String?
 
@@ -101,10 +106,50 @@ public struct ParsedCommands: Codable {
         for (key, value) in older.resourceDestinations where result.resourceDestinations[key] == nil {
             result.resourceDestinations[key] = value
         }
+        if let olderByPlatform = older.platformResourceDestinations {
+            var byPlatform = result.platformResourceDestinations ?? [:]
+            for (platform, destinations) in olderByPlatform {
+                var merged = byPlatform[platform] ?? [:]
+                for (key, value) in destinations where merged[key] == nil {
+                    merged[key] = value
+                }
+                byPlatform[platform] = merged
+            }
+            result.platformResourceDestinations = byPlatform
+        }
         if result.signingIdentity == nil {
             result.signingIdentity = older.signingIdentity
         }
         return result
+    }
+
+    /// 切换成某平台视角：resourceDestinations 换成该平台自己的目标位置，
+    /// 这样下游按"有没有拷贝记录""属于哪个 bundle"判断时不会串到其他平台的 App。
+    /// 没有按平台记录的数据（旧缓存）时原样返回
+    public func scopingResources(to platform: String) -> ParsedCommands {
+        guard let byPlatform = platformResourceDestinations, !byPlatform.isEmpty else {
+            return self
+        }
+        var scoped = self
+        scoped.resourceDestinations = byPlatform[platform] ?? [:]
+        return scoped
+    }
+
+    /// 由构建产物路径推断所属平台：".../Build/Products/Debug-iphonesimulator/..." → iphonesimulator，
+    /// ".../UninstalledProducts/iphoneos/..." → iphoneos，不带平台后缀的 "Debug" 目录即 macosx
+    static func platformOfProductPath(_ path: String) -> String? {
+        let components = path.components(separatedBy: "/")
+        if let index = components.firstIndex(of: "UninstalledProducts"), index + 1 < components.count {
+            return components[index + 1]
+        }
+        guard let index = components.firstIndex(of: "Products"), index + 1 < components.count else {
+            return nil
+        }
+        let configuration = components[index + 1]
+        if let dash = configuration.lastIndex(of: "-") {
+            return String(configuration[configuration.index(after: dash)...])
+        }
+        return "macosx"
     }
 
     static func moduleKey(_ command: RawCompileCommand) -> String {
@@ -151,6 +196,31 @@ public struct ParsedCommands: Codable {
             return matched
         }
         return commands.first
+    }
+
+    /// 该文件在构建日志里只出现在其他平台的编译命令中（如 macOS 目标的源文件遇到 iOS 客户端）。
+    /// 这类文件不属于该平台的任何目标，不能按"新增文件"借用其他模块的命令去编，调用方应直接跳过该平台
+    public func isOnlyBuiltForOtherPlatforms(_ source: String, platform: String) -> Bool {
+        if source.hasSuffix(".swift") {
+            let canonicalSource = Self.canonicalPath(source)
+            var knownElsewhere = false
+            for module in swiftModules {
+                let sources = Self.swiftSources(of: module)
+                guard sources.contains(source) || sources.contains(where: { Self.canonicalPath($0) == canonicalSource }) else {
+                    continue
+                }
+                if module.platform == platform {
+                    return false
+                }
+                knownElsewhere = true
+            }
+            return knownElsewhere
+        }
+        if clangFiles[Self.clangKey(platform: platform, source: source)] != nil {
+            return false
+        }
+        let suffix = "|" + Self.canonicalPath(source)
+        return clangFiles.keys.contains(where: { $0.hasSuffix(suffix) })
     }
 
     /// 所有 clang 命令（含各架构）
@@ -651,6 +721,13 @@ final class LogLineParser {
         let key = ParsedCommands.canonicalPath(source)
         if parsed.resourceDestinations[key] == nil {
             parsed.resourceDestinations[key] = destination
+        }
+        if let platform = ParsedCommands.platformOfProductPath(destination) {
+            var byPlatform = parsed.platformResourceDestinations ?? [:]
+            if byPlatform[platform]?[key] == nil {
+                byPlatform[platform, default: [:]][key] = destination
+                parsed.platformResourceDestinations = byPlatform
+            }
         }
     }
 
