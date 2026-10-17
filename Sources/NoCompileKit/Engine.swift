@@ -97,6 +97,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     /// 已解析过的日志及其修改时间，只解析新出现 / 有变化的日志
     private var parsedLogs: [String: Date] = [:]
     private var headerIndex: HeaderDependencyIndex?
+    private let headerAnalyzer = HeaderChangeAnalyzer()
     private let recompiler: Recompiler
     private let resourceCompiler: ResourceCompiler
     private var server: Server?
@@ -177,6 +178,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             }
             log("DerivedData：\(buildLog.derivedDataPath)", level: 0)
             headerIndex = HeaderDependencyIndex(derivedDataPath: buildLog.derivedDataPath)
+            // 载入上次保存的命令：Xcode 清理掉的旧日志里的命令仍然可用，也省去重新解析全部日志
+            if let cached = CommandCache.load(derivedDataPath: buildLog.derivedDataPath) {
+                commands = cached.commands
+                parsedLogs = cached.parsedLogs
+                log("载入命令缓存：\(commands.swiftModules.count) 条 Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件", level: 0)
+            }
         }
         guard let buildLog else {
             return
@@ -190,18 +197,25 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             return
         }
         let start = Date()
-        let isIncremental = !parsedLogs.isEmpty
+        let isIncremental = !parsedLogs.isEmpty || commands.clangFileCount > 0 || !commands.swiftModules.isEmpty
         log(isIncremental ? "解析新的构建日志（\(changed.count) 份）…" : "解析构建日志（\(changed.count) 份）…", level: 0)
         let fresh = BuildLog.parse(logs: changed)
         commands = isIncremental ? fresh.merging(older: commands) : fresh
         for path in changed {
             parsedLogs[path] = BuildLog.modificationDate(of: path)
         }
+        // 已不存在的日志不再登记；命令本身保留在缓存里
+        parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
+        CommandCache.save(derivedDataPath: buildLog.derivedDataPath, commands: commands, parsedLogs: parsedLogs)
         // 重新构建过：.d 依赖文件随之更新，头文件索引失效，并在后台预先重建
         headerIndex?.invalidate()
         if watchesHeaders, let index = headerIndex {
+            let analyzer = headerAnalyzer
+            let threshold = maxHeaderDependents
             DispatchQueue.global(qos: .utility).async {
                 _ = index.sources(dependingOn: "")
+                // 为被大量文件引用的头文件建立内容基线，之后改动时才能知道改了哪些标识符
+                analyzer.prime(headers: index.widelyUsedHeaders(threshold: threshold))
             }
         }
 
@@ -430,7 +444,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         var sources = Set<String>()
         var headers: [String] = []
         for file in codeFiles {
-            if file.hasSuffix(".h") || file.hasSuffix(".hpp") {
+            if file.hasSuffix(".h") || file.hasSuffix(".hpp") || file.hasSuffix(".pch") {
                 headers.append(file)
             } else {
                 sources.insert(file)
@@ -446,26 +460,57 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         for header in headers {
             let headerName = (header as NSString).lastPathComponent
             let stem = (headerName as NSString).deletingPathExtension
-            let dependents = index.sources(dependingOn: header)
-            if dependents.isEmpty {
+            guard let newText = try? String(contentsOfFile: header, encoding: .utf8) else {
+                continue
+            }
+            // framework 的公开头文件在构建产物里有副本，使用方读的是副本：先同步，再把副本的使用方一并算进来
+            let copies = headerAnalyzer.syncProductCopies(of: header, newText: newText, index: index,
+                                                          knownCopy: commands.resourceDestinations[ParsedCommands.canonicalPath(header)])
+            var dependents = Set(index.sources(dependingOn: header))
+            for copy in copies {
+                dependents.formUnion(index.sources(dependingOn: copy.path))
+            }
+            // 与上一版内容对比，得到这次改动涉及的标识符（拿不到旧内容时为 nil）
+            // 没有旧内容可对比时，退而用头文件里声明的全部标识符
+            let changed = headerAnalyzer.changedIdentifiers(header: header, newText: newText,
+                                                            extraOldTexts: copies.map { $0.oldText })
+                ?? HeaderChangeAnalyzer.declaredIdentifiers(in: newText)
+            // Swift 文件经桥接头 / 模块依赖头文件：同一模块的 Swift 文件都会列为依赖，只取文本里提到改动标识符的
+            let swiftDependents = dependents.filter { $0.hasSuffix(".swift") }
+            if !swiftDependents.isEmpty {
+                let mentionedSwift = HeaderChangeAnalyzer.filter(sources: swiftDependents.sorted(), mentioning: changed)
+                if !mentionedSwift.isEmpty, mentionedSwift.count <= maxHeaderDependents {
+                    log("头文件 \(headerName) 影响 \(mentionedSwift.count) 个 Swift 文件", level: 0)
+                    sources.formUnion(mentionedSwift)
+                }
+            }
+            let sortedDependents = dependents.filter { !$0.hasSuffix(".swift") }.sorted()
+            if sortedDependents.isEmpty {
                 Diagnostics.shared.log("头文件", "\(headerName) 没有找到依赖它的实现文件（可能只被 Swift 引用或尚未构建过）", level: .debug)
                 continue
             }
-            if dependents.count <= maxHeaderDependents {
-                let added = Set(dependents).subtracting(sources)
+            if sortedDependents.count <= maxHeaderDependents {
+                let added = Set(sortedDependents).subtracting(sources)
                 if !added.isEmpty {
-                    log("头文件 \(headerName) 影响 \(dependents.count) 个实现文件", level: 0)
+                    log("头文件 \(headerName) 影响 \(sortedDependents.count) 个实现文件", level: 0)
                 }
-                sources.formUnion(dependents)
+                sources.formUnion(sortedDependents)
                 continue
             }
-            // 公共头文件：只重编同名实现文件，其余引用方要重新编译 App 才会用上新的宏 / 内联函数等
-            let sameStem = dependents.filter {
+            // 公共头文件：先按改动的标识符筛出真正用到它们的文件
+            let mentioned = HeaderChangeAnalyzer.filter(sources: sortedDependents, mentioning: changed)
+            if mentioned.count <= maxHeaderDependents * 3 {
+                sources.formUnion(mentioned)
+                log("头文件 \(headerName) 被 \(sortedDependents.count) 个文件引用，其中 \(mentioned.count) 个用到了改动的内容，只重编这些", level: 0)
+                continue
+            }
+            // 筛不出来（拿不到旧内容，或用到的文件仍然很多）：只重编同名实现文件，其余要重新编译 App
+            let sameStem = sortedDependents.filter {
                 ((($0 as NSString).lastPathComponent) as NSString).deletingPathExtension == stem
             }
             sources.formUnion(sameStem)
             let target = sameStem.isEmpty ? "未找到同名实现文件，未重编" : "只重编 \(sameStem.map { ($0 as NSString).lastPathComponent }.joined(separator: "、"))"
-            log("头文件 \(headerName) 被 \(dependents.count) 个文件引用（超过 \(maxHeaderDependents) 个），\(target)；"
+            log("头文件 \(headerName) 被 \(sortedDependents.count) 个文件引用（超过 \(maxHeaderDependents) 个），\(target)；"
                 + "若改动了宏、内联函数或结构体，请重新编译 App", level: 2)
         }
         return sources
@@ -546,7 +591,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                     sendResource(package, to: connection)
                     log("🖼 \(name) → \(connection.displayName)（准备 \(String(format: "%.2f", prepared.elapsed))s）", level: 0)
                 case .skipped(let reason):
-                    log("跳过 \(name)（\(connection.displayName)）：\(reason)", level: 0)
+                    if reason.isEmpty {
+                        Diagnostics.shared.log("资源", "\(name) 不是 App 的资源文件，忽略", level: .debug)
+                    } else {
+                        log("跳过 \(name)（\(connection.displayName)）：\(reason)", level: 0)
+                    }
                 case .failed(let error):
                     hadError = true
                     log("❌ \(name)：\(error)", level: 3)

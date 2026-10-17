@@ -1,0 +1,34 @@
+NoCompile 正在监听：/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/NoCompileExample.xcworkspace
+按 Ctrl+C 退出
+[00:28:39] 监听目录：/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample
+[00:28:39] DerivedData：/Users/VanJay/Library/Developer/Xcode/DerivedData/NoCompileExample-gycabkulejilqubzwxzjlskathab
+[00:28:39] 解析构建日志（5 份）…
+[00:28:40] 解析完成（0.7s）：3 条 Swift 模块命令，75 个 C/ObjC/C++ 文件，平台：iphonesimulator
+[00:28:40] 🎉 NoCompile 就绪，保存文件即可热重载
+[00:28:41] [ExampleiOS] 已连接到 NoCompile Mac 端
+[00:28:41] 🔌 已连接：ExampleiOS（模拟器，com.vanjay.nocompile.example.ios），客户端 0.2.3
+🔌 当前已连接 App 数量：1
+[00:28:43] 本批改动需重编 2 个文件：Scenarios__Swift__A01SwiftFreeFunctions.swift, A01SwiftFreeFunctions.swift
+[00:28:48] ❌ Scenarios__Swift__A01SwiftFreeFunctions.swift（iphonesimulator）：/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:8:6: error: invalid redeclaration of 'A01'
+/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:15:6: error: invalid redeclaration of 'a01Plain()'
+/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:19:6: error: invalid redeclaration of 'a01WithDefault(prefix:)'
+/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:31:6: error: invalid redeclaration of 'a01Variadic'
+/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:35:6: error: invalid redeclaration of 'a01Join'
+/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:37:9: error: thrown expression type 'any Error' cannot be converted to error type 'Never'
+[00:28:49] ⚡ A01SwiftFreeFunctions.swift → ExampleiOS（模拟器，com.vanjay.nocompile.example.ios）（编译 1.14s）
+[00:28:49] 本批完成：推送 1 个，失败 1 个
+⚠️  编译失败，详见日志
+[00:28:49] [ExampleiOS] A01SwiftFreeFunctions.swift 注入成功：ObjC 方法 0，Swift 槽位 0，函数重绑 5
+[00:28:49] [ExampleiOS] HomeViewController 已加载，未自动重建：退出该页面后重新进入即可看到改动
+[00:28:50] 本批改动需重编 2 个文件：Scenarios__ObjC__B01ObjCBasic.m, B01ObjCBasic.m
+[00:28:50] ❌ Scenarios__ObjC__B01ObjCBasic.m（iphonesimulator）：编译失败
+[00:28:50] ❌ B01ObjCBasic.m（iphonesimulator）：编译失败
+[00:28:50] 本批完成：推送 0 个，失败 2 个
+⚠️  编译失败，详见日志
+[00:29:50] 本批改动需重编 2 个文件：Modules__ExCore__Private__ExLogger.m, ExLogger.m
+[00:29:50] ❌ Modules__ExCore__Private__ExLogger.m（iphonesimulator）：编译失败
+[00:29:52] ⚡ ExLogger.m → ExampleiOS（模拟器，com.vanjay.nocompile.example.ios）（编译 1.35s）
+[00:29:52] 本批完成：推送 1 个，失败 1 个
+⚠️  编译失败，详见日志
+[00:29:53] [ExampleiOS] ExLogger.m 注入成功：ObjC 方法 11，Swift 槽位 0，函数重绑 0
+[00:29:53] [ExampleiOS] HomeViewController 已加载，未自动重建：退出该页面后重新进入即可看到改动

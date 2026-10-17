@@ -1,0 +1,7 @@
+//
+//  ExampleApp-Prefix.pch
+//
+
+#ifdef __OBJC__
+#import "ExampleCommonPrefix.h"
+#endif

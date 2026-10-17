@@ -8,6 +8,13 @@ options:
 packages:
   NoCompile:
     path: ../..
+  # 本地 SPM 包（纯 Swift），静态链入 App
+  ExNetwork:
+    path: Modules/ExNetwork
+# 仿 KuGou 的 Pods.xcodeproj：本地模块在独立工程里，和主工程一起放在 NoCompileExample.xcworkspace
+projectReferences:
+  Modules:
+    path: Modules/Modules.xcodeproj
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -19,7 +26,7 @@ settings:
     Debug:
       # 热重载必需：让 App 内部的函数调用走符号指针，运行时才能重定向到新实现
       # -ObjC：确保客户端库中的类被完整链接（客户端靠 +load 自动启动，业务代码无需引用它）
-      OTHER_LDFLAGS: "-Xlinker -interposable -ObjC"
+      OTHER_LDFLAGS: "-Xlinker -interposable -ObjC -lc++"
       SWIFT_COMPILATION_MODE: singlefile
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"
 targets:
@@ -29,9 +36,21 @@ targets:
     sources:
       - path: Shared
       - path: iOS
+      - path: Scenarios
+        excludes:
+          # 刻意不加入 target 的文件（场景 F06）
+          - NotInTarget/**
     dependencies:
       - package: NoCompile
         product: NoCompile
+      - package: ExNetwork
+        product: ExNetwork
+      - target: Modules/ExCore
+        embed: true
+      - target: Modules/ExKit
+        embed: true
+      - target: Modules/ExPlayer
+        link: true
     info:
       path: iOS/Info.plist
       properties:
@@ -48,6 +67,13 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.example.ios
         TARGETED_DEVICE_FAMILY: "1,2"
+        # 仿 KuGou 的 PCH：场景 H04
+        GCC_PREFIX_HEADER: Scenarios/Header/ExampleApp-Prefix.pch
+        GCC_PRECOMPILE_PREFIX_HEADER: YES
+        # 静态库 ExPlayer 的公开头文件（桥接头引用）
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Modules/ExPlayer/Public"
+        OTHER_LDFLAGS: "$(inherited) -lc++"
+        CLANG_ENABLE_MODULES: YES
         # 示例的 Asset Catalog 只用于演示图片热重载，不包含 App 图标
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
   ExampleMac:

@@ -220,10 +220,12 @@ UIKit 和 AppKit 都支持。
 - **图片**：替换 Asset Catalog 图片集里的位图或工程中的图片文件后，`UIImage(named:)` / `NSImage(named:)` 和 nib 中引用的图片都会返回新图，当前页面退出重进即可看到。
 - **新增源文件**：运行中新建的 Swift / ObjC / C / C++ 文件保存后会被编译注入，之后修改的已有文件可以直接使用其中的新类型和函数。
 
+另外：`.strings`（`NSLocalizedString`）、`json` / `plist` 等原样拷贝进 bundle 的资源，以及 Asset Catalog 颜色集（`UIColor(named:)`）保存后也会更新。
+
 限制：
 
-- 只覆盖主 bundle 中的资源；framework、资源 bundle 中的资源需要重新运行。
-- App 图标、颜色集、矢量（PDF / SVG）图片、暗色等外观变体、`Localizable.strings` 不在热重载范围内。
+- 资源按构建日志里记录的拷贝 / 编译目标找到所属 bundle，因此 framework、资源 bundle 里的 xib、图片、strings、json 等同样支持（需要这份资源出现在最近解析过的完整构建日志里）。
+- 颜色集只支持不带外观变体的通用颜色；App 图标、矢量（PDF / SVG）图片、暗色等外观变体不在热重载范围内。
 - SwiftUI 的 `Image("name")` 不经过 `imageNamed:`，不会拿到新图。
 - 新增的 ObjC 类要被 Swift 使用，需要修改桥接头并重新构建。
 

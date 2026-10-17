@@ -11,4 +11,8 @@
 #if TARGET_OS_IOS
 #import "DetailViewController.h"
 #import "ObjCBadgeView.h"
+// 场景工程新增
+#import "ScenarioObjC.h"
+#import "ScenarioHeader.h"
+#import "ExPlayerEngine.h"
 #endif

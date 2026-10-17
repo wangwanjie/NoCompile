@@ -9,6 +9,32 @@
 
 业务代码里没有任何 NoCompile 相关的 `import`、调用或 `injected()` 方法。客户端随 Debug 构建链入后会自动启动，热重载后新代码立即生效，已打开的页面退出重进即可看到。
 
+## 仿大型工程的结构与端到端自测
+
+示例仿照 KuGou 的组织方式：一个 workspace（`NoCompileExample.xcworkspace`）包含主工程和 `Modules/Modules.xcodeproj`（相当于 Pods.xcodeproj）。
+
+| 模块 | 形态 | 内容 |
+|---|---|---|
+| `ExCore` | 动态 framework | ObjC + C：分类、+load swizzle、单例、中介者、事件总线、宏 / inline / 枚举头文件 |
+| `ExKit` | 动态 framework（Swift + ObjC 混编） | ObjC 基类控制器、泛型 open class、协议默认实现，自带 xib / xcassets / strings / json |
+| `ExPlayer` | 静态库 | ObjC++ / C++ / C，头文件模板 |
+| `ExNetwork` | 本地 SPM 包 | 泛型、async、actor |
+| 主 App `Scenarios/` | 约 120 个场景 | Swift / ObjC / C++ / 头文件 / PCH / 跨模块 / 界面 / 资源 / 结构变化 / 失败路径 |
+
+每个场景的源文件里有版本令牌 `@@v1@@`。App 内的 `ProbeWriter` 把全部场景的当前输出周期性写成 JSON（环境变量 `EXAMPLE_PROBE_FILE`），首页的「场景清单」页也能人工查看。
+
+自动化验证：
+
+```bash
+swift build --product nocompile          # 仓库根目录
+cd Examples/NoCompileExample
+python3 E2E/run_e2e.py --clean           # 清 DerivedData、完整构建、跑全部场景
+python3 E2E/run_e2e.py --only A01,B07    # 只跑指定场景
+python3 E2E/run_e2e.py --restore         # 脚本被强行终止后恢复被改动的源文件
+```
+
+脚本会启动 App 与 nocompile，逐个场景改源码、等待注入，核对输出；结束后恢复所有改动的文件。结果为 PASS / FAIL / XFAIL（已知限制）/ CRASH。
+
 ## 运行步骤
 
 ### 1. 生成工程（已生成可跳过）

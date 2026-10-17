@@ -53,6 +53,8 @@ public final class Recompiler {
     /// 本次会话中新增、但还不在构建日志文件列表里的 Swift 文件，键为 "模块名|平台"。
     /// 之后重编同模块的其他文件时要把它们一并作为输入，否则引用不到新文件里声明的类型
     private var addedSwiftSources: [String: Set<String>] = [:]
+    /// 已确认 Xcode 的 PCH 不能直接使用、需要换自建 PCH 的源文件（规范化路径）
+    private var ownPCHSources = Set<String>()
 
     public init(outputDirectory: String) {
         self.outputDirectory = outputDirectory
@@ -412,8 +414,38 @@ public final class Recompiler {
         // 先保持 clang 默认的校验：模块缓存（.pcm）里的头文件被改动过时，clang 会自动重建该模块。
         // 不能一上来就加 -fno-validate-pch：它会同时关闭模块的输入文件校验，头文件一旦变化就
         // 报 "file ... has been modified since the module file ... was built" 的 fatal error，且无法重建
+        // 之前已确认过 Xcode 产出的 PCH 不能直接用的文件，直接换自建 PCH，省去一次必败的编译
+        let pchKey = ParsedCommands.canonicalPath(sourceFile)
+        if ownPCHSources.contains(pchKey), let pch = PrecompiledHeader.includedPCH(in: tokens),
+           let own = PrecompiledHeader.ownPCH(tokens: tokens, pchPath: pch.path, workingDirectory: command.workingDirectory).path {
+            tokens = Self.replacingPCH(in: tokens, with: own)
+        }
         var compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
-        if !compile.succeeded, Self.isStalePrecompiledHeaderFailure(compile.stderr + compile.stdout) {
+        if !compile.succeeded, PrecompiledHeader.isIncompatiblePCHFailure(compile.stderr + compile.stdout),
+           let pch = PrecompiledHeader.includedPCH(in: tokens), !ownPCHSources.contains(pchKey) {
+            // Xcode 产出的 PCH 与单文件命令不兼容（显式模块构建的 PCH 等）：改用自建 PCH 重试
+            let own = PrecompiledHeader.ownPCH(tokens: tokens, pchPath: pch.path, workingDirectory: command.workingDirectory)
+            if let path = own.path {
+                ownPCHSources.insert(pchKey)
+                tokens = Self.replacingPCH(in: tokens, with: path)
+                compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+            }
+        }
+        // 自建 PCH 过期（前缀头文件被改过，但文件时间戳没能反映出来，如 git 还原）：重建后重试
+        let usesOwnPCH = tokens.contains("-include-pch")
+        if !compile.succeeded, usesOwnPCH,
+           (compile.stderr + compile.stdout).contains("has been modified since the precompiled header")
+            || (compile.stderr + compile.stdout).contains("needs to be rebuilt"),
+           let original = PrecompiledHeader.includedPCH(in: command.tokens) {
+            let rebuilt = PrecompiledHeader.ownPCH(tokens: Self.replacingPCH(in: tokens, withOriginal: original.path, from: tokens),
+                                                   pchPath: original.path, workingDirectory: command.workingDirectory,
+                                                   forceRebuild: true)
+            if let path = rebuilt.path {
+                tokens = Self.replacingOwnPCH(in: tokens, with: path)
+                compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+            }
+        }
+        if !compile.succeeded, !usesOwnPCH, Self.isStalePrecompiledHeaderFailure(compile.stderr + compile.stdout) {
             // 预编译头（-include-pch）比其依赖的头文件旧，clang 无法自动重建，此时才跳过 PCH 校验重试
             tokens.append(contentsOf: ["-Xclang", "-fno-validate-pch"])
             compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
@@ -425,6 +457,47 @@ public final class Recompiler {
             return (message, compile.stdout + compile.stderr, nil)
         }
         return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", command.target)
+    }
+
+    /// 自建 PCH 重建后更新 `-include-pch` 的路径
+    static func replacingOwnPCH(in tokens: [String], with pch: String) -> [String] {
+        var result = tokens
+        if let idx = result.firstIndex(of: "-include-pch"), idx + 1 < result.count {
+            result[idx + 1] = pch
+        }
+        return result
+    }
+
+    /// 重建自建 PCH 需要原始命令（带 `-include <x>.pch`）的参数：把 `-include-pch <自建>` 还原回 `-include <x>.pch`
+    static func replacingPCH(in tokens: [String], withOriginal original: String, from current: [String]) -> [String] {
+        var result: [String] = []
+        var i = 0
+        while i < current.count {
+            if current[i] == "-include-pch", i + 1 < current.count {
+                result.append(contentsOf: ["-include", original])
+                i += 2
+                continue
+            }
+            result.append(current[i])
+            i += 1
+        }
+        return result
+    }
+
+    /// 把 `-include <x>.pch` 换成 `-include-pch <自建 pch>`
+    static func replacingPCH(in tokens: [String], with pch: String) -> [String] {
+        var result: [String] = []
+        var i = 0
+        while i < tokens.count {
+            if tokens[i] == "-include", i + 1 < tokens.count, tokens[i + 1].hasSuffix(".pch") {
+                result.append(contentsOf: ["-include-pch", pch])
+                i += 2
+                continue
+            }
+            result.append(tokens[i])
+            i += 1
+        }
+        return result
     }
 
     // MARK: - 链接与签名
@@ -490,7 +563,9 @@ public final class Recompiler {
 
     private func extractCompileError(_ output: String) -> String? {
         // fatal error（如头文件找不到、模块缓存失效）不是 ": error:" 形式，需单独识别，否则摘要只剩"编译失败"
-        let lines = output.components(separatedBy: "\n").filter { $0.contains(": error:") || $0.contains("fatal error:") }
+        let lines = output.components(separatedBy: "\n").filter {
+            $0.contains(": error:") || $0.contains("fatal error:") || $0.hasPrefix("error:")
+        }
         if lines.isEmpty {
             return nil
         }

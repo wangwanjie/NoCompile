@@ -1,0 +1,80 @@
+# 仿 KuGou 的 Pods.xcodeproj：本地模块放在独立工程里，与主工程一起放进 NoCompileExample.xcworkspace
+name: Modules
+options:
+  bundleIdPrefix: com.vanjay.nocompile
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: X6B6C6U6QV
+    CODE_SIGN_STYLE: Automatic
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+    SDKROOT: iphoneos
+  configs:
+    Debug:
+      SWIFT_COMPILATION_MODE: singlefile
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      # 动态 framework 本身也要 -interposable，framework 内部的调用才能被重定向
+      OTHER_LDFLAGS: "-Xlinker -interposable"
+targets:
+  # ObjC + C 的基础库，动态 framework（对应 use_frameworks! 下的 Pod）
+  ExCore:
+    type: framework
+    platform: iOS
+    sources:
+      - path: ExCore/Public
+        headerVisibility: public
+      - path: ExCore/Private
+        headerVisibility: project
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.excore
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SKIP_INSTALL: YES
+        # 本模块带 +load 的类需要链入
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"
+  # Swift + ObjC 混编的 UI 库，动态 framework，带 xib / xcassets / strings / json 资源
+  ExKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: ExKit/Public
+        headerVisibility: public
+      - path: ExKit/Private
+        headerVisibility: project
+      - path: ExKit/Swift
+      - path: ExKit/Resources
+    dependencies:
+      - target: ExCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.exkit
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SKIP_INSTALL: YES
+        SWIFT_OBJC_INTERFACE_HEADER_NAME: ExKit-Swift.h
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+  # ObjC++ / C++ / C 静态库（对应 Pod 的静态库形式）
+  ExPlayer:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: ExPlayer/Public
+      - path: ExPlayer/Sources
+    settings:
+      base:
+        PRODUCT_NAME: ExPlayer
+        SKIP_INSTALL: YES
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/ExPlayer/Public $(SRCROOT)/ExPlayer/Sources"

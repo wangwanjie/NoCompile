@@ -21,6 +21,10 @@ NS_ASSUME_NONNULL_BEGIN
 typedef void (^NCSymbolBlock)(const char *name, uintptr_t address, uint8_t type,
                               const struct section_64 *_Nullable section, BOOL *stop);
 
+/// 带 n_desc 的符号遍历回调（desc 中 N_WEAK_DEF 表示弱定义，如 C++ 模板 / inline 函数）
+typedef void (^NCSymbolDescBlock)(const char *name, uintptr_t address, uint8_t type, uint16_t desc,
+                                  const struct section_64 *_Nullable section, BOOL *stop);
+
 /// 所有"属于 App 自身"的镜像：主程序、App 包内的 framework / dylib、DerivedData 中的产物、
 /// 以及此前注入过的镜像。系统库和 NoCompile 客户端自身被排除
 NSArray<NCImage *> *NCAppImages(void);
@@ -30,6 +34,9 @@ NCImage *_Nullable NCImageForPath(NSString *path);
 
 /// 遍历镜像的完整符号表（含 local 符号，Debug 产物通常不 strip）
 void NCEnumerateSymbols(NCImage *image, NCSymbolBlock block);
+
+/// 同 NCEnumerateSymbols，额外提供 n_desc
+void NCEnumerateSymbolsWithDesc(NCImage *image, NCSymbolDescBlock block);
 
 /// 遍历镜像的所有节
 void NCEnumerateSections(NCImage *image, void (^block)(const struct segment_command_64 *segment,

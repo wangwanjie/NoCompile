@@ -12,8 +12,8 @@
 import Foundation
 
 /// 一条从日志中解析出的编译命令
-public struct RawCompileCommand {
-    public enum Kind {
+public struct RawCompileCommand: Codable {
+    public enum Kind: String, Codable {
         case swiftModule    // 整个模块的 swiftc driver 命令
         case clangFile      // 单个 .m/.mm/.c/.cpp 的 clang 命令
         case ibtool         // 单个 .storyboard/.xib 的 ibtool 编译命令
@@ -60,7 +60,7 @@ public struct RawCompileCommand {
 }
 
 /// 解析结果：按平台索引的编译命令
-public struct ParsedCommands {
+public struct ParsedCommands: Codable {
     /// Swift 模块命令（同一模块在不同平台、不同架构各一条，新日志在前）
     public var swiftModules: [RawCompileCommand] = []
     /// clang 单文件命令，键为 "平台|源文件绝对路径"，值为各架构的命令（新日志在前，每个架构一条）
@@ -68,6 +68,10 @@ public struct ParsedCommands {
 
     /// ibtool 命令，键为界面文件的规范化路径。nib 格式与模拟器 / 真机无关，不区分平台
     public var ibtoolCommands: [String: RawCompileCommand] = [:]
+
+    /// 构建时拷贝 / 编译资源与头文件的目标位置：键为源文件（或 .xcassets）的规范化路径，值为构建产物里的路径。
+    /// 用来知道一个资源最终落在哪个 bundle（App、framework、资源 bundle）里，以及 framework 头文件的副本在哪
+    public var resourceDestinations: [String: String] = [:]
 
     /// 最近一次构建使用的代码签名身份（真机注入需要）
     public var signingIdentity: String?
@@ -93,6 +97,9 @@ public struct ParsedCommands {
         }
         for (key, command) in older.ibtoolCommands where result.ibtoolCommands[key] == nil {
             result.ibtoolCommands[key] = command
+        }
+        for (key, value) in older.resourceDestinations where result.resourceDestinations[key] == nil {
+            result.resourceDestinations[key] = value
         }
         if result.signingIdentity == nil {
             result.signingIdentity = older.signingIdentity
@@ -531,6 +538,9 @@ final class LogLineParser {
     private static let codesignMarker = Array("codesign".utf8)
     private static let signFlagMarker = Array("--sign".utf8)
     private static let expandedIdentityMarker = Array("EXPANDED_CODE_SIGN_IDENTITY=".utf8)
+    private static let builtinCopyMarker = Array("builtin-copy".utf8)
+    private static let copyPNGMarker = Array("/copypng ".utf8)
+    private static let actoolMarker = Array("/actool ".utf8)
 
     func beginLog() {
         currentWorkingDir = NSHomeDirectory()
@@ -573,6 +583,19 @@ final class LogLineParser {
         if let offset = Self.find(Self.swiftDriverMarker, in: line) {
             let rest = UnsafeBufferPointer(rebasing: line[(offset + Self.swiftDriverMarker.count)...])
             handleSwiftDriver(CommandTokenizer.tokenize(bytes: rest))
+            return
+        }
+        // 资源 / 头文件的拷贝与编译：记录源文件 → 构建产物的位置
+        if line.count > 12, line.starts(with: Self.builtinCopyMarker) {
+            handleBuiltinCopy(CommandTokenizer.tokenize(bytes: line))
+            return
+        }
+        if Self.find(Self.copyPNGMarker, in: line) != nil {
+            handleCopyPNG(CommandTokenizer.tokenize(bytes: line))
+            return
+        }
+        if Self.find(Self.actoolMarker, in: line) != nil {
+            handleActool(CommandTokenizer.tokenize(bytes: line))
             return
         }
         // ibtool 编译 storyboard / xib 的命令
@@ -619,11 +642,71 @@ final class LogLineParser {
             moduleName: moduleName, platform: platform, target: target))
     }
 
+    /// 只记录构建产物目录下的目标，中间产物（Intermediates）不关心
+    private func recordDestination(source: String, destination: String) {
+        guard destination.contains("/Build/Products/") || destination.contains("/UninstalledProducts/"),
+              !source.contains("/DerivedData/"), !source.contains("/Build/Intermediates") else {
+            return
+        }
+        let key = ParsedCommands.canonicalPath(source)
+        if parsed.resourceDestinations[key] == nil {
+            parsed.resourceDestinations[key] = destination
+        }
+    }
+
+    /// builtin-copy [选项] <源> <目标>：目标可能是目录（拷进去、沿用文件名）或完整文件路径
+    private func handleBuiltinCopy(_ tokens: [String]) {
+        guard tokens.count >= 3, let first = tokens.first else {
+            return
+        }
+        if first == "builtin-copyStrings" || first.hasSuffix("/builtin-copyStrings") {
+            // builtin-copyStrings ... --outdir <目录> -- <源>
+            guard let outdir = BuildLog.valueForFlag("--outdir", in: tokens), let source = tokens.last else {
+                return
+            }
+            recordDestination(source: source, destination: (outdir as NSString).appendingPathComponent((source as NSString).lastPathComponent))
+            return
+        }
+        guard first == "builtin-copy" else {
+            return
+        }
+        let source = tokens[tokens.count - 2]
+        let destination = tokens[tokens.count - 1]
+        guard source.hasPrefix("/"), destination.hasPrefix("/") else {
+            return
+        }
+        // 目标已经是带同名文件的完整路径，或是目录：统一成"产物里的文件路径"
+        let name = (source as NSString).lastPathComponent
+        let final = (destination as NSString).lastPathComponent == name ? destination : (destination as NSString).appendingPathComponent(name)
+        recordDestination(source: source, destination: final)
+    }
+
+    /// copypng [选项] <源> <目标>
+    private func handleCopyPNG(_ tokens: [String]) {
+        guard tokens.count >= 3, tokens[0].hasSuffix("/copypng") else {
+            return
+        }
+        recordDestination(source: tokens[tokens.count - 2], destination: tokens[tokens.count - 1])
+    }
+
+    /// actool <xcassets> --compile <bundle 目录> ...
+    private func handleActool(_ tokens: [String]) {
+        guard tokens.count >= 3, tokens[0].hasSuffix("/actool"),
+              let catalog = tokens.dropFirst().first(where: { $0.hasSuffix(".xcassets") }),
+              let output = BuildLog.valueForFlag("--compile", in: tokens) else {
+            return
+        }
+        recordDestination(source: catalog, destination: output)
+    }
+
     private func handleIBTool(_ tokens: [String]) {
         guard let executable = tokens.first, executable.hasSuffix("/ibtool"),
               !tokens.contains("--link"),
               let source = tokens.last(where: { $0.hasSuffix(".storyboard") || $0.hasSuffix(".xib") }) else {
             return
+        }
+        if let compiled = BuildLog.valueForFlag("--compile", in: tokens) {
+            recordDestination(source: source, destination: compiled)
         }
         let key = ParsedCommands.canonicalPath(source)
         if parsed.ibtoolCommands[key] == nil {

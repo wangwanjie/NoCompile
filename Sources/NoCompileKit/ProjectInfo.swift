@@ -155,7 +155,11 @@ public final class HeaderDependencyIndex {
     private var built = false
     private let lock = NSLock()
 
-    private static let implementationExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx"]
+    private static let implementationExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx", "swift"]
+    /// 显式模块构建（Xcode 16+ 默认）下，源文件的 .d 里只列出所依赖模块的 .pcm，不列模块里的头文件；
+    /// 头文件列在模块自己的 .d 里。这里记录 头文件 → 模块、模块 → 依赖它的实现文件，两级查找
+    private var headerToModules: [String: [String]] = [:]
+    private var moduleToSources: [String: [Int32]] = [:]
 
     public init(derivedDataPath: String) {
         self.intermediates = "\(derivedDataPath)/Build/Intermediates.noindex"
@@ -178,14 +182,46 @@ public final class HeaderDependencyIndex {
         var ids = Set<Int32>()
         for key in Set([header, ParsedCommands.canonicalPath(header)]) {
             ids.formUnion(headerToSources[key] ?? [])
+            for module in headerToModules[key] ?? [] {
+                ids.formUnion(moduleToSources[module] ?? [])
+            }
         }
         let fm = FileManager.default
         return ids.map { sources[Int($0)] }.filter { fm.fileExists(atPath: $0) }.sorted()
     }
 
+    /// 构建产物目录里与某头文件同名的副本（framework 的 Headers 目录等）。
+    /// Xcode 把 framework 的公开头文件复制到构建产物里，使用方 `#import <Foo/Foo.h>` 读到的是副本，
+    /// 副本只在下次完整构建时才会更新，所以改了源头文件后要同步副本，使用方重编时才能看到改动
+    public func productCopies(ofHeaderNamed name: String) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if !built {
+            build()
+        }
+        return headerToSources.keys.filter {
+            ($0 as NSString).lastPathComponent == name
+                && ($0.contains("/Build/Products/") || $0.contains("/Intermediates.noindex/"))
+        }.sorted()
+    }
+
+    /// 被超过 threshold 个实现文件引用的头文件（公共头文件、PCH 引入的头文件等），不含构建产物里的副本
+    public func widelyUsedHeaders(threshold: Int) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if !built {
+            build()
+        }
+        return headerToSources.filter {
+            $0.value.count > threshold && !$0.key.contains("/DerivedData/") && !$0.key.contains("/Build/Products/")
+        }.map { $0.key }
+    }
+
     private func build() {
         let start = Date()
         headerToSources.removeAll()
+        headerToModules.removeAll()
+        moduleToSources.removeAll()
         sources.removeAll()
         var sourceIDs: [String: Int32] = [:]
         var canonical: [String: String] = [:]
@@ -193,14 +229,34 @@ public final class HeaderDependencyIndex {
         let url = URL(fileURLWithPath: intermediates)
         let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil,
                                                         options: [.skipsHiddenFiles, .skipsPackageDescendants])
+        var dFiles: [URL] = []
         while let item = enumerator?.nextObject() as? URL {
-            guard item.pathExtension == "d", let data = try? Data(contentsOf: item) else {
+            if item.pathExtension == "d" {
+                dFiles.append(item)
+            }
+        }
+        // 第一遍：显式模块的 .d（目标名是 moduledependenciestarget，依赖里是该模块的头文件）。
+        // 先处理它们，才能知道哪些 .pcm 值得在源文件的 .d 里记录
+        var knownModules = Set<String>()
+        for item in dFiles where item.path.contains("/ExplicitPrecompiledModules/") {
+            guard let data = try? Data(contentsOf: item) else {
+                continue
+            }
+            fileCount += 1
+            let module = item.deletingPathExtension().appendingPathExtension("pcm").path
+            for dep in Self.dependencies(in: data) where !Self.isSystemPath(dep) && !dep.hasSuffix(".pcm") && !dep.hasSuffix(".modulemap") {
+                headerToModules[ParsedCommands.canonicalPath(dep), default: []].append(module)
+                knownModules.insert(module)
+            }
+        }
+        for item in dFiles where !item.path.contains("/ExplicitPrecompiledModules/") {
+            guard let data = try? Data(contentsOf: item) else {
                 continue
             }
             fileCount += 1
             let deps = Self.dependencies(in: data)
             // 被编译的源文件：与 .d 同名的实现文件（Xcode 27 的 .d 首个依赖是 SDKSettings.json，不能直接取第一个），
-            // 没有同名的再取第一个实现文件；都没有（如显式模块的 .d）则跳过
+            // 没有同名的再取第一个实现文件；都没有则跳过
             let stem = item.deletingPathExtension().lastPathComponent
             let implementations = deps.filter {
                 Self.implementationExtensions.contains(($0 as NSString).pathExtension.lowercased())
@@ -218,7 +274,10 @@ public final class HeaderDependencyIndex {
                 sources.append(primary)
                 sourceIDs[primary] = id
             }
-            for dep in deps where dep != primary && !Self.isSystemPath(dep) {
+            for dep in deps where dep.hasSuffix(".pcm") && knownModules.contains(dep) {
+                moduleToSources[dep, default: []].append(id)
+            }
+            for dep in deps where dep != primary && !Self.isSystemPath(dep) && !Self.isImplementation(dep) {
                 // CocoaPods 的 Pods/Headers 下是指向 Pod 源码的符号链接，.d 里记录的是链接路径，
                 // 而文件监听给出的是真实路径：统一规范化后再建索引
                 let key: String
@@ -234,6 +293,10 @@ public final class HeaderDependencyIndex {
         built = true
         Diagnostics.shared.log("头文件索引", "扫描 \(fileCount) 个 .d 文件，\(sources.count) 个实现文件、\(headerToSources.count) 个头文件，"
             + "用时 \(String(format: "%.2f", Date().timeIntervalSince(start)))s")
+    }
+
+    private static func isImplementation(_ path: String) -> Bool {
+        return implementationExtensions.contains((path as NSString).pathExtension.lowercased())
     }
 
     /// SDK、工具链里的系统头文件不会被用户修改，不进索引以节省内存

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "A01",
+    "status": "PASS",
+    "seconds": 7.15,
+    "note": "",
+    "engineLog": "[00:28:43] 本批改动需重编 2 个文件：Scenarios__Swift__A01SwiftFreeFunctions.swift, A01SwiftFreeFunctions.swift\n[00:28:48] ❌ Scenarios__Swift__A01SwiftFreeFunctions.swift（iphonesimulator）：/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:8:6: error: invalid redeclaration of 'A01'\n/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:15:6: error: invalid redeclaration of 'a01Plain()'\n/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:19:6: error: invalid redeclaration of 'a01WithDefault(prefix:)'\n/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:31:6: error: invalid redeclaration of 'a01Variadic'\n/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:35:6: error: invalid redeclaration of 'a01Join'\n/Users/VanJay/Documents/Work/Private/NoCompile/Examples/NoCompileExample/E2E/out/backup/Scenarios__Swift__A01SwiftFreeFunctions.swift:37:9: error: thrown expression type 'any Error' cannot be converted to error type 'Never'\n[00:28:49] ⚡ A01SwiftFreeFunctions.swift → ExampleiOS（模拟器，com.vanjay.nocompile.example.ios）（编译 1.14s）\n[00:28:49] 本批完成：推送 1 个，失败 1 个\n⚠️  编译失败，详见日志\n[00:28:49] [ExampleiOS] A01SwiftFreeFunctions.swift 注入成功：ObjC 方法 0，Swift 槽位 0，函数重绑 5\n[00:28:49] [ExampleiOS] HomeViewController 已加载，未自动重建：退出该页面后重新进入即可看到改动\n"
+  },
+  {
+    "id": "B01",
+    "status": "FAIL",
+    "seconds": 60.01,
+    "note": "B01: 期望 '@@v2@@'×1，实际×0，输出「B01(@@v1@@) inst:priv」",
+    "engineLog": "[00:28:50] 本批改动需重编 2 个文件：Scenarios__ObjC__B01ObjCBasic.m, B01ObjCBasic.m\n[00:28:50] ❌ Scenarios__ObjC__B01ObjCBasic.m（iphonesimulator）：编译失败\n[00:28:50] ❌ B01ObjCBasic.m（iphonesimulator）：编译失败\n[00:28:50] 本批完成：推送 0 个，失败 2 个\n⚠️  编译失败，详见日志\n"
+  },
+  {
+    "id": "M01",
+    "status": "FAIL",
+    "seconds": 3.06,
+    "note": "M01 的 lines=(\\d+) 从 180 回退到 1（状态被重置）",
+    "engineLog": "[00:29:50] 本批改动需重编 2 个文件：Modules__ExCore__Private__ExLogger.m, ExLogger.m\n[00:29:50] ❌ Modules__ExCore__Private__ExLogger.m（iphonesimulator）：编译失败\n[00:29:52] ⚡ ExLogger.m → ExampleiOS（模拟器，com.vanjay.nocompile.example.ios）（编译 1.35s）\n[00:29:52] 本批完成：推送 1 个，失败 1 个\n⚠️  编译失败，详见日志\n[00:29:53] [ExampleiOS] ExLogger.m 注入成功：ObjC 方法 11，Swift 槽位 0，函数重绑 0\n[00:29:53] [ExampleiOS] HomeViewController 已加载，未自动重建：退出该页面后重新进入即可看到改动\n"
+  }
+]

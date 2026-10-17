@@ -16,6 +16,10 @@ public enum ResourceKind: String {
     case storyboard
     case nib
     case image
+    /// 其他原样拷贝进 bundle 的资源：json、plist、strings、音频、字体等
+    case file
+    /// Asset Catalog 里的颜色集
+    case colorset
 }
 
 /// 一个准备好下发的资源包
@@ -34,10 +38,15 @@ public struct ResourcePackage {
     public let images: [[String: Any]]
     /// 图片集是否声明为模板渲染
     public let isTemplate: Bool
+    /// 资源所属 bundle 在构建产物里的目录名，如 "ExKit.framework"、"ExampleiOS.app"、"Foo.bundle"；
+    /// 未能确定时形如 "module:Xxx"（按模块名找 bundle），nil 表示主 bundle
+    public var bundle: String? = nil
+    /// 颜色集的颜色（kind 为 colorset 时）：red / green / blue / alpha（0~1）
+    public var color: [String: Double]? = nil
 
     /// 下发给客户端的描述（不含文件内容）
     public var json: [String: Any] {
-        return [
+        var result: [String: Any] = [
             "kind": kind.rawValue,
             "source": source,
             "name": name,
@@ -45,6 +54,13 @@ public struct ResourcePackage {
             "images": images,
             "template": isTemplate,
         ]
+        if let bundle {
+            result["bundle"] = bundle
+        }
+        if let color {
+            result["color"] = color
+        }
+        return result
     }
 }
 
@@ -77,6 +93,9 @@ public final class ResourceCompiler {
         if let imageset = enclosingDirectory(of: file, withExtension: "imageset") {
             return imageset
         }
+        if let colorset = enclosingDirectory(of: file, withExtension: "colorset") {
+            return colorset
+        }
         let ext = (file as NSString).pathExtension.lowercased()
         if ext == "storyboard" || ext == "xib" {
             return file
@@ -89,6 +108,19 @@ public final class ResourceCompiler {
     public func prepare(file: String,
                         commands: ParsedCommands,
                         platform: Platform) -> ResourcePreparation {
+        let result = prepareCore(file: file, commands: commands, platform: platform)
+        guard case .ready(var package) = result else {
+            // 没有产出资源包：清掉暂存目录
+            try? FileManager.default.removeItem(atPath: "\(outputDirectory)/res_\(counter)")
+            return result
+        }
+        package.bundle = Self.bundleHint(for: file, kind: package.kind, commands: commands)
+        return .ready(package)
+    }
+
+    private func prepareCore(file: String,
+                             commands: ParsedCommands,
+                             platform: Platform) -> ResourcePreparation {
         counter += 1
         let root = "\(outputDirectory)/res_\(counter)"
         let fm = FileManager.default
@@ -100,15 +132,157 @@ public final class ResourceCompiler {
         case "storyboard", "xib":
             return compileInterface(file: file, root: root, commands: commands, platform: platform)
         default:
+            if Self.enclosingDirectory(of: file, withExtension: "colorset") != nil {
+                return prepareColorSet(file, root: root)
+            }
             if let imageset = Self.enclosingDirectory(of: file, withExtension: "imageset") {
                 return prepareImageSet(imageset, source: file, root: root, platform: platform)
             }
-            if file.contains(".xcassets/") || ext == "json" {
-                // App 图标、颜色等其他 Asset Catalog 条目：运行时无法替换
-                return .skipped("App 图标、颜色等 Asset Catalog 条目运行时无法替换，需重新运行 App")
+            if file.contains(".xcassets/") {
+                // App 图标等其他 Asset Catalog 条目：运行时无法替换
+                return .skipped("App 图标等 Asset Catalog 条目运行时无法替换，需重新运行 App")
             }
-            return prepareLooseImage(file, root: root)
+            if ["png", "jpg", "jpeg", "gif", "heic", "heif", "webp"].contains(ext) {
+                // 构建日志里没有这张图片的拷贝记录，说明它不是 App 的资源（文档配图等）。
+                // 旧缓存里没有任何拷贝记录时（还没解析过新日志）不做这个判断
+                if commands.resourceDestinations.isEmpty || Self.hasBuildRecord(for: file, commands: commands) {
+                    return prepareLooseImage(file, root: root)
+                }
+                return .skipped("")
+            }
+            return prepareDataFile(file, root: root, commands: commands)
         }
+    }
+
+    /// 构建日志里是否有这个文件的拷贝记录（没有记录说明它不是 App 的资源）
+    private static func hasBuildRecord(for file: String, commands: ParsedCommands) -> Bool {
+        return commands.resourceDestinations[ParsedCommands.canonicalPath(file)] != nil
+    }
+
+    // MARK: - 所属 bundle
+
+    private static let bundleExtensions: Set<String> = ["app", "framework", "bundle", "appex", "xctest"]
+
+    /// 路径（含自身）最内层的 bundle 目录名，如 ".../ExKit.framework/Headers/a.h" → "ExKit.framework"
+    static func productBundleName(containing path: String) -> String? {
+        var current = path
+        while current.count > 1 {
+            if bundleExtensions.contains((current as NSString).pathExtension) {
+                return (current as NSString).lastPathComponent
+            }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// 资源所属 bundle：优先用构建日志里的拷贝 / 编译目标，storyboard 退而求其次用 ibtool 的 --module
+    static func bundleHint(for file: String, kind: ResourceKind, commands: ParsedCommands) -> String? {
+        let canonical = ParsedCommands.canonicalPath(file)
+        if let destination = commands.resourceDestinations[canonical], let bundle = productBundleName(containing: destination) {
+            return bundle
+        }
+        // 图片集 / 颜色集：看所在 .xcassets 的编译输出目录
+        var directory = (canonical as NSString).deletingLastPathComponent
+        while directory.count > 1 {
+            if directory.hasSuffix(".xcassets") {
+                if let destination = commands.resourceDestinations[directory], let bundle = productBundleName(containing: destination) {
+                    return bundle
+                }
+                break
+            }
+            directory = (directory as NSString).deletingLastPathComponent
+        }
+        // 散落图片的其他倍率文件：同目录下兄弟文件的目标所在 bundle
+        if kind == .image {
+            let folder = (canonical as NSString).deletingLastPathComponent
+            let parsed = parseImageFileName((canonical as NSString).lastPathComponent)
+            for (source, destination) in commands.resourceDestinations
+            where (source as NSString).deletingLastPathComponent == folder
+                && parseImageFileName((source as NSString).lastPathComponent).name == parsed.name {
+                if let bundle = productBundleName(containing: destination) {
+                    return bundle
+                }
+            }
+        }
+        if let module = commands.ibtoolCommand(for: file)?.moduleName {
+            return "module:\(module)"
+        }
+        return nil
+    }
+
+    // MARK: - 原样拷贝的资源 / 颜色集
+
+    /// json、plist、strings、音频、字体等：必须是构建日志里记录过的资源拷贝，才按它在 bundle 里的相对路径下发
+    private func prepareDataFile(_ file: String, root: String, commands: ParsedCommands) -> ResourcePreparation {
+        guard let destination = commands.resourceDestinations[ParsedCommands.canonicalPath(file)],
+              let bundle = Self.productBundleName(containing: destination) else {
+            // 不是 App 的资源（构建配置、脚本数据等）：静默忽略
+            return .skipped("")
+        }
+        guard let relative = Self.pathInsideBundle(destination) else {
+            return .skipped("")
+        }
+        let target = "\(root)/\(relative)"
+        try? FileManager.default.createDirectory(atPath: (target as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        guard Self.copyBytes(from: file, to: target) else {
+            return .failed("无法读取资源文件：\(file)")
+        }
+        _ = bundle
+        return .ready(ResourcePackage(kind: .file, source: file, name: (file as NSString).lastPathComponent, rootDirectory: root,
+                                      items: [relative], files: Self.files(under: root), images: [], isTemplate: false))
+    }
+
+    /// 目标路径相对其 bundle 根目录的部分
+    static func pathInsideBundle(_ path: String) -> String? {
+        var current = path
+        var components: [String] = []
+        while current.count > 1 {
+            if bundleExtensions.contains((current as NSString).pathExtension) {
+                return components.reversed().joined(separator: "/")
+            }
+            components.append((current as NSString).lastPathComponent)
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// Asset Catalog 颜色集：读取通用（无外观变体）的颜色分量，下发给客户端构造 UIColor / NSColor
+    private func prepareColorSet(_ file: String, root: String) -> ResourcePreparation {
+        guard let colorset = Self.enclosingDirectory(of: file, withExtension: "colorset"),
+              let data = FileManager.default.contents(atPath: "\(colorset)/Contents.json"),
+              let contents = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = contents["colors"] as? [[String: Any]] else {
+            return .failed("无法解析颜色集的 Contents.json")
+        }
+        let name = Self.assetName(ofImageSet: colorset)
+        // 暗色 / 高对比度等外观变体运行时无法替换，只取通用的那一项
+        guard let entry = entries.first(where: { $0["appearances"] == nil }),
+              let color = entry["color"] as? [String: Any],
+              let components = color["components"] as? [String: Any] else {
+            return .skipped("颜色集 \(name) 没有可热重载的通用颜色（外观变体需重新运行 App）")
+        }
+        func component(_ key: String) -> Double? {
+            if let text = components[key] as? String {
+                if text.lowercased().hasPrefix("0x"), let value = UInt64(text.dropFirst(2), radix: 16) {
+                    return Double(value) / 255
+                }
+                return Double(text)
+            }
+            return components[key] as? Double
+        }
+        var values: [String: Double] = [:]
+        if let white = component("white") {
+            values = ["red": white, "green": white, "blue": white]
+        } else if let red = component("red"), let green = component("green"), let blue = component("blue") {
+            values = ["red": red, "green": green, "blue": blue]
+        } else {
+            return .failed("颜色集 \(name) 的颜色分量无法识别")
+        }
+        values["alpha"] = component("alpha") ?? 1
+        // 色彩空间：0 = sRGB（含灰度），1 = Display P3
+        values["p3"] = (color["color-space"] as? String) == "display-p3" ? 1 : 0
+        return .ready(ResourcePackage(kind: .colorset, source: file, name: name, rootDirectory: root,
+                                      items: [], files: [], images: [], isTemplate: false, color: values))
     }
 
     // MARK: - storyboard / xib
@@ -265,7 +439,7 @@ public final class ResourceCompiler {
             let item = prefix + sibling
             let destination = "\(root)/\(item)"
             try? fm.createDirectory(atPath: (destination as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-            guard (try? fm.copyItem(atPath: "\(directory)/\(sibling)", toPath: destination)) != nil else {
+            guard Self.copyBytes(from: "\(directory)/\(sibling)", to: destination) else {
                 continue
             }
             items.append(item)
@@ -309,7 +483,7 @@ public final class ResourceCompiler {
             let item = "NoCompileAssets/\(name)/\(filename)"
             let destination = "\(root)/\(item)"
             try? fm.createDirectory(atPath: (destination as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-            guard (try? fm.copyItem(atPath: "\(imageset)/\(filename)", toPath: destination)) != nil else {
+            guard Self.copyBytes(from: "\(imageset)/\(filename)", to: destination) else {
                 continue
             }
             images.append(["path": item, "scale": scale, "idiom": idiom])
@@ -358,6 +532,15 @@ public final class ResourceCompiler {
     }
 
     // MARK: - 工具
+
+    /// 按字节拷贝源文件。不用 FileManager.copyItem：APFS 上它会克隆文件，源文件随之收到事件，
+    /// 被文件监听当成改动，形成"下发资源 → 克隆 → 再下发"的循环
+    static func copyBytes(from source: String, to destination: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: source) else {
+            return false
+        }
+        return FileManager.default.createFile(atPath: destination, contents: data)
+    }
 
     /// 文件直接位于 xx.lproj 目录下时，返回 "xx.lproj/"
     static func localizedPrefix(of file: String) -> String {

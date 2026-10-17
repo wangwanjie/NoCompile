@@ -66,6 +66,8 @@ final class HomeViewController: UIViewController {
         stack.addArrangedSubview(makeImageRow())
         stack.addArrangedSubview(makeButton(title: "打开 Storyboard 页面", action: #selector(openStoryboard)))
         stack.addArrangedSubview(makeButton(title: "打开 Xib 页面", action: #selector(openXib)))
+        stack.addArrangedSubview(makeButton(title: "场景清单（\(ScenarioCatalog.all.count) 个）", action: #selector(openScenarios)))
+        stack.addArrangedSubview(makeButton(title: "打开 SwiftUI 页面", action: #selector(openSwiftUI)))
     }
 
     // MARK: - 组件
@@ -206,6 +208,14 @@ final class HomeViewController: UIViewController {
         if let controller = storyboard.instantiateInitialViewController() {
             navigationController?.pushViewController(controller, animated: true)
         }
+    }
+
+    @objc private func openScenarios() {
+        navigationController?.pushViewController(ScenarioListViewController(), animated: true)
+    }
+
+    @objc private func openSwiftUI() {
+        navigationController?.pushViewController(U07.makeController(), animated: true)
     }
 
     @objc private func openXib() {

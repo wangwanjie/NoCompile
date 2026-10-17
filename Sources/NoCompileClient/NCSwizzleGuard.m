@@ -13,17 +13,33 @@
 #include <objc/runtime.h>
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
+#include <limits.h>
+#include <string.h>
 #include <stdatomic.h>
 
 /// 保护区间的重入计数。>0 时拦截 swizzle
 static _Atomic(int) gGuardDepth = 0;
+/// 正在加载的注入镜像路径（保护区间内有效）
+static char gGuardPath[PATH_MAX];
+
+/// 实现地址是否位于正在加载的注入镜像内
+static bool NCIMPInGuardedImage(IMP imp) {
+    Dl_info info;
+    if (!imp || !dladdr((const void *)imp, &info) || !info.dli_fname) {
+        return false;
+    }
+    return strcmp(info.dli_fname, gGuardPath) == 0;
+}
 
 /// 替换版 method_exchangeImplementations：保护期内交换一次后，把结果固定为"新实现"，
 /// 等价于 +load 中的交换不再改变已存在的 hook 链
 static void nc_method_exchangeImplementations(Method m1, Method m2) {
     if (atomic_load(&gGuardDepth) > 0) {
-        // 新镜像的 +load 重复交换：已在首次启动时交换过，这里跳过，保持 hook 链不变
-        return;
+        // 两个实现都在新镜像里：是新镜像里那份类对象对自己的方法做 swizzle，不碰旧类，照常交换；
+        // 否则是 +load 去 hook 旧类 / 系统类，首次启动时已经交换过，这里跳过，保持 hook 链不变
+        if (!(NCIMPInGuardedImage(method_getImplementation(m1)) && NCIMPInGuardedImage(method_getImplementation(m2)))) {
+            return;
+        }
     }
     method_exchangeImplementations(m1, m2);
 }
@@ -55,7 +71,10 @@ void NCSwizzleGuardInstall(void) {
     });
 }
 
-void NCSwizzleGuardBegin(void) {
+void NCSwizzleGuardBegin(const char *path) {
+    if (path) {
+        strlcpy(gGuardPath, path, sizeof(gGuardPath));
+    }
     atomic_fetch_add(&gGuardDepth, 1);
 }
 
