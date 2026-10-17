@@ -12,6 +12,8 @@
 
 </div>
 
+<img src="Docs/images/Screenshot.png" alt="NoCompile 控制台与 Mac 示例 App：保存源文件后，约 1.5 秒即在运行中的 App 里生效">
+
 ---
 
 ## 这是什么
@@ -119,6 +121,17 @@ nocompile selftest /path/to/YourApp.xcworkspace macosx /path/to/SomeFile.swift
 
 第三个参数可以是 `macosx` / `iphonesimulator` / `iphoneos`。
 
+### 试一试：示例工程
+
+[`Examples/NoCompileExample`](Examples/NoCompileExample) 是仿大型工程的 workspace：主 App（iOS / macOS）加动态 framework、静态库、本地 SPM 包，以及约 120 个覆盖 Swift / ObjC / C++ / 头文件 / 跨模块 / 资源 / 结构变化的场景，另有 CocoaPods 版本。同一份源码配有端到端自测脚本，改工具后可一键回归：
+
+```bash
+cd Examples/NoCompileExample
+python3 E2E/run_e2e.py --clean
+```
+
+运行步骤与场景清单见 [示例工程说明](Examples/NoCompileExample/README.md)。
+
 ## 使用约束
 
 热重载的主体是替换**函数体**，仅改方法体（不动方法/属性数量）即时生效。增删方法或存储属性改变了内存布局，这类改动不再拒绝注入、也不会崩溃，按下面的规则处理：
@@ -150,7 +163,7 @@ Sources/
   NoCompileKit/      Mac 端引擎（Swift）
   nocompile/         命令行工具
 App/                 NoCompile.app（Xcode 工程由 project.yml 生成，集成 Sparkle）
-Examples/            iOS / macOS 示例工程
+Examples/            iOS / macOS 示例工程（workspace 多模块 + 端到端自测）
 Scripts/             构建、图标、打包、公证、发布脚本
 Docs/                架构、接入指南、发布说明
 ```
