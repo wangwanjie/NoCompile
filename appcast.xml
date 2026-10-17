@@ -34,7 +34,7 @@
 &lt;h3&gt;优化&lt;/h3&gt;
 &lt;ul&gt;&lt;li&gt;大型工程的构建日志改为流式解析并增量合并：1.1GB 的日志从 217 秒 / 4.5GB 内存降到约 8 秒 / 不到 100MB，修复打开大型工程后 Mac 端长时间无响应、转菊花&lt;/li&gt;&lt;li&gt;头文件改动改用依赖索引查找引用方，被大量文件引用的公共头文件只重编同名实现文件&lt;/li&gt;&lt;li&gt;本地 Pod / 子模块 git 拉取、合并后能正确触发热重载：一次 git 操作合并为一批处理，并监听 Podfile.lock 中工程目录之外的本地 Pod&lt;/li&gt;&lt;li&gt;App 内状态浮层支持多行，长提示不再被截断&lt;/li&gt;&lt;/ul&gt;
 &lt;h3&gt;修复&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;存在同名工程（如两份 kugou.xcworkspace）时可能用错另一份工程的构建日志&lt;/li&gt;&lt;li&gt;切换工程、重启监听时可能卡住主线程&lt;/li&gt;&lt;li&gt;日志达到上限后「跟随最新」失效&lt;/li&gt;&lt;/ul&gt;
+&lt;ul&gt;&lt;li&gt;存在同名工程（如两份 Example.xcworkspace）时可能用错另一份工程的构建日志&lt;/li&gt;&lt;li&gt;切换工程、重启监听时可能卡住主线程&lt;/li&gt;&lt;li&gt;日志达到上限后「跟随最新」失效&lt;/li&gt;&lt;/ul&gt;
 &lt;p&gt;&amp;gt; 升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.2。&lt;/p&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
         </item>

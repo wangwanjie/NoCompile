@@ -307,7 +307,7 @@ public struct BuildLog {
             .map { "\(root)/\($0)" }
             .filter { logsDir(in: $0) != nil }
             .sorted { modificationDate(of: $0) > modificationDate(of: $1) }
-        // 不同目录下的同名工程（如两份 kugou.xcworkspace）会各有一个 "kugou-xxx" 目录：
+        // 不同目录下的同名工程（如两份 Example.xcworkspace）会各有一个 "Example-xxx" 目录：
         // 优先取 info.plist 中 WorkspacePath 与当前工程一致的，避免用错另一份工程的构建日志
         // 登记了其他工程路径的目录一律排除；没有登记（info.plist 缺失）的作为退路
         let target = ParsedCommands.canonicalPath(projectPath)

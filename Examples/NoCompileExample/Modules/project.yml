@@ -1,4 +1,4 @@
-# 仿 KuGou 的 Pods.xcodeproj：本地模块放在独立工程里，与主工程一起放进 NoCompileExample.xcworkspace
+# 仿 Pods.xcodeproj：本地模块放在独立工程里，与主工程一起放进 NoCompileExample.xcworkspace
 name: Modules
 options:
   bundleIdPrefix: com.vanjay.nocompile

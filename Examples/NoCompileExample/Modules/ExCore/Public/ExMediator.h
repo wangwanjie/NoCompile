@@ -1,6 +1,6 @@
 //
 //  ExMediator.h
-//  Target-Action 组件化中介者（仿 KuGou 的 KGTarget_* / CTMediator 模式）：
+//  Target-Action 组件化中介者（仿 CTMediator 模式）：
 //  运行时用 NSClassFromString + performSelector 调用各业务模块暴露的 Target_xxx 类
 //
 

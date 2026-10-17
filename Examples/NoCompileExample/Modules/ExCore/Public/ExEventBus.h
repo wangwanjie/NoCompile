@@ -8,7 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 FOUNDATION_EXPORT NSNotificationName const ExEventBusDidFire;
 
-/// 通知 + 回调 + 弱引用代理，仿 KuGou 的事件总线
+/// 通知 + 回调 + 弱引用代理的事件总线
 @interface ExEventBus : NSObject
 
 @property (nonatomic, copy, readonly) NSString *lastEvent;

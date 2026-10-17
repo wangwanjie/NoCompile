@@ -11,7 +11,7 @@ packages:
   # 本地 SPM 包（纯 Swift），静态链入 App
   ExNetwork:
     path: Modules/ExNetwork
-# 仿 KuGou 的 Pods.xcodeproj：本地模块在独立工程里，和主工程一起放在 NoCompileExample.xcworkspace
+# 仿 Pods.xcodeproj：本地模块在独立工程里，和主工程一起放在 NoCompileExample.xcworkspace
 projectReferences:
   Modules:
     path: Modules/Modules.xcodeproj
@@ -67,7 +67,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.example.ios
         TARGETED_DEVICE_FAMILY: "1,2"
-        # 仿 KuGou 的 PCH：场景 H04
+        # 仿大型工程的 PCH：场景 H04
         GCC_PREFIX_HEADER: Scenarios/Header/ExampleApp-Prefix.pch
         GCC_PRECOMPILE_PREFIX_HEADER: YES
         # 静态库 ExPlayer 的公开头文件（桥接头引用）

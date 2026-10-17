@@ -11,7 +11,7 @@
 
 ## 仿大型工程的结构与端到端自测
 
-示例仿照 KuGou 的组织方式：一个 workspace（`NoCompileExample.xcworkspace`）包含主工程和 `Modules/Modules.xcodeproj`（相当于 Pods.xcodeproj）。
+示例的组织方式：一个 workspace（`NoCompileExample.xcworkspace`）包含主工程和 `Modules/Modules.xcodeproj`（相当于 Pods.xcodeproj）。
 
 | 模块 | 形态 | 内容 |
 |---|---|---|

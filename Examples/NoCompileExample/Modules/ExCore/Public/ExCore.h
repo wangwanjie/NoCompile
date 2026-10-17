@@ -1,6 +1,6 @@
 //
 //  ExCore.h
-//  ExCore 伞头文件（仿 KuGou 的 KGSafeKit / KGCommontools：ObjC + C 的基础库，以动态 framework 形式集成）
+//  ExCore 伞头文件（仿大型工程常见的 ObjC + C 的基础库，以动态 framework 形式集成）
 //
 
 #import <Foundation/Foundation.h>
