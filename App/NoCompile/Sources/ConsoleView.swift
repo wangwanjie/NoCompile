@@ -210,16 +210,16 @@ private struct Sidebar: View {
                     }
                 }
 
-                SectionHeader(title: "最近注入", count: model.records.count)
+                SectionHeader(title: "最近注入", count: model.records.count, clearHelp: "清除全部注入记录") {
+                    model.clearRecords()
+                }
                 if model.records.isEmpty {
                     EmptyHint(symbol: "bolt.badge.clock",
                               title: "还没有注入记录",
                               detail: "修改源文件并保存（⌘S），这里会显示每次热重载的结果。")
                 } else {
                     StatsRow(model: model)
-                    ForEach(model.records.prefix(50)) { record in
-                        RecordRow(record: record, time: model.timeString(record.date))
-                    }
+                    RecordList(model: model)
                 }
             }
             .padding(16)
@@ -231,6 +231,9 @@ private struct Sidebar: View {
 private struct SectionHeader: View {
     let title: String
     let count: Int
+    /// 清除按钮的提示；为 nil 时不显示清除按钮
+    var clearHelp: String? = nil
+    var onClear: (() -> Void)? = nil
 
     var body: some View {
         HStack {
@@ -239,6 +242,17 @@ private struct SectionHeader: View {
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
             Spacer()
+            if count > 0, let onClear {
+                Button {
+                    onClear()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(.secondary)
+                .help(clearHelp ?? "清除")
+            }
             if count > 0 {
                 Text("\(count)")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -380,6 +394,7 @@ private struct StatChip: View {
 private struct RecordRow: View {
     let record: InjectionRecord
     let time: String
+    var isSelected = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -416,7 +431,9 @@ private struct RecordRow: View {
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(record.success ? Color.clear : Theme.failure.opacity(0.06)))
+            .fill(isSelected ? Theme.accent.opacity(0.18) : (record.success ? Color.clear : Theme.failure.opacity(0.06))))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .strokeBorder(Theme.accent.opacity(isSelected ? 0.6 : 0), lineWidth: 1))
         .help(String(record.message.prefix(1000)))
     }
 
@@ -433,6 +450,319 @@ private struct RecordRow: View {
             parts.append("退出重进 \(record.pending.joined(separator: "、")) 即可看到")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+// MARK: - 注入记录列表（选中 / 空格预览 / 双击详情）
+
+private extension InjectionRecord {
+    /// 记录的完整文本，用于复制与详情展示
+    var summaryText: String {
+        var lines = ["\(success ? "成功" : "失败")  \(file)",
+                     "时间：\(Diagnostics.shared.timestamp(date))",
+                     "目标：\(clientName)（\(platformTitle)）"]
+        if duration > 0 {
+            lines.append(String(format: "耗时：%.2fs", duration))
+        }
+        if !refreshed.isEmpty {
+            lines.append("已刷新：\(refreshed.joined(separator: "、"))")
+        }
+        if !pending.isEmpty {
+            lines.append("待退出重进：\(pending.joined(separator: "、"))")
+        }
+        if !message.isEmpty {
+            lines.append("")
+            lines.append(message)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// 保存键盘事件接收视图的弱引用，便于点击行时把焦点交给它
+private final class RecordKeyFocus {
+    weak var view: RecordKeyView?
+
+    func claim() {
+        guard let view else {
+            return
+        }
+        view.window?.makeFirstResponder(view)
+    }
+}
+
+/// 接收列表键盘事件的视图：空格预览、方向键切换、回车详情、删除、⌘C 复制
+private final class RecordKeyView: NSView {
+    var onKey: ((NSEvent) -> Bool)?
+    var onCopy: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true {
+            super.keyDown(with: event)
+        }
+    }
+
+    /// 编辑菜单的“复制”沿响应链到达这里
+    @objc func copy(_ sender: Any?) {
+        onCopy?()
+    }
+}
+
+private struct RecordKeyCatcher: NSViewRepresentable {
+    let focus: RecordKeyFocus
+    let onKey: (NSEvent) -> Bool
+    let onCopy: () -> Void
+
+    func makeNSView(context: Context) -> RecordKeyView {
+        let view = RecordKeyView()
+        focus.view = view
+        return view
+    }
+
+    func updateNSView(_ nsView: RecordKeyView, context: Context) {
+        nsView.onKey = onKey
+        nsView.onCopy = onCopy
+    }
+}
+
+private struct RecordList: View {
+    @ObservedObject var model: AppModel
+    @State private var selectedID: UUID?
+    /// 正在空格预览（弹出气泡）的记录
+    @State private var previewID: UUID?
+    /// 双击打开详情的记录
+    @State private var detailRecord: InjectionRecord?
+    @State private var focus = RecordKeyFocus()
+
+    private var records: [InjectionRecord] {
+        return Array(model.records.prefix(50))
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(records) { record in
+                RecordRow(record: record, time: model.timeString(record.date), isSelected: record.id == selectedID)
+                    .contentShape(Rectangle())
+                    // 双击手势要先于单击声明，否则双击会被单击抢先处理
+                    .onTapGesture(count: 2) {
+                        select(record)
+                        openDetail(record)
+                    }
+                    .onTapGesture {
+                        select(record)
+                    }
+                    .popover(isPresented: previewBinding(for: record.id), arrowEdge: .trailing) {
+                        RecordDetailView(record: record, isPreview: true, onClose: nil)
+                    }
+                    .contextMenu {
+                        Button("预览") {
+                            select(record)
+                            previewID = record.id
+                        }
+                        Button("查看详情") {
+                            select(record)
+                            openDetail(record)
+                        }
+                        Button("复制") {
+                            copy(record)
+                        }
+                        Divider()
+                        Button("删除此记录") {
+                            remove(record)
+                        }
+                    }
+            }
+        }
+        .background(RecordKeyCatcher(focus: focus, onKey: handleKey, onCopy: copySelected))
+        .sheet(item: $detailRecord) { record in
+            RecordDetailView(record: record, isPreview: false) {
+                detailRecord = nil
+            }
+        }
+    }
+
+    private func previewBinding(for id: UUID) -> Binding<Bool> {
+        return Binding(get: { previewID == id }, set: { shown in
+            if !shown && previewID == id {
+                previewID = nil
+            }
+        })
+    }
+
+    private func select(_ record: InjectionRecord) {
+        selectedID = record.id
+        // 点击后由列表接管键盘，空格 / 方向键才会生效
+        focus.claim()
+    }
+
+    private func openDetail(_ record: InjectionRecord) {
+        previewID = nil
+        detailRecord = record
+    }
+
+    private func copy(_ record: InjectionRecord) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(record.summaryText, forType: .string)
+    }
+
+    private func copySelected() {
+        if let record = records.first(where: { $0.id == selectedID }) {
+            copy(record)
+        }
+    }
+
+    private func remove(_ record: InjectionRecord) {
+        if previewID == record.id {
+            previewID = nil
+        }
+        if selectedID == record.id {
+            selectedID = nil
+        }
+        model.removeRecord(id: record.id)
+    }
+
+    /// 移动选中项；预览中则同步切换预览（类似 Finder 的快速查看）
+    private func moveSelection(by offset: Int) {
+        guard !records.isEmpty else {
+            return
+        }
+        var index = offset > 0 ? 0 : records.count - 1
+        if let current = records.firstIndex(where: { $0.id == selectedID }) {
+            index = min(max(current + offset, 0), records.count - 1)
+        }
+        selectedID = records[index].id
+        if previewID != nil {
+            previewID = selectedID
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.intersection([.command, .option, .control]).isEmpty else {
+            return false
+        }
+        let selected = records.first(where: { $0.id == selectedID })
+        switch event.keyCode {
+        case 49: // 空格：预览 / 关闭预览
+            guard let selected else {
+                return true
+            }
+            previewID = previewID == selected.id ? nil : selected.id
+            return true
+        case 53: // Esc：关闭预览
+            guard previewID != nil else {
+                return false
+            }
+            previewID = nil
+            return true
+        case 36, 76: // 回车：查看详情
+            if let selected {
+                openDetail(selected)
+            }
+            return true
+        case 125: // 下
+            moveSelection(by: 1)
+            return true
+        case 126: // 上
+            moveSelection(by: -1)
+            return true
+        case 51, 117: // 删除
+            if let selected {
+                remove(selected)
+            }
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// 注入记录详情：预览气泡与详情弹窗共用
+private struct RecordDetailView: View {
+    let record: InjectionRecord
+    let isPreview: Bool
+    let onClose: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: record.success ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(record.success ? Theme.success : Theme.failure)
+                Text(record.file)
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+                Text(record.success ? "成功" : "失败")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill((record.success ? Theme.success : Theme.failure).opacity(0.14)))
+                    .foregroundColor(record.success ? Theme.success : Theme.failure)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                field("时间", Diagnostics.shared.timestamp(record.date))
+                field("目标", "\(record.clientName)（\(record.platformTitle)）")
+                if record.duration > 0 {
+                    field("耗时", String(format: "%.2fs", record.duration))
+                }
+                if !record.refreshed.isEmpty {
+                    field("已刷新", record.refreshed.joined(separator: "、"))
+                }
+                if !record.pending.isEmpty {
+                    field("待重进", record.pending.joined(separator: "、"))
+                }
+            }
+
+            if !record.message.isEmpty {
+                ScrollView {
+                    Text(record.message)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(record.success ? .primary : Theme.failure)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: isPreview ? 160 : .infinity)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+            } else if !isPreview {
+                Spacer(minLength: 0)
+            }
+
+            if !isPreview {
+                HStack {
+                    Button("复制") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(record.summaryText, forType: .string)
+                    }
+                    Spacer()
+                    Button("关闭") {
+                        onClose?()
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: isPreview ? 360 : 560, height: isPreview ? nil : 420)
+    }
+
+    private func field(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 44, alignment: .trailing)
+            Text(value)
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -458,6 +788,12 @@ private struct LogConsole: View {
     @State private var filter: LogFilter = .all
     @State private var search = ""
     @State private var followTail = true
+    /// 日志字号，⌘+ / ⌘- 缩放并记住
+    @AppStorage("logFontSize") private var logFontSize: Double = 12
+    @FocusState private var searchFocused: Bool
+
+    private static let minFontSize: Double = 8
+    private static let maxFontSize: Double = 32
 
     private func filteredLogs() -> [LogLine] {
         if filter == .all && search.isEmpty {
@@ -485,8 +821,9 @@ private struct LogConsole: View {
                 HStack(spacing: 4) {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.secondary)
-                    TextField("搜索日志", text: $search)
+                    TextField("搜索日志（⌘F）", text: $search)
                         .textFieldStyle(.plain)
+                        .focused($searchFocused)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -534,56 +871,251 @@ private struct LogConsole: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(visibleLogs) { line in
-                                LogRow(line: line, time: model.timeString(line.date))
-                                    .id(line.id)
-                            }
-                        }
-                        .padding(.vertical, 6)
-                    }
-                    // 按最后一行的标识判断：日志达到上限后条数不再变化，按条数判断会停止跟随
-                    .onChange(of: model.logs.last?.id) { _ in
-                        if followTail, let last = visibleLogs.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                    .onAppear {
-                        if let last = visibleLogs.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
+                // 用 NSTextView 承载全部日志，支持跨行拖选与复制
+                LogTextView(lines: visibleLogs, fontSize: CGFloat(logFontSize), followTail: followTail,
+                            timeString: { model.timeString($0) })
             }
         }
+        .background(ShortcutMonitor(handler: handleShortcut))
         .background(Color(nsColor: .textBackgroundColor))
     }
 }
 
-private struct LogRow: View {
-    let line: LogLine
-    let time: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(time)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.secondary.opacity(0.8))
-            Image(systemName: Theme.symbol(forLevel: line.level))
-                .font(.system(size: 10))
-                .foregroundColor(Theme.color(forLevel: line.level))
-                .frame(width: 12)
-            Text(line.text)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(line.level >= 3 ? Theme.failure : (line.level == 2 ? Theme.warning : .primary))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+/// 日志快捷键：⌘+ / ⌘- 缩放字号，⌘F 聚焦搜索框
+extension LogConsole {
+    fileprivate func handleShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+        guard flags.contains(.command), flags.isDisjoint(with: [.option, .control]) else {
+            return false
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 3)
-        .background(line.level >= 3 ? Theme.failure.opacity(0.06) : Color.clear)
+        switch event.charactersIgnoringModifiers {
+        case "=", "+":
+            zoomLog(by: 1)
+            return true
+        case "-", "_":
+            zoomLog(by: -1)
+            return true
+        case "f" where !flags.contains(.shift):
+            searchFocused = true
+            // 已在输入框内时再次 ⌘F，全选便于直接替换关键字
+            DispatchQueue.main.async {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    fileprivate func zoomLog(by step: Double) {
+        logFontSize = min(max(logFontSize + step, Self.minFontSize), Self.maxFontSize)
+    }
+}
+
+/// 在所属窗口内监听键盘快捷键（独立于焦点所在控件）
+private struct ShortcutMonitor: NSViewRepresentable {
+    let handler: (NSEvent) -> Bool
+
+    func makeNSView(context: Context) -> ShortcutMonitorView {
+        let view = ShortcutMonitorView()
+        view.handler = handler
+        return view
+    }
+
+    func updateNSView(_ nsView: ShortcutMonitorView, context: Context) {
+        nsView.handler = handler
+    }
+}
+
+private final class ShortcutMonitorView: NSView {
+    var handler: ((NSEvent) -> Bool)?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removeMonitor()
+        guard window != nil else {
+            return
+        }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // 只处理本视图所在窗口的按键，返回 nil 表示已消费
+            guard let self, event.window === self.window, self.handler?(event) == true else {
+                return event
+            }
+            return nil
+        }
+    }
+
+    private func removeMonitor() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    deinit {
+        removeMonitor()
+    }
+}
+
+/// 日志文本视图：整份日志放进一个 NSTextView，可跨行选择与复制。
+/// 日志追加 / 头部裁剪时增量更新文本，避免每次全量重排
+private struct LogTextView: NSViewRepresentable {
+    let lines: [LogLine]
+    let fontSize: CGFloat
+    let followTail: Bool
+    let timeString: (Date) -> String
+
+    func makeCoordinator() -> Coordinator {
+        return Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isRichText = true
+            textView.drawsBackground = true
+            textView.backgroundColor = .textBackgroundColor
+            textView.textContainerInset = NSSize(width: 10, height: 6)
+            textView.isAutomaticLinkDetectionEnabled = false
+            context.coordinator.textView = textView
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.update(lines: lines, fontSize: fontSize, followTail: followTail, timeString: timeString)
+    }
+
+    final class Coordinator {
+        weak var textView: NSTextView?
+        /// 已渲染的日志标识与每行的 UTF-16 长度（含换行），用于增量更新
+        private var renderedIDs: [UUID] = []
+        private var renderedLengths: [Int] = []
+        private var renderedFontSize: CGFloat = 0
+        private var wasFollowing = false
+
+        func update(lines: [LogLine], fontSize: CGFloat, followTail: Bool, timeString: @escaping (Date) -> String) {
+            guard let textView, let storage = textView.textStorage else {
+                return
+            }
+            let hasSelection = textView.selectedRange().length > 0
+            let builder = Builder(fontSize: fontSize, timeString: timeString)
+
+            // 判断能否复用已渲染内容：新列表 = 旧列表去掉头部若干行后再追加若干行
+            var dropCount = 0
+            var appendFrom = 0
+            var reusable = fontSize == renderedFontSize && !renderedIDs.isEmpty && !lines.isEmpty
+            if reusable {
+                if let start = renderedIDs.firstIndex(of: lines[0].id) {
+                    let overlap = renderedIDs.count - start
+                    if overlap <= lines.count && lines[overlap - 1].id == renderedIDs.last {
+                        dropCount = start
+                        appendFrom = overlap
+                    } else {
+                        reusable = false
+                    }
+                } else {
+                    reusable = false
+                }
+            }
+
+            var changed = true
+            if reusable {
+                if dropCount == 0 && appendFrom == lines.count {
+                    changed = false
+                } else {
+                    storage.beginEditing()
+                    if dropCount > 0 {
+                        let removeLength = renderedLengths.prefix(dropCount).reduce(0, +)
+                        storage.deleteCharacters(in: NSRange(location: 0, length: removeLength))
+                    }
+                    if appendFrom < lines.count {
+                        let appended = builder.build(lines[appendFrom...])
+                        storage.append(appended.text)
+                        renderedLengths.append(contentsOf: appended.lengths)
+                    }
+                    storage.endEditing()
+                    renderedLengths.removeFirst(dropCount)
+                }
+            } else {
+                let built = builder.build(lines[...])
+                storage.setAttributedString(built.text)
+                renderedLengths = built.lengths
+                renderedFontSize = fontSize
+            }
+            renderedIDs = lines.map { $0.id }
+
+            // 用户正在选择文本时不自动滚动，避免选区被拖走；整体重建或刚打开跟随时仍滚到底部
+            let justStartedFollowing = followTail && !wasFollowing
+            wasFollowing = followTail
+            if followTail && (changed && (!reusable || !hasSelection) || justStartedFollowing) {
+                textView.scrollToEndOfDocument(nil)
+            }
+        }
+    }
+
+    /// 把日志行排成富文本
+    private struct Builder {
+        let font: NSFont
+        let timeString: (Date) -> String
+        let hangingIndent: CGFloat
+        /// 时间 + 空格 + 图标 + 空格 的字符数，续行用同样数量的空格对齐
+        private static let prefixCount = 11
+
+        init(fontSize: CGFloat, timeString: @escaping (Date) -> String) {
+            font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            self.timeString = timeString
+            hangingIndent = font.maximumAdvancement.width * CGFloat(Builder.prefixCount)
+        }
+
+        func build(_ lines: ArraySlice<LogLine>) -> (text: NSAttributedString, lengths: [Int]) {
+            let result = NSMutableAttributedString()
+            var lengths: [Int] = []
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.headIndent = hangingIndent
+            paragraph.lineBreakMode = .byWordWrapping
+            let continuation = "\n" + String(repeating: " ", count: Builder.prefixCount)
+
+            for line in lines {
+                let textColor: NSColor
+                switch line.level {
+                case 3: textColor = NSColor(Theme.failure)
+                case 2: textColor = NSColor(Theme.warning)
+                default: textColor = .labelColor
+                }
+                var base: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+                if line.level >= 3 {
+                    base[.backgroundColor] = NSColor(Theme.failure).withAlphaComponent(0.06)
+                }
+
+                let piece = NSMutableAttributedString()
+                var timeAttrs = base
+                timeAttrs[.foregroundColor] = NSColor.secondaryLabelColor
+                piece.append(NSAttributedString(string: timeString(line.date) + " ", attributes: timeAttrs))
+                var symbolAttrs = base
+                symbolAttrs[.foregroundColor] = line.level == 0 ? NSColor.secondaryLabelColor : NSColor(Theme.color(forLevel: line.level))
+                piece.append(NSAttributedString(string: Builder.symbol(forLevel: line.level) + " ", attributes: symbolAttrs))
+                var textAttrs = base
+                textAttrs[.foregroundColor] = textColor
+                let body = line.text.replacingOccurrences(of: "\n", with: continuation)
+                piece.append(NSAttributedString(string: body + "\n", attributes: textAttrs))
+                lengths.append(piece.length)
+                result.append(piece)
+            }
+            return (result, lengths)
+        }
+
+        private static func symbol(forLevel level: Int) -> String {
+            switch level {
+            case 1: return "✓"
+            case 2: return "▲"
+            case 3: return "✕"
+            default: return "•"
+            }
+        }
     }
 }
 

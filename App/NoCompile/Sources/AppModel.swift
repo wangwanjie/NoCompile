@@ -150,6 +150,10 @@ final class AppModel: ObservableObject, EngineDelegate {
         records.removeAll()
     }
 
+    func removeRecord(id: UUID) {
+        records.removeAll { $0.id == id }
+    }
+
     /// 弹出面板选择工程
     func chooseProject() {
         let panel = NSOpenPanel()
