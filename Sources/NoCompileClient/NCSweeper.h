@@ -31,6 +31,9 @@ NS_ASSUME_NONNULL_BEGIN
                                          sourceFiles:(nullable NSArray<NSString *> *)sourceFiles
                                   pendingControllers:(NSArray<NSString *> * _Nullable * _Nullable)outPending;
 
+/// 判断类是否属于 App 自身（排除系统框架中的类）
++ (BOOL)isAppClass:(Class)cls;
+
 /// 资源更新后在主线程刷新界面，返回被刷新的视图控制器类名
 /// @param kind storyboard / nib / image
 /// @param name storyboard 名、nib 名或图片名。storyboard / nib 优先刷新由它加载的可见控制器，

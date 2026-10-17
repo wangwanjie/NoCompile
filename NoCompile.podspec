@@ -10,7 +10,7 @@
 Pod::Spec.new do |s|
   s.name         = 'NoCompile'
   # 与 App/project.yml 的 MARKETING_VERSION 保持一致，发布时打 v<版本号> 的 tag
-  s.version      = '0.2.2'
+  s.version      = '0.2.3'
   s.summary      = 'iOS / macOS 热重载客户端，支持 C、C++、Objective-C、Swift。'
   s.description  = <<-DESC
     NoCompile 只重新编译改动的文件并注入运行中的 App。本 Pod 是 App 进程内的客户端，
