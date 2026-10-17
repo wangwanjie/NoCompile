@@ -33,6 +33,14 @@ python3 E2E/run_e2e.py --only A01,B07    # 只跑指定场景
 python3 E2E/run_e2e.py --restore         # 脚本被强行终止后恢复被改动的源文件
 ```
 
+CocoaPods 版本（同一份源码，ExCore / ExKit / ExPlayer 改为本地 Pod，覆盖 `Pods/Headers`、`use_frameworks!`、资源 bundle）：
+
+```bash
+xcodegen generate --spec project-pods.yml
+RUBYOPT=-rlogger pod install     # 本机 Ruby 3.1 + activesupport 7.0 需要 -rlogger
+E2E_VARIANT=pods python3 E2E/run_e2e.py --clean
+```
+
 脚本会启动 App 与 nocompile，逐个场景改源码、等待注入，核对输出；结束后恢复所有改动的文件。结果为 PASS / FAIL / XFAIL（已知限制）/ CRASH。
 
 ## 运行步骤

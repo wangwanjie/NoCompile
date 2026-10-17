@@ -188,6 +188,15 @@ public final class ResourceCompiler {
                 if let destination = commands.resourceDestinations[directory], let bundle = productBundleName(containing: destination) {
                     return bundle
                 }
+                // 资源 bundle（CocoaPods 的 resource_bundles）里的 xcassets 编译到中间目录，日志里没有直接记录产物位置：
+                // 改看同一个源目录下其他资源文件被拷贝到了哪个 bundle
+                let folder = (directory as NSString).deletingLastPathComponent
+                for (source, destination) in commands.resourceDestinations
+                where (source as NSString).deletingLastPathComponent == folder && !source.hasSuffix(".xcassets") {
+                    if let bundle = productBundleName(containing: destination) {
+                        return bundle
+                    }
+                }
                 break
             }
             directory = (directory as NSString).deletingLastPathComponent

@@ -14,5 +14,9 @@
 // 场景工程新增
 #import "ScenarioObjC.h"
 #import "ScenarioHeader.h"
+#if __has_include(<ExPlayer/ExPlayerEngine.h>)
+#import <ExPlayer/ExPlayerEngine.h>
+#else
 #import "ExPlayerEngine.h"
+#endif
 #endif

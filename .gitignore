@@ -11,3 +11,8 @@ build/
 # 不提交：Carthage 会读取仓库里所有 xcodeproj，该工程依赖 Sparkle 包，解析超时会导致 carthage 失败
 App/NoCompile.xcodeproj/
 Carthage/
+
+# CocoaPods 版示例（pod install 生成）
+Examples/**/Pods/
+Examples/**/*.xcworkspace/xcuserdata/
+Examples/NoCompileExample/NoCompileExamplePods.xcworkspace/

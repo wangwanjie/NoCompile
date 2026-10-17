@@ -1,0 +1,26 @@
+# CocoaPods 版本的示例：与 xcodegen 版（NoCompileExample.xcworkspace）共用同一份源码，
+# 只是把 ExCore / ExKit / ExPlayer 换成本地 Pod，以覆盖 Pods/Headers 符号链接、use_frameworks!、资源 bundle 等真实场景。
+# 生成：xcodegen generate --spec project-pods.yml && RUBYOPT=-rlogger pod install
+platform :ios, '15.0'
+use_frameworks!
+project 'NoCompileExamplePods.xcodeproj'
+
+target 'ExamplePodsiOS' do
+  pod 'NoCompile', :path => '../..', :configurations => ['Debug']
+  pod 'ExCore', :path => 'Modules/ExCore'
+  pod 'ExKit', :path => 'Modules/ExKit'
+  pod 'ExPlayer', :path => 'Modules/ExPlayer'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      # 本地 Pod 的 Debug 配置也要 -interposable，framework 内部调用才能被重定向
+      if config.name == 'Debug'
+        config.build_settings['OTHER_LDFLAGS'] = '$(inherited) -Xlinker -interposable'
+        config.build_settings['SWIFT_COMPILATION_MODE'] = 'singlefile'
+      end
+    end
+  end
+end

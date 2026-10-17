@@ -28,8 +28,18 @@ ROOT = os.path.dirname(HERE)  # Examples/NoCompileExample
 sys.path.insert(0, HERE)
 import manifest  # noqa: E402
 
-BUNDLE_ID = "com.vanjay.nocompile.example.ios"
-WORKSPACE = os.path.join(ROOT, "NoCompileExample.xcworkspace")
+# E2E_VARIANT=pods：跑 CocoaPods 版本（NoCompileExamplePods.xcworkspace），源码与默认版本共用
+VARIANT = os.environ.get("E2E_VARIANT", "")
+if VARIANT == "pods":
+    BUNDLE_ID = "com.vanjay.nocompile.examplepods.ios"
+    WORKSPACE = os.path.join(ROOT, "NoCompileExamplePods.xcworkspace")
+    SCHEME = "ExamplePodsiOS"
+    APP_NAME = "ExamplePodsiOS.app"
+else:
+    BUNDLE_ID = "com.vanjay.nocompile.example.ios"
+    WORKSPACE = os.path.join(ROOT, "NoCompileExample.xcworkspace")
+    SCHEME = "ExampleiOS"
+    APP_NAME = "ExampleiOS.app"
 # 输出放在工程目录之外：NoCompile 会监听工程目录，备份文件放在里面会被当成改动
 OUT = os.environ.get("E2E_OUT", "/tmp/nocompile-e2e-out")
 PROBE_FILE = "/tmp/nocompile-e2e-probe.json"
@@ -48,10 +58,10 @@ class Sim:
         run(["xcrun", "simctl", "bootstatus", self.udid, "-b"], timeout=180)
 
     def app_path(self):
-        out = run(["xcodebuild", "-workspace", WORKSPACE, "-scheme", "ExampleiOS", "-configuration", "Debug",
+        out = run(["xcodebuild", "-workspace", WORKSPACE, "-scheme", SCHEME, "-configuration", "Debug",
                    "-destination", f"platform=iOS Simulator,id={self.udid}", "-showBuildSettings"]).stdout
         match = re.search(r"^\s*TARGET_BUILD_DIR = (.*)$", out, re.M)
-        return os.path.join(match.group(1), "ExampleiOS.app")
+        return os.path.join(match.group(1), APP_NAME)
 
     def derived_data(self):
         return os.path.dirname(os.path.dirname(os.path.dirname(self.app_path())))
@@ -65,7 +75,7 @@ class Sim:
 
     def build(self):
         print("⏳ xcodebuild …", flush=True)
-        result = run(["xcodebuild", "-workspace", WORKSPACE, "-scheme", "ExampleiOS", "-configuration", "Debug",
+        result = run(["xcodebuild", "-workspace", WORKSPACE, "-scheme", SCHEME, "-configuration", "Debug",
                       "-destination", f"platform=iOS Simulator,id={self.udid}", "build"])
         os.makedirs(OUT, exist_ok=True)
         with open(os.path.join(OUT, "xcodebuild.log"), "w") as f:
@@ -146,8 +156,13 @@ class Probe:
         while time.time() < deadline:
             data = self.read()
             if data and data.get("tick", 0) >= 3:
-                self.pid = data["pid"]
-                return data
+                # 再确认一次：刚启动时偶尔会有上一个进程遗留 / 重启，pid 稳定后才算数
+                time.sleep(1.5)
+                again = self.read()
+                if again and again["pid"] == data["pid"]:
+                    self.pid = data["pid"]
+                    return again
+                continue
             time.sleep(0.3)
         return None
 

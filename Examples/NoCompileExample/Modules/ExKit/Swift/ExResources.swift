@@ -8,7 +8,12 @@ import UIKit
 public enum ExResources {
     /// framework 自己的 bundle（不是 Bundle.main）
     public static var bundle: Bundle {
-        return Bundle(for: ExBundleToken.self)
+        let base = Bundle(for: ExBundleToken.self)
+        // CocoaPods 把资源放进 framework 内的 ExKit.bundle；工程直接集成时资源就在 framework 里
+        if let url = base.url(forResource: "ExKit", withExtension: "bundle"), let resourceBundle = Bundle(url: url) {
+            return resourceBundle
+        }
+        return base
     }
 
     /// framework 内 xib 的文案

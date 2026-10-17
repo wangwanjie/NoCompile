@@ -1,0 +1,32 @@
+PODS:
+  - ExCore (1.0.0)
+  - ExKit (1.0.0):
+    - ExCore
+  - ExPlayer (1.0.0)
+  - NoCompile (0.2.3)
+
+DEPENDENCIES:
+  - ExCore (from `Modules/ExCore`)
+  - ExKit (from `Modules/ExKit`)
+  - ExPlayer (from `Modules/ExPlayer`)
+  - NoCompile (from `../..`)
+
+EXTERNAL SOURCES:
+  ExCore:
+    :path: Modules/ExCore
+  ExKit:
+    :path: Modules/ExKit
+  ExPlayer:
+    :path: Modules/ExPlayer
+  NoCompile:
+    :path: "../.."
+
+SPEC CHECKSUMS:
+  ExCore: f62dd303659451183dec13367ae4c65dbe1ddcbf
+  ExKit: b5171c861bcbd4f39d527799e56e111b91e9897e
+  ExPlayer: f5068dbd5f166ce999a104b83008396e7d150812
+  NoCompile: 5d2e1d5b1fb48f368ee77f670c77a77ccaa8c817
+
+PODFILE CHECKSUM: 21b68e5e260126f74a1e89c95071c7ea0707418d
+
+COCOAPODS: 1.16.2

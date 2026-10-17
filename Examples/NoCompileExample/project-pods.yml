@@ -1,0 +1,56 @@
+name: NoCompileExamplePods
+options:
+  bundleIdPrefix: com.vanjay.nocompile
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  ExNetwork:
+    path: Modules/ExNetwork
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: X6B6C6U6QV
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_OBJC_BRIDGING_HEADER: Shared/Example-Bridging-Header.h
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+  configs:
+    Debug:
+      SWIFT_COMPILATION_MODE: singlefile
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      OTHER_LDFLAGS: "$(inherited) -Xlinker -interposable -ObjC -lc++"
+targets:
+  ExamplePodsiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+        excludes: [Example-Bridging-Header.h.unused]
+      - path: iOS
+      - path: Scenarios
+        excludes:
+          - NotInTarget/**
+    dependencies:
+      - package: ExNetwork
+        product: ExNetwork
+    info:
+      path: iOS/Info-Pods.plist
+      properties:
+        CFBundleDisplayName: NoCompile 示例(Pods)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vanjay.nocompile.examplepods.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GCC_PREFIX_HEADER: Scenarios/Header/ExampleApp-Prefix.pch
+        GCC_PRECOMPILE_PREFIX_HEADER: YES
+        CLANG_ENABLE_MODULES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
