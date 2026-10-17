@@ -60,7 +60,7 @@
 
 ### 1. 安装 NoCompile
 
-从 [Releases](https://github.com/wangwanjie/NoCompile/releases/latest) 下载 `NoCompile_vX.Y.Z.dmg`，拖入「应用程序」即可。安装包已经过 Apple 公证，后续版本会通过 Sparkle 自动更新。
+从 [Releases](https://github.com/wangwanjie/NoCompile/releases/latest) 按芯片下载对应的 DMG：Apple 芯片选 `NoCompile_vX.Y.Z_arm64.dmg`，Intel 选 `NoCompile_vX.Y.Z_x86_64.dmg`，拖入「应用程序」即可。安装包已经过 Apple 公证，后续版本会通过 Sparkle 自动更新。
 
 也可以从源码构建（需要 [XcodeGen](https://github.com/yonaskolb/XcodeGen)）：
 
@@ -171,19 +171,19 @@ Docs/                架构、接入指南、发布说明
 ## 发布新版本
 
 1. 修改 `App/project.yml` 中的 `MARKETING_VERSION` 与 `CURRENT_PROJECT_VERSION`，并同步 `NoCompile.podspec` 的 `s.version` 与 `Client/project.yml` 的 `MARKETING_VERSION`。
-2. 构建、签名并公证 DMG（会先用 `Scripts/build-client-bundles.sh` 构建客户端 bundle 并放进 App）：
+2. 分别构建、签名并公证 arm64 与 x86_64 两个 DMG（会先用 `Scripts/build-client-bundles.sh` 构建通用的客户端 bundle 并放进 App；`--arch arm64` 可只构建单个架构）：
 
    ```bash
    Scripts/build_dmg.sh
    ```
 
-3. 创建 GitHub Release、上传 DMG，并更新 Sparkle 的 `appcast.xml`：
+3. 创建 GitHub Release、上传两个 DMG，并更新 Sparkle feed：各架构的 App 分别读取 `appcast-arm64.xml` / `appcast-x86_64.xml`；`appcast.xml` 同时列出两个架构的包，供 0.2.3 及更早的通用版升级：
 
    ```bash
    Scripts/publish_github_release.sh --notes-file Docs/ReleaseNotes/X.Y.Z.md
    ```
 
-4. 提交并推送 `appcast.xml`，已安装的用户会收到更新提示。
+4. 提交并推送 `appcast.xml`、`appcast-arm64.xml`、`appcast-x86_64.xml`，已安装的用户会收到更新提示。
 5. 发布 CocoaPods（tag 为 `vX.Y.Z`，由上一步的 Release 创建）：
 
    ```bash

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# 归档 NoCompile 菜单栏 App 为 Release .app，再用全局 create_pretty_dmg.sh 生成 DMG，可选公证。
+# 按架构分别归档 NoCompile 菜单栏 App 为 Release .app，再用全局 create_pretty_dmg.sh 生成 DMG，可选公证。
+# 每个架构产出一个 DMG（如 NoCompile_v0.2.4_arm64.dmg），其 SUFeedURL 指向对应的 appcast-<arch>.xml。
 #
 # 用法:
-#   ./Scripts/build_dmg.sh [--keychain-profile PROFILE] [--no-notarize] [--skip-archive]
+#   ./Scripts/build_dmg.sh [--arch arm64|x86_64]... [--keychain-profile PROFILE] [--no-notarize] [--skip-archive]
+# 默认同时构建 arm64 与 x86_64；--arch 可重复传入只构建指定架构。
 # 默认使用 --keychain-profile "vanjay_mac_stapler" 公证；传入 --no-notarize 跳过。
 #
 
@@ -16,12 +18,13 @@ PROJECT="App/NoCompile.xcodeproj"
 CONFIGURATION="Release"
 BUILD_DIR="$PROJECT_DIR/build"
 DERIVED_DATA="$BUILD_DIR/DerivedData"
-ARCHIVE_PATH="$BUILD_DIR/NoCompile.xcarchive"
 DMG_OUTPUT_DIR="$BUILD_DIR/dmg"
 APP_ENTITLEMENTS="$PROJECT_DIR/App/NoCompile/NoCompile.entitlements"
 KEYCHAIN_PROFILE="vanjay_mac_stapler"
 DO_NOTARIZE=true
 DO_ARCHIVE=true
+ARCHS_TO_BUILD=()
+SUPPORTED_ARCHS=(arm64 x86_64)
 
 require_command() {
     local cmd="$1"
@@ -118,6 +121,8 @@ resign_for_notarization() {
 # 参数解析
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --arch)
+            ARCHS_TO_BUILD+=("${2:?}"); shift 2 ;;
         --keychain-profile)
             KEYCHAIN_PROFILE="${2:?}"; shift 2 ;;
         --no-notarize)
@@ -130,6 +135,16 @@ while [[ $# -gt 0 ]]; do
         *)
             echo "未知参数: $1" >&2; exit 1 ;;
     esac
+done
+
+if [[ ${#ARCHS_TO_BUILD[@]} -eq 0 ]]; then
+    ARCHS_TO_BUILD=("${SUPPORTED_ARCHS[@]}")
+fi
+for arch in "${ARCHS_TO_BUILD[@]}"; do
+    if [[ " ${SUPPORTED_ARCHS[*]} " != *" $arch "* ]]; then
+        echo "错误: 不支持的架构 $arch（可选: ${SUPPORTED_ARCHS[*]}）" >&2
+        exit 1
+    fi
 done
 
 require_command xcodebuild
@@ -146,92 +161,133 @@ if [[ -z "$VERSION" ]]; then
     echo "错误: 无法读取 MARKETING_VERSION" >&2
     exit 1
 fi
-echo "版本: $VERSION"
+echo "版本: $VERSION，架构: ${ARCHS_TO_BUILD[*]}"
 
-APP_PATH="$ARCHIVE_PATH/Products/Applications/NoCompile.app"
+# 公证需要的 Developer ID 身份，在第一个架构签名时确定，后续架构复用
+SIGNING_AUTHORITY=""
 
 if [[ "$DO_ARCHIVE" == true ]]; then
     require_command xcodegen
     echo "生成 Xcode 工程..."
     (cd "$PROJECT_DIR/App" && xcodegen generate)
+    # 客户端 bundle 会被加载进接入方的 App，接入方可能是任一架构，因此始终构建通用版本
     echo "构建客户端 bundle..."
     "$PROJECT_DIR/Scripts/build-client-bundles.sh"
-    echo "归档 $SCHEME (Release, arm64 + x86_64)..."
-    rm -rf "$ARCHIVE_PATH"
-    xcodebuild -project "$PROJECT" \
-        -scheme "$SCHEME" \
-        -configuration "$CONFIGURATION" \
-        -derivedDataPath "$DERIVED_DATA" \
-        -archivePath "$ARCHIVE_PATH" \
-        -destination "generic/platform=macOS" \
-        ARCHS="arm64 x86_64" \
-        ONLY_ACTIVE_ARCH=NO \
-        clean archive
 fi
 
-if [[ ! -d "$APP_PATH" ]]; then
-    echo "错误: 未找到构建产物 $APP_PATH" >&2
-    exit 1
-fi
+# 归档、签名、打包并公证单个架构，产物路径写入全局 BUILT_DMGS
+BUILT_DMGS=()
+build_arch() {
+    local arch="$1"
+    local archive_path="$BUILD_DIR/NoCompile-$arch.xcarchive"
+    local app_path="$archive_path/Products/Applications/NoCompile.app"
 
-# archive 出来通常是 adhoc / Apple Development 签名，公证必须换成 Developer ID Application。
-SIGNING_AUTHORITY=""
-if [[ "$DO_NOTARIZE" == true ]]; then
-    SIGNING_AUTHORITY="$(current_signing_authority "$APP_PATH")"
-    if [[ -z "$SIGNING_AUTHORITY" ]]; then
-        # 读工程里的 DEVELOPMENT_TEAM 优先匹配
-        TEAM_ID="$(grep -m1 'DEVELOPMENT_TEAM:' "$PROJECT_YML" | sed 's/.*DEVELOPMENT_TEAM:[[:space:]]*//' | tr -d ' "')"
-        SIGNING_AUTHORITY="$(find_developer_id_identity "$TEAM_ID" || true)"
+    echo "========== $arch =========="
+    if [[ "$DO_ARCHIVE" == true ]]; then
+        echo "归档 $SCHEME (Release, $arch)..."
+        rm -rf "$archive_path"
+        # NOCOMPILE_APPCAST_NAME 决定 Info.plist 里的 SUFeedURL，让各架构只收到同架构的更新
+        xcodebuild -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -archivePath "$archive_path" \
+            -destination "generic/platform=macOS" \
+            ARCHS="$arch" \
+            ONLY_ACTIVE_ARCH=NO \
+            NOCOMPILE_APPCAST_NAME="appcast-$arch.xml" \
+            clean archive
     fi
-    if [[ -n "$SIGNING_AUTHORITY" ]]; then
-        echo "使用签名身份: $SIGNING_AUTHORITY"
-        resign_for_notarization "$SIGNING_AUTHORITY" "$APP_PATH"
-        verify_signature "$APP_PATH" "NoCompile.app"
-    else
-        echo "错误: keychain 里找不到 Developer ID Application 身份，无法公证。" >&2
-        echo "运行 security find-identity -v -p codesigning 检查。" >&2
+
+    if [[ ! -d "$app_path" ]]; then
+        echo "错误: 未找到构建产物 $app_path" >&2
         exit 1
     fi
-else
-    echo "跳过公证，保留 archive 原始签名。"
-fi
 
-# 用全局 create_pretty_dmg.sh 生成 DMG
-mkdir -p "$DMG_OUTPUT_DIR"
-echo "生成 DMG..."
-create_pretty_dmg.sh \
-    --app-path "$APP_PATH" \
-    --dmg-name "NoCompile" \
-    --append-version \
-    --output-dir "$DMG_OUTPUT_DIR"
-
-# 找刚生成的 DMG（形如 NoCompile_2.1.0.dmg）
-DMG_PATH="$(ls -t "$DMG_OUTPUT_DIR"/NoCompile*.dmg 2>/dev/null | head -1)"
-if [[ -z "$DMG_PATH" ]]; then
-    echo "错误: 未找到生成的 DMG" >&2
-    exit 1
-fi
-echo "DMG 已生成: $DMG_PATH"
-
-# 公证
-if [[ "$DO_NOTARIZE" == true && -n "$SIGNING_AUTHORITY" ]]; then
-    echo "提交公证 (keychain-profile: $KEYCHAIN_PROFILE)..."
-    NOTARY_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
-        --keychain-profile "$KEYCHAIN_PROFILE" \
-        --wait 2>&1) || true
-    echo "$NOTARY_OUTPUT"
-    if echo "$NOTARY_OUTPUT" | grep -q "status: Accepted"; then
-        echo "公证成功，正在钉合 (staple)..."
-        xcrun stapler staple "$DMG_PATH"
-        echo "公证并钉合完成。"
-    else
-        echo "公证未通过 (status 非 Accepted)。" >&2
-        NOTARY_ID=$(echo "$NOTARY_OUTPUT" | sed -n 's/.*id:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)
-        [[ -n "$NOTARY_ID" ]] && echo "查看失败原因: xcrun notarytool log $NOTARY_ID --keychain-profile \"$KEYCHAIN_PROFILE\"" >&2
+    # 确认主程序确实只含目标架构，且 feed 地址正确
+    local binary_archs feed_url
+    binary_archs="$(lipo -archs "$app_path/Contents/MacOS/NoCompile")"
+    if [[ "$binary_archs" != "$arch" ]]; then
+        echo "错误: 主程序架构为 '$binary_archs'，预期 '$arch'" >&2
         exit 1
     fi
-else
-    echo "已跳过公证。"
-fi
+    feed_url="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$app_path/Contents/Info.plist")"
+    if [[ "$feed_url" != *"/appcast-$arch.xml" ]]; then
+        echo "错误: SUFeedURL 为 '$feed_url'，预期指向 appcast-$arch.xml" >&2
+        exit 1
+    fi
+    echo "SUFeedURL: $feed_url"
 
-echo "完成。产物: $DMG_PATH"
+    # archive 出来通常是 adhoc / Apple Development 签名，公证必须换成 Developer ID Application。
+    if [[ "$DO_NOTARIZE" == true ]]; then
+        if [[ -z "$SIGNING_AUTHORITY" ]]; then
+            SIGNING_AUTHORITY="$(current_signing_authority "$app_path")"
+        fi
+        if [[ -z "$SIGNING_AUTHORITY" ]]; then
+            # 读工程里的 DEVELOPMENT_TEAM 优先匹配
+            local team_id
+            team_id="$(grep -m1 'DEVELOPMENT_TEAM:' "$PROJECT_YML" | sed 's/.*DEVELOPMENT_TEAM:[[:space:]]*//' | tr -d ' "')"
+            SIGNING_AUTHORITY="$(find_developer_id_identity "$team_id" || true)"
+        fi
+        if [[ -n "$SIGNING_AUTHORITY" ]]; then
+            echo "使用签名身份: $SIGNING_AUTHORITY"
+            resign_for_notarization "$SIGNING_AUTHORITY" "$app_path"
+            verify_signature "$app_path" "NoCompile.app ($arch)"
+        else
+            echo "错误: keychain 里找不到 Developer ID Application 身份，无法公证。" >&2
+            echo "运行 security find-identity -v -p codesigning 检查。" >&2
+            exit 1
+        fi
+    else
+        echo "跳过公证，保留 archive 原始签名。"
+    fi
+
+    # 用全局 create_pretty_dmg.sh 生成 DMG，文件名带上版本与架构
+    local dmg_name="NoCompile_v${VERSION}_${arch}"
+    local dmg_path="$DMG_OUTPUT_DIR/$dmg_name.dmg"
+    mkdir -p "$DMG_OUTPUT_DIR"
+    rm -f "$dmg_path"
+    echo "生成 DMG..."
+    create_pretty_dmg.sh \
+        --app-path "$app_path" \
+        --dmg-name "$dmg_name" \
+        --output-dir "$DMG_OUTPUT_DIR"
+    if [[ ! -f "$dmg_path" ]]; then
+        echo "错误: 未找到生成的 DMG $dmg_path" >&2
+        exit 1
+    fi
+    echo "DMG 已生成: $dmg_path"
+
+    # 公证
+    if [[ "$DO_NOTARIZE" == true ]]; then
+        echo "提交公证 (keychain-profile: $KEYCHAIN_PROFILE)..."
+        local notary_output notary_id
+        notary_output=$(xcrun notarytool submit "$dmg_path" \
+            --keychain-profile "$KEYCHAIN_PROFILE" \
+            --wait 2>&1) || true
+        echo "$notary_output"
+        if echo "$notary_output" | grep -q "status: Accepted"; then
+            echo "公证成功，正在钉合 (staple)..."
+            xcrun stapler staple "$dmg_path"
+            echo "公证并钉合完成。"
+        else
+            echo "公证未通过 (status 非 Accepted)。" >&2
+            notary_id=$(echo "$notary_output" | sed -n 's/.*id:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)
+            if [[ -n "$notary_id" ]]; then
+                echo "查看失败原因: xcrun notarytool log $notary_id --keychain-profile \"$KEYCHAIN_PROFILE\"" >&2
+            fi
+            exit 1
+        fi
+    else
+        echo "已跳过公证。"
+    fi
+
+    BUILT_DMGS+=("$dmg_path")
+}
+
+for arch in "${ARCHS_TO_BUILD[@]}"; do
+    build_arch "$arch"
+done
+
+echo "完成。产物:"
+printf '  %s\n' "${BUILT_DMGS[@]}"

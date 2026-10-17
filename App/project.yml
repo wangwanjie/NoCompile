@@ -13,13 +13,16 @@ packages:
     from: 2.8.0
 settings:
   base:
-    MARKETING_VERSION: 0.2.3
-    CURRENT_PROJECT_VERSION: 5
+    MARKETING_VERSION: 0.2.4
+    CURRENT_PROJECT_VERSION: 6
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: X6B6C6U6QV
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
     MACOSX_DEPLOYMENT_TARGET: "12.0"
+    # Sparkle feed 文件名。日常构建为通用包读 appcast.xml；
+    # build_dmg.sh 按架构归档时覆盖为 appcast-arm64.xml / appcast-x86_64.xml
+    NOCOMPILE_APPCAST_NAME: appcast.xml
 targets:
   NoCompile:
     type: application
@@ -39,7 +42,7 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: Copyright © 2026 wangwanjie. Released under the MIT License.
         # Sparkle 自动更新
-        SUFeedURL: https://raw.githubusercontent.com/wangwanjie/NoCompile/main/appcast.xml
+        SUFeedURL: https://raw.githubusercontent.com/wangwanjie/NoCompile/main/$(NOCOMPILE_APPCAST_NAME)
         SUPublicEDKey: U2EEM5pK1JnZsls5noJVVS3hg45rSX/QXbmQyJ3bCQg=
         SUEnableAutomaticChecks: true
         SUAllowsAutomaticUpdates: true

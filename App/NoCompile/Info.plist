@@ -35,7 +35,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/wangwanjie/NoCompile/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/wangwanjie/NoCompile/main/$(NOCOMPILE_APPCAST_NAME)</string>
 	<key>SUPublicEDKey</key>
 	<string>U2EEM5pK1JnZsls5noJVVS3hg45rSX/QXbmQyJ3bCQg=</string>
 	<key>SUVerifyUpdateBeforeExtraction</key>

@@ -3,9 +3,12 @@
 # 根据归档 DMG 生成 Sparkle appcast.xml，并把 enclosure 改写为 GitHub Releases 下载地址。
 #
 # 用法:
-#   ./Scripts/generate_appcast.sh [--archive PATH] [--archives-dir DIR] [--output PATH]
+#   ./Scripts/generate_appcast.sh [--arch arm64|x86_64] [--archive PATH] [--archives-dir DIR] [--output PATH]
 #                                 [--repo OWNER/REPO] [--account ACCOUNT]
 #                                 [--notes TEXT | --notes-file FILE]
+#
+# 传 --arch 时生成该架构专用的 appcast-<arch>.xml（归档目录为 build/appcast-archives/<arch>），
+# 随后用两个架构的 feed 重建 appcast.xml，供 0.2.3 及更早的通用版用户升级到对应架构的版本。
 #
 
 set -euo pipefail
@@ -17,9 +20,11 @@ DEFAULT_OUTPUT_PATH="$PROJECT_DIR/appcast.xml"
 INFO_PLIST="$PROJECT_DIR/App/NoCompile/Info.plist"
 DEFAULT_ACCOUNT="cn.vanjay.NoCompile.sparkle"
 
+ARCH=""
 ARCHIVE_PATH=""
-ARCHIVES_DIR="$DEFAULT_ARCHIVES_DIR"
-OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+ARCHIVES_DIR=""
+OUTPUT_PATH=""
+LEGACY_OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
 REPO=""
 ACCOUNT="$DEFAULT_ACCOUNT"
 NOTES=""
@@ -28,14 +33,15 @@ NOTES_FILE=""
 usage() {
     cat <<'EOF'
 用法:
-  ./Scripts/generate_appcast.sh [--archive PATH] [--archives-dir DIR] [--output PATH]
+  ./Scripts/generate_appcast.sh [--arch arm64|x86_64] [--archive PATH] [--archives-dir DIR] [--output PATH]
                                 [--repo OWNER/REPO] [--account ACCOUNT]
                                 [--notes TEXT | --notes-file FILE]
 
 选项:
+  --arch ARCH          生成指定架构的 appcast-<arch>.xml，并据此重建兼容旧版的 appcast.xml
   --archive PATH       将当前版本 DMG 复制到归档目录后再生成 appcast
-  --archives-dir DIR   保存历史 DMG 的目录，默认 build/appcast-archives
-  --output PATH        输出 appcast.xml 路径，默认仓库根目录
+  --archives-dir DIR   保存历史 DMG 的目录，默认 build/appcast-archives（指定架构时为其下的 <arch> 子目录）
+  --output PATH        输出路径，默认仓库根目录的 appcast.xml（指定架构时为 appcast-<arch>.xml）
   --repo OWNER/REPO    GitHub 仓库
   --account ACCOUNT    Sparkle EdDSA Keychain account，默认 cn.vanjay.NoCompile.sparkle
   --notes TEXT         为当前 archive 生成同名 .md 发布说明
@@ -116,6 +122,7 @@ copy_release_notes() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --arch) ARCH="${2:-}"; shift 2 ;;
         --archive) ARCHIVE_PATH="${2:-}"; shift 2 ;;
         --archives-dir) ARCHIVES_DIR="${2:-}"; shift 2 ;;
         --output) OUTPUT_PATH="${2:-}"; shift 2 ;;
@@ -134,6 +141,26 @@ fi
 
 require_command /usr/bin/python3
 require_command /usr/libexec/PlistBuddy
+
+if [[ -n "$ARCH" && "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
+    echo "错误: --arch 只支持 arm64 或 x86_64" >&2; exit 1
+fi
+
+# 按架构分开归档目录与输出文件，避免同版本的两个架构 DMG 混进同一个 feed
+if [[ -z "$ARCHIVES_DIR" ]]; then
+    if [[ -n "$ARCH" ]]; then
+        ARCHIVES_DIR="$DEFAULT_ARCHIVES_DIR/$ARCH"
+    else
+        ARCHIVES_DIR="$DEFAULT_ARCHIVES_DIR"
+    fi
+fi
+if [[ -z "$OUTPUT_PATH" ]]; then
+    if [[ -n "$ARCH" ]]; then
+        OUTPUT_PATH="$PROJECT_DIR/appcast-$ARCH.xml"
+    else
+        OUTPUT_PATH="$DEFAULT_OUTPUT_PATH"
+    fi
+fi
 
 ARCHIVES_DIR="${ARCHIVES_DIR/#\~/$HOME}"
 OUTPUT_PATH="${OUTPUT_PATH/#\~/$HOME}"
@@ -207,7 +234,7 @@ TMP_APPCAST="$TMP_DIR/appcast.xml"
     -o "$TMP_APPCAST" \
     "$TMP_DIR"
 
-/usr/bin/python3 - "$TMP_APPCAST" "$OUTPUT_PATH" "$REPO" "$TMP_DIR" <<'PY'
+/usr/bin/python3 - "$TMP_APPCAST" "$OUTPUT_PATH" "$REPO" "$TMP_DIR" "$ARCH" <<'PY'
 import html
 import pathlib
 import re
@@ -215,7 +242,7 @@ import sys
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-input_path, output_path, repo, archives_dir = sys.argv[1:5]
+input_path, output_path, repo, archives_dir, arch = sys.argv[1:6]
 sparkle_ns = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 dc_ns = "http://purl.org/dc/elements/1.1/"
 ET.register_namespace("sparkle", sparkle_ns)
@@ -318,7 +345,8 @@ for item in channel.findall("item"):
     filename = pathlib.PurePosixPath(urllib.parse.urlparse(raw_url).path).name or pathlib.Path(raw_url).name
     if not filename: continue
 
-    m = re.match(r"NoCompile_(.+)\.dmg$", filename)
+    # 文件名形如 NoCompile_v0.2.4_arm64.dmg（按架构）或 NoCompile_v0.2.3.dmg（旧通用包）
+    m = re.match(r"NoCompile_(.+?)(?:_(?:arm64|x86_64))?\.dmg$", filename)
     version = m.group(1) if m else None
     if version is None:
         sv = item.find(f"{{{sparkle_ns}}}shortVersionString")
@@ -339,6 +367,9 @@ for item in channel.findall("item"):
     for tag_name in [f"{{{sparkle_ns}}}releaseNotesLink", f"{{{sparkle_ns}}}fullReleaseNotesLink"]:
         node = item.find(tag_name)
         if node is not None: item.remove(node)
+    # arm64 包声明硬件要求，Intel 机器上的 Sparkle 会忽略该条目
+    if arch == "arm64":
+        find_or_create(item, f"{{{sparkle_ns}}}hardwareRequirements").text = "arm64"
 
 ET.indent(tree, space="    ")
 tree.write(output_path, encoding="utf-8", xml_declaration=True)
@@ -346,3 +377,10 @@ PY
 
 echo "已生成 appcast: $OUTPUT_PATH"
 echo "归档目录: $ARCHIVES_DIR"
+
+# 按架构生成后，同步重建旧通用版读取的 appcast.xml
+if [[ -n "$ARCH" ]]; then
+    /usr/bin/python3 "$SCRIPT_DIR/merge_legacy_appcast.py" \
+        "$LEGACY_OUTPUT_PATH" "$PROJECT_DIR/appcast-arm64.xml" "$PROJECT_DIR/appcast-x86_64.xml"
+    echo "已重建兼容旧版的 appcast: $LEGACY_OUTPUT_PATH"
+fi

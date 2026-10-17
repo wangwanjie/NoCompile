@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# 上传 NoCompile DMG 到 GitHub Releases，并同步 appcast.xml。
-# 默认上传 build/dmg/ 下最新的 NoCompile_*.dmg。
+# 上传 NoCompile DMG 到 GitHub Releases，并同步 Sparkle appcast。
+# 默认上传 build/dmg/ 下当前版本的各架构 DMG（NoCompile_vX.Y.Z_arm64.dmg / _x86_64.dmg），
+# 并分别更新 appcast-arm64.xml、appcast-x86_64.xml 以及兼容旧通用版的 appcast.xml。
 #
 
 set -euo pipefail
@@ -12,7 +13,7 @@ DEFAULT_DMG_DIR="$PROJECT_DIR/build/dmg"
 PROJECT_YML="$PROJECT_DIR/App/project.yml"
 INFO_PLIST="$PROJECT_DIR/App/NoCompile/Info.plist"
 
-DMG_PATH=""
+DMG_PATHS=()
 REPO=""
 TAG=""
 TITLE=""
@@ -25,13 +26,15 @@ PRERELEASE=false
 usage() {
     cat <<'EOF'
 用法:
-  ./Scripts/publish_github_release.sh [--dmg PATH] [--repo OWNER/REPO] [--tag TAG]
+  ./Scripts/publish_github_release.sh [--dmg PATH]... [--repo OWNER/REPO] [--tag TAG]
                                      [--title TITLE] [--notes TEXT | --notes-file FILE | --generate-notes]
                                      [--draft] [--prerelease]
 
 前置:
   1. gh auth login 已完成，或 GITHUB_TOKEN 已配置
   2. build_dmg.sh 已生成 DMG
+
+--dmg 可重复传入；不传时取 build/dmg 下当前 MARKETING_VERSION 的各架构 DMG。
 EOF
 }
 
@@ -91,15 +94,39 @@ find_latest_dmg() {
     printf '%s\n' "$latest"
 }
 
+# 当前版本的各架构 DMG
+find_version_dmgs() {
+    local version="$1" fp
+    shopt -s nullglob
+    for fp in "$DEFAULT_DMG_DIR/NoCompile_v${version}_arm64.dmg" "$DEFAULT_DMG_DIR/NoCompile_v${version}_x86_64.dmg"; do
+        if [[ -f "$fp" ]]; then
+            printf '%s\n' "$fp"
+        fi
+    done
+    shopt -u nullglob
+}
+
 infer_version_from_dmg() {
     local n raw
     n="$(basename "$1")"
+    # 形如 NoCompile_v0.2.4_arm64.dmg 或旧通用包 NoCompile_v0.2.3.dmg
     if [[ "$n" =~ ^NoCompile_(.+)\.dmg$ ]]; then
         raw="${BASH_REMATCH[1]}"
+        raw="${raw%_arm64}"
+        raw="${raw%_x86_64}"
         printf '%s\n' "${raw#v}"
         return 0
     fi
     return 1
+}
+
+# 从文件名取架构，旧通用包返回空
+infer_arch_from_dmg() {
+    local n
+    n="$(basename "$1")"
+    if [[ "$n" =~ _(arm64|x86_64)\.dmg$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    fi
 }
 
 read_marketing_version() {
@@ -108,7 +135,7 @@ read_marketing_version() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dmg) DMG_PATH="${2:?}"; shift 2 ;;
+        --dmg) DMG_PATHS+=("${2:?}"); shift 2 ;;
         --repo) REPO="${2:?}"; shift 2 ;;
         --tag) TAG="${2:?}"; shift 2 ;;
         --title) TITLE="${2:?}"; shift 2 ;;
@@ -136,12 +163,31 @@ if ! gh auth status >/dev/null 2>&1; then
     echo "错误: gh 未登录，请先运行 gh auth login" >&2; exit 1
 fi
 
-if [[ -n "$DMG_PATH" ]]; then
-    DMG_PATH="$(resolve_path "$DMG_PATH")"
+if [[ ${#DMG_PATHS[@]} -gt 0 ]]; then
+    resolved=()
+    for dmg in "${DMG_PATHS[@]}"; do
+        path="$(resolve_path "$dmg")"
+        if [[ -z "$path" || ! -f "$path" ]]; then
+            echo "错误: 找不到 DMG $dmg" >&2; exit 1
+        fi
+        resolved+=("$path")
+    done
+    DMG_PATHS=("${resolved[@]}")
 else
-    DMG_PATH="$(find_latest_dmg)"
+    while IFS= read -r dmg; do
+        DMG_PATHS+=("$dmg")
+    done < <(find_version_dmgs "$(read_marketing_version)")
+    # 没有按架构的产物时退回旧行为：取最新的单个 DMG
+    if [[ ${#DMG_PATHS[@]} -eq 0 ]]; then
+        latest="$(find_latest_dmg)"
+        if [[ -n "$latest" ]]; then
+            DMG_PATHS=("$latest")
+        fi
+    fi
 fi
-[[ -z "$DMG_PATH" || ! -f "$DMG_PATH" ]] && { echo "错误: 找不到 DMG。先跑 ./Scripts/build_dmg.sh" >&2; exit 1; }
+if [[ ${#DMG_PATHS[@]} -eq 0 ]]; then
+    echo "错误: 找不到 DMG。先跑 ./Scripts/build_dmg.sh" >&2; exit 1
+fi
 
 if [[ -n "$NOTES_FILE" ]]; then
     NOTES_FILE="$(resolve_path "$NOTES_FILE")"
@@ -150,8 +196,14 @@ fi
 
 [[ -z "$REPO" ]] && { REPO="$(detect_repo)" || { echo "错误: 无法推断 GitHub 仓库" >&2; exit 1; }; }
 
-VERSION="$(infer_version_from_dmg "$DMG_PATH" 2>/dev/null || read_marketing_version)"
+VERSION="$(infer_version_from_dmg "${DMG_PATHS[0]}" 2>/dev/null || read_marketing_version)"
 [[ -z "$VERSION" ]] && { echo "错误: 无法推断版本号" >&2; exit 1; }
+# 一次只发布同一版本的 DMG
+for dmg in "${DMG_PATHS[@]}"; do
+    if [[ "$(infer_version_from_dmg "$dmg" 2>/dev/null || true)" != "$VERSION" ]]; then
+        echo "错误: $dmg 与版本 $VERSION 不一致" >&2; exit 1
+    fi
+done
 
 [[ -z "$TAG" ]] && TAG="v$VERSION"
 [[ -z "$TITLE" ]] && TITLE="NoCompile v$VERSION"
@@ -159,14 +211,14 @@ VERSION="$(infer_version_from_dmg "$DMG_PATH" 2>/dev/null || read_marketing_vers
 echo "仓库: $REPO"
 echo "Tag:  $TAG"
 echo "标题: $TITLE"
-echo "DMG:  $DMG_PATH"
+printf 'DMG:  %s\n' "${DMG_PATHS[@]}"
 
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
     echo "Release 已存在，上传并覆盖同名资源..."
-    gh release upload "$TAG" "$DMG_PATH" -R "$REPO" --clobber
+    gh release upload "$TAG" "${DMG_PATHS[@]}" -R "$REPO" --clobber
 else
     echo "创建 Release..."
-    create_args=(release create "$TAG" "$DMG_PATH" -R "$REPO" --title "$TITLE")
+    create_args=(release create "$TAG" "${DMG_PATHS[@]}" -R "$REPO" --title "$TITLE")
     if [[ "$GENERATE_NOTES" == true ]]; then
         create_args+=(--generate-notes)
     elif [[ -n "$NOTES_FILE" ]]; then
@@ -183,9 +235,17 @@ echo "完成: https://github.com/$REPO/releases/tag/$TAG"
 
 APPCAST_NOTES="$(gh release view "$TAG" -R "$REPO" --json body --jq '.body // ""' 2>/dev/null || true)"
 
-APPCAST_ARGS=(--repo "$REPO" --archive "$DMG_PATH")
-[[ -n "$APPCAST_NOTES" ]] && APPCAST_ARGS+=(--notes "$APPCAST_NOTES")
+# 每个 DMG 更新所属架构的 appcast；按架构生成时 generate_appcast.sh 会同步重建 appcast.xml
+for dmg in "${DMG_PATHS[@]}"; do
+    APPCAST_ARGS=(--repo "$REPO" --archive "$dmg")
+    arch="$(infer_arch_from_dmg "$dmg")"
+    if [[ -n "$arch" ]]; then
+        APPCAST_ARGS+=(--arch "$arch")
+    fi
+    if [[ -n "$APPCAST_NOTES" ]]; then
+        APPCAST_ARGS+=(--notes "$APPCAST_NOTES")
+    fi
+    "$PROJECT_DIR/Scripts/generate_appcast.sh" "${APPCAST_ARGS[@]}"
+done
 
-"$PROJECT_DIR/Scripts/generate_appcast.sh" "${APPCAST_ARGS[@]}"
-
-echo "appcast.xml 已更新，请提交并推送到默认分支。"
+echo "appcast 已更新（appcast.xml / appcast-<arch>.xml），请提交并推送到默认分支。"
