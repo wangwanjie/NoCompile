@@ -3,8 +3,26 @@
     <channel>
         <title>NoCompile</title>
         <item>
+            <title>0.2.3</title>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.3</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.3/NoCompile_v0.2.3.dmg" length="4297235" type="application/octet-stream" sparkle:edSignature="QNk6If1XaXz4BKclzACC6v214MN3hbaMPexpzGXkSb4n73+9yW8/Pb3881rYNAXNnMVetesFY++liQFqg640Dw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.3&lt;/h2&gt;
+&lt;h3&gt;新增&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;注入记录可清除&lt;/strong&gt;：「最近注入」标题行新增清除按钮；右键菜单可删除单条记录，选中后按 Delete 键同样可删&lt;/li&gt;&lt;li&gt;&lt;strong&gt;注入记录可预览与查看详情&lt;/strong&gt;：单击选中记录，按空格弹出预览，↑/↓ 切换，双击或回车打开详情（含完整失败信息，可复制），⌘C 复制选中记录&lt;/li&gt;&lt;li&gt;&lt;strong&gt;日志控制台快捷键&lt;/strong&gt;：⌘+ / ⌘- 缩放日志字号（会记住），⌘F 聚焦日志搜索框&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;优化&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;日志控制台支持跨行拖选与复制，不再只能逐条复制；追加日志为增量刷新，选择文字时不会自动滚动打断选区&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;只含分类的 .m 文件注入后误报「未替换」&lt;/li&gt;&lt;li&gt;头文件变更后模块缓存过期导致 ObjC 重编出现无法重建的 fatal error（默认不再加 `-fno-validate-pch`）&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;&amp;gt; 升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.3。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.2.2</title>
-            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.2</link>
             <sparkle:version>4</sparkle:version>
             <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
@@ -22,7 +40,7 @@
         </item>
         <item>
             <title>0.2.1</title>
-            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.1</link>
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
@@ -33,23 +51,6 @@
 &lt;ul&gt;&lt;li&gt;&lt;strong&gt;默认不再自动重建已打开的页面&lt;/strong&gt;：注入后新代码立即生效，受影响的已加载页面保持原样，日志、App 顶部浮层和控制台提示「退出页面重进即可看到」。避免在旧实例上重跑 `viewDidLoad` 带来的重复注册通知 / KVO、页面状态丢失等问题。需要原地刷新时，可在偏好设置开启「自动重建已加载的页面」，或设置 `NoCompile.autoReloadViewControllers = YES`&lt;/li&gt;&lt;li&gt;&lt;strong&gt;增删方法 / 存储属性不再拒绝注入&lt;/strong&gt;：新代码会被安全加载，ObjC / `@objc` 方法的增删即时生效；纯 Swift 的增删方法 / 属性不动屏幕上的旧实例（其布局已固定），重新运行 App 后生效，不会崩溃&lt;/li&gt;&lt;/ul&gt;
 &lt;h3&gt;修复&lt;/h3&gt;
 &lt;ul&gt;&lt;li&gt;多架构模拟器构建（同时包含 arm64 与 x86_64）时，按 App 实际架构挑选编译命令，修复注入 x86_64 dylib 失败&lt;/li&gt;&lt;/ul&gt;
-&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
-        </item>
-        <item>
-            <title>0.2.0</title>
-            <pubDate>Fri, 16 Oct 2026 18:24:29 +0800</pubDate>
-            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.0</link>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.0/NoCompile_v0.2.0.dmg" length="3794981" type="application/octet-stream" sparkle:edSignature="5y934D4gQ5yfuYKA8OEgmXeCwQasGltR7FM/CP5AiX5szUIEhM4skMIn74wmdb9vwCO5YVMJlERhY362PWIOBQ==" />
-            <description>&lt;h2&gt;NoCompile 0.2.0&lt;/h2&gt;
-&lt;h3&gt;新增&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;&lt;strong&gt;资源热重载&lt;/strong&gt;：保存 `.storyboard` / `.xib` 后自动用 ibtool 编译并下发，当前可见的页面按新界面重建，之后打开的页面也使用新版本；替换 Asset Catalog 图片集或工程中的图片后，`UIImage(named:)` / `NSImage(named:)` 与 nib 中引用的图片立即返回新图。iOS 真机、模拟器与 macOS 均支持&lt;/li&gt;&lt;li&gt;&lt;strong&gt;新增源文件&lt;/strong&gt;：运行中新建的 Swift / Objective-C / C / C++ 文件保存后即可注入，已有文件可以直接使用其中的新类型与函数&lt;/li&gt;&lt;li&gt;&lt;strong&gt;更多接入方式&lt;/strong&gt;：支持 CocoaPods、Carthage；NoCompile.app 内置客户端 bundle，可运行时加载、拷贝进 App（支持真机）或通过 `DYLD_INSERT_LIBRARIES` 零代码接入&lt;/li&gt;&lt;li&gt;偏好设置新增「热重载界面与图片资源」开关，命令行新增 `--no-resources`&lt;/li&gt;&lt;/ul&gt;
-&lt;h3&gt;修复&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;代码注入后，界面来自 storyboard / xib 的页面会被清空：现在改为重新加载 nib，失败时保持原界面&lt;/li&gt;&lt;/ul&gt;
-&lt;h3&gt;已知限制&lt;/h3&gt;
-&lt;ul&gt;&lt;li&gt;资源热重载只覆盖主 bundle；App 图标、颜色集、矢量图片、暗色等外观变体、`Localizable.strings` 需要重新运行 App&lt;/li&gt;&lt;li&gt;SwiftUI 的 `Image("name")` 不经过 `imageNamed:`，不会拿到新图&lt;/li&gt;&lt;li&gt;新增的 Objective-C 类要被 Swift 使用，需要修改桥接头并重新构建&lt;/li&gt;&lt;/ul&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
         </item>
         <link>https://github.com/wangwanjie/NoCompile</link>
