@@ -308,12 +308,16 @@ static NSUInteger gInjectionCount = 0;
         NSString *refreshed = result.refreshedControllers.count > 0
             ? [NSString stringWithFormat:@"，已刷新 %@", [result.refreshedControllers componentsJoinedByString:@"、"]]
             : @"";
-        NCLogSuccess(@"%@%@ 注入成功：ObjC 方法 %lu，Swift 槽位 %lu，函数重绑 %lu%@",
+        NSString *categories = result.categoriesAttached > 0
+            ? [NSString stringWithFormat:@"，分类 %lu", (unsigned long)result.categoriesAttached]
+            : @"";
+        NCLogSuccess(@"%@%@ 注入成功：ObjC 方法 %lu，Swift 槽位 %lu，函数重绑 %lu%@%@",
                      fileName,
                      isNewFile ? @"（新增文件）" : @"",
                      (unsigned long)result.objcMethodsReplaced,
                      (unsigned long)result.swiftSlotsPatched,
                      (unsigned long)result.symbolsRebound,
+                     categories,
                      refreshed);
         if (result.layoutChangedClasses.count > 0) {
             NCLogWarn(@"%@ 增删了方法/属性：ObjC/@objc 方法已即时生效；纯 Swift 的增删需重新运行 App 才会在新实例上体现",

@@ -86,6 +86,10 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 
 已知局限：如果被重编的是对**其他类**做 swizzle 的分类文件（比如 `UIViewController+Tracking.m`），分类方法本身会被 runtime 重新附加。这种情况可能破坏 hook 链，建议改完后重新运行 App。
 
+## 只含分类的文件
+
+分类文件（如 `UIViewController+Xxx.m`）没有 `_OBJC_CLASS_$_` 符号，也没有可改写的函数符号。`dlopen` 时 ObjC 运行时会把新分类的方法列表挂到宿主类方法列表的最前面，同名方法先于旧分类命中，改动随即生效。`NCInjector` 读取新镜像的 `__objc_catlist` 统计分类数（日志里的"分类 N"），有分类附加即视为注入成功；宿主类属于 App 时还会纳入受影响类，用于提示重进页面，系统类则不纳入。
+
 ## 类型判定修复
 
 注入后，dylib 内 `[Foo new]` 得到"新 Foo"，App 其余代码持有"旧 Foo"，两者不是同一个 Class 对象，会让 `isKindOfClass:` / `as?` 判定失败。

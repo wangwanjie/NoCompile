@@ -20,6 +20,8 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 @property (nonatomic) NSUInteger objcMethodsReplaced;
 @property (nonatomic) NSUInteger swiftSlotsPatched;
 @property (nonatomic) NSUInteger symbolsRebound;
+/// 新镜像中挂到既有类上的分类数。分类由 ObjC 运行时在 dlopen 时直接附加，同名方法随即覆盖旧实现
+@property (nonatomic) NSUInteger categoriesAttached;
 @property (nonatomic, copy) NSArray<Class> *injectedClasses;
 /// 发生内存布局变化（增删方法 / 存储属性）的类名。注入仍会进行，这些类的旧实例若未被重建，
 /// 访问新成员可能异常，建议重新运行 App

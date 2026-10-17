@@ -409,9 +409,15 @@ public final class Recompiler {
             tokens.append(token)
             i += 1
         }
-        // 跳过 PCH 校验，避免因模块缓存时间戳导致失败
-        tokens.append(contentsOf: ["-Xclang", "-fno-validate-pch"])
-        let compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+        // 先保持 clang 默认的校验：模块缓存（.pcm）里的头文件被改动过时，clang 会自动重建该模块。
+        // 不能一上来就加 -fno-validate-pch：它会同时关闭模块的输入文件校验，头文件一旦变化就
+        // 报 "file ... has been modified since the module file ... was built" 的 fatal error，且无法重建
+        var compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+        if !compile.succeeded, Self.isStalePrecompiledHeaderFailure(compile.stderr + compile.stdout) {
+            // 预编译头（-include-pch）比其依赖的头文件旧，clang 无法自动重建，此时才跳过 PCH 校验重试
+            tokens.append(contentsOf: ["-Xclang", "-fno-validate-pch"])
+            compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+        }
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
             let message = extractCompileError(compile.stderr + compile.stdout) ?? "编译失败"
             Diagnostics.shared.failure(stage: "编译", file: sourceFile, summary: message, command: tokens,
@@ -477,8 +483,14 @@ public final class Recompiler {
 
     // MARK: - 错误提取
 
+    /// 判断失败是否由过期的预编译头（PCH）引起
+    private static func isStalePrecompiledHeaderFailure(_ output: String) -> Bool {
+        return output.contains("since the precompiled header") || output.contains("rebuild precompiled header")
+    }
+
     private func extractCompileError(_ output: String) -> String? {
-        let lines = output.components(separatedBy: "\n").filter { $0.contains(": error:") }
+        // fatal error（如头文件找不到、模块缓存失效）不是 ": error:" 形式，需单独识别，否则摘要只剩"编译失败"
+        let lines = output.components(separatedBy: "\n").filter { $0.contains(": error:") || $0.contains("fatal error:") }
         if lines.isEmpty {
             return nil
         }

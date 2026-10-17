@@ -128,6 +128,43 @@ static NSUInteger NCSwizzleObjCMethods(Class oldClass, Class newClass) {
     return replaced;
 }
 
+/// ObjC 分类在磁盘上的头部布局（与 objc4 的 category_t 前两个字段一致），这里只读取宿主类
+typedef struct {
+    const char *name;
+    Class cls;
+} NCCategoryHeader;
+
+/// 统计新镜像里的分类，并收集它们的宿主类。
+///
+/// 只含分类的文件（如 UIViewController+Xxx.m）没有 _OBJC_CLASS_$_ 符号，也没有可改写的函数符号。
+/// 但 dlopen 时 ObjC 运行时已把新分类的方法列表挂到宿主类方法列表的最前面，同名方法会先于旧分类命中，
+/// 改动即时生效，因此这类注入应算成功，不能报"未替换任何实现"。
+/// 宿主类定义在新镜像自身时（类与分类写在同一文件），由类方法替换流程处理，这里不收集。
+static NSUInteger NCCollectCategories(NCImage *image, NSMutableArray<Class> *hostClasses) {
+    size_t size = 0;
+    void *data = NCSectionData(image, NULL, "__objc_catlist", &size);
+    if (!data || size == 0) {
+        return 0;
+    }
+    NSUInteger attached = 0;
+    NCCategoryHeader **list = (NCCategoryHeader **)data;
+    size_t count = size / sizeof(NCCategoryHeader *);
+    for (size_t i = 0; i < count; i++) {
+        NCCategoryHeader *category = list[i];
+        // 宿主类为弱引用且缺失时为空
+        if (!category || !category->cls) {
+            continue;
+        }
+        attached++;
+        const char *hostImage = class_getImageName(category->cls);
+        BOOL definedInNewImage = hostImage && strcmp(hostImage, image.path.fileSystemRepresentation) == 0;
+        if (!definedInNewImage && ![hostClasses containsObject:category->cls]) {
+            [hostClasses addObject:category->cls];
+        }
+    }
+    return attached;
+}
+
 /// Swift vtable 覆写。返回替换的槽位数（>=0）。
 ///
 /// outLayoutChanged 置为 YES 表示新旧 classSize 或 classAddressPoint 不一致，即发生了
@@ -310,6 +347,16 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
         }
     }
 
+    // 2.5 分类：运行时在 dlopen 时已把它们附加到宿主类。App 自有类的宿主纳入受影响类，用于提示重进页面；
+    //     系统类（如 UIViewController）不纳入，否则几乎所有控制器都会被判定为受影响
+    NSMutableArray<Class> *categoryHosts = [NSMutableArray array];
+    NSUInteger categoriesAttached = NCCollectCategories(newImage, categoryHosts);
+    for (Class host in categoryHosts) {
+        if ([NCSweeper isAppClass:host] && ![patchedClasses containsObject:host]) {
+            [patchedClasses addObject:host];
+        }
+    }
+
     // 3. 函数级替换：改写所有 App 镜像（含历史注入镜像）里对这些符号的引用
     NSUInteger rebound = 0;
     NSUInteger count = interposeNames.count;
@@ -334,7 +381,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
         [self rebindStaticAddressors:staticAddressors inImage:newImage];
     }
 
-    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && addedClasses.count == 0 && !isNewFile) {
+    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && categoriesAttached == 0 && addedClasses.count == 0 && !isNewFile) {
         result.status = NCInjectStatusNothingInjected;
         result.message = @"未替换任何实现。请确认 Debug 配置的 Other Linker Flags 含 -Xlinker -interposable";
         return result;
@@ -350,6 +397,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     result.objcMethodsReplaced = objcReplaced;
     result.swiftSlotsPatched = (NSUInteger)swiftPatched;
     result.symbolsRebound = rebound;
+    result.categoriesAttached = categoriesAttached;
     result.layoutChangedClasses = [layoutChanged copy];
     result.injectedClasses = [patchedClasses arrayByAddingObjectsFromArray:addedClasses];
 
