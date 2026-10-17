@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0006D3A6ADECDE09ED658B2A /* NCStaticState.h in Headers */ = {isa = PBXBuildFile; fileRef = 7890216545790375B2249C22 /* NCStaticState.h */; };
 		01F69E5740B68228C9C9BE99 /* NCBoot.m in Sources */ = {isa = PBXBuildFile; fileRef = 3BA2E4C61863C00A3EBFA77B /* NCBoot.m */; };
 		082CA81BC6B7FA8C10B7DC3D /* NoCompile.m in Sources */ = {isa = PBXBuildFile; fileRef = DC899B0E909B26AEBD1DD273 /* NoCompile.m */; };
 		0841321ECFC1CBCBBBA8F94F /* NCLog.m in Sources */ = {isa = PBXBuildFile; fileRef = 2AB5652259052F1B5E0B046F /* NCLog.m */; };
@@ -23,19 +24,25 @@
 		248609DC8FA12CF42D5CD88C /* NCSwizzleGuard.m in Sources */ = {isa = PBXBuildFile; fileRef = 76480658B7C637DCB5F7628B /* NCSwizzleGuard.m */; };
 		25ABF3C4645C00F7C99948B6 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 534668D363663369D9987E0B /* AppKit.framework */; };
 		2692DBF846B5738D573B48BD /* NCMachO.m in Sources */ = {isa = PBXBuildFile; fileRef = 943784263381854BAF657229 /* NCMachO.m */; };
+		2C9CB3FB181DF47FFCFC0E65 /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
 		2CD2FB2985FA91F28EFC9537 /* NCMachO.h in Headers */ = {isa = PBXBuildFile; fileRef = 8E21631D53836BFDF1895B65 /* NCMachO.h */; };
+		2E95FC538B6BA6B6188166A1 /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
 		2F87C0C35B893056CE21072B /* NCSweeper.m in Sources */ = {isa = PBXBuildFile; fileRef = 4295D08946EC31D151B84F75 /* NCSweeper.m */; };
 		323B789BC9861A00FB8DC420 /* NCDynamicCast.m in Sources */ = {isa = PBXBuildFile; fileRef = 68F1FF397614F8963F33333D /* NCDynamicCast.m */; };
 		38145796D733E2CD7B16A9ED /* NCInjector.m in Sources */ = {isa = PBXBuildFile; fileRef = F5A6BB4EB1D9E521D06D5FE5 /* NCInjector.m */; };
+		3AA8227F58D4257E4DF6C884 /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
 		3CCD8994A384C7851AB25E8F /* NCRebind.m in Sources */ = {isa = PBXBuildFile; fileRef = 7BDEF99F3F2C70AC97322EAC /* NCRebind.m */; };
 		414C3FA0B83CC377B5898C77 /* NoCompile.m in Sources */ = {isa = PBXBuildFile; fileRef = DC899B0E909B26AEBD1DD273 /* NoCompile.m */; };
 		42F292D63F025763C55CBE66 /* NCSwizzleGuard.m in Sources */ = {isa = PBXBuildFile; fileRef = 76480658B7C637DCB5F7628B /* NCSwizzleGuard.m */; };
+		42FD684F569AE197475CCA7D /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
+		43061B0F81FF0F8DE94B67AA /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
 		498718C25B3177AC353A4A92 /* NCDynamicCast.m in Sources */ = {isa = PBXBuildFile; fileRef = 68F1FF397614F8963F33333D /* NCDynamicCast.m */; };
 		4C4361028EF10EDFA04F7055 /* NCSweeper.m in Sources */ = {isa = PBXBuildFile; fileRef = 4295D08946EC31D151B84F75 /* NCSweeper.m */; };
 		534DD2C94A1914F308BA7EAB /* NCBoot.m in Sources */ = {isa = PBXBuildFile; fileRef = 3BA2E4C61863C00A3EBFA77B /* NCBoot.m */; };
 		53544A3095A4013FA3C2F41E /* NCInjector.m in Sources */ = {isa = PBXBuildFile; fileRef = F5A6BB4EB1D9E521D06D5FE5 /* NCInjector.m */; };
 		53582D7CC5D50AF2E79E375F /* NCRebind.m in Sources */ = {isa = PBXBuildFile; fileRef = 7BDEF99F3F2C70AC97322EAC /* NCRebind.m */; };
 		573FB2E6088721A25BF945EB /* NCSwizzleGuard.m in Sources */ = {isa = PBXBuildFile; fileRef = 76480658B7C637DCB5F7628B /* NCSwizzleGuard.m */; };
+		58627EC11FC61D46245C6038 /* NCStaticState.h in Headers */ = {isa = PBXBuildFile; fileRef = 7890216545790375B2249C22 /* NCStaticState.h */; };
 		5A4033EBE25D9FCAD3339810 /* NCHUD.m in Sources */ = {isa = PBXBuildFile; fileRef = 787A480299DA1D27892735A1 /* NCHUD.m */; };
 		5C660F8F7BB85A314DBF77B2 /* NCMachO.m in Sources */ = {isa = PBXBuildFile; fileRef = 943784263381854BAF657229 /* NCMachO.m */; };
 		5DB087B2938F6C516077CAD9 /* NCLog.h in Headers */ = {isa = PBXBuildFile; fileRef = 6757E18F91DA55E5116E6BD6 /* NCLog.h */; };
@@ -71,6 +78,7 @@
 		920507A5BCA3E920C3C39B30 /* NCRebind.m in Sources */ = {isa = PBXBuildFile; fileRef = 7BDEF99F3F2C70AC97322EAC /* NCRebind.m */; };
 		9B12D2AA2F2D7BD7DFA0D0A2 /* NCInjector.m in Sources */ = {isa = PBXBuildFile; fileRef = F5A6BB4EB1D9E521D06D5FE5 /* NCInjector.m */; };
 		9C9285D9D9BE2C99A7CF6D24 /* NCRebind.m in Sources */ = {isa = PBXBuildFile; fileRef = 7BDEF99F3F2C70AC97322EAC /* NCRebind.m */; };
+		9CEC9B9DAA49C89C5583838F /* NCStaticState.m in Sources */ = {isa = PBXBuildFile; fileRef = FB205A72492655C2B3737C51 /* NCStaticState.m */; };
 		A635D84D752451CD68D0658A /* NCLog.m in Sources */ = {isa = PBXBuildFile; fileRef = 2AB5652259052F1B5E0B046F /* NCLog.m */; };
 		A96F2FF3FDB5C38832CC8D4A /* NCResources.h in Headers */ = {isa = PBXBuildFile; fileRef = 8004A91C99368FD3B4180A16 /* NCResources.h */; };
 		A9CA810A7F307DDCDF0D1875 /* NCSwiftMetadata.h in Headers */ = {isa = PBXBuildFile; fileRef = 675C4FFD98F99F2E7FDCFB39 /* NCSwiftMetadata.h */; };
@@ -103,6 +111,7 @@
 		E29947C8FA21AC408DCBBCE0 /* NCMachO.h in Headers */ = {isa = PBXBuildFile; fileRef = 8E21631D53836BFDF1895B65 /* NCMachO.h */; };
 		E3D916B94019A25B237ABA44 /* NCConnection.h in Headers */ = {isa = PBXBuildFile; fileRef = 9E2C07A92219BE486A625659 /* NCConnection.h */; };
 		E5A01883C4F978D7854F8542 /* NCRebind.h in Headers */ = {isa = PBXBuildFile; fileRef = 5A47E80F5CDFA3BF150C8B45 /* NCRebind.h */; };
+		E873290BC034E8ACDE393552 /* NCStaticState.h in Headers */ = {isa = PBXBuildFile; fileRef = 7890216545790375B2249C22 /* NCStaticState.h */; };
 		EAAD04FFBB090784EE86A56A /* NCHUD.h in Headers */ = {isa = PBXBuildFile; fileRef = FB81AAE5DBBFF93F24086843 /* NCHUD.h */; };
 		EB360F856DA09936D08B2C59 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5F276F5AE8C54E0C2CB83996 /* UIKit.framework */; };
 		ECBEE7FC7F222E66794B57E3 /* NCConnection.h in Headers */ = {isa = PBXBuildFile; fileRef = 9E2C07A92219BE486A625659 /* NCConnection.h */; };
@@ -142,6 +151,7 @@
 		716DA477333146533B34166C /* NoCompile-iOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = "NoCompile-iOS.framework"; sourceTree = BUILT_PRODUCTS_DIR; };
 		76480658B7C637DCB5F7628B /* NCSwizzleGuard.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NCSwizzleGuard.m; sourceTree = "<group>"; };
 		787A480299DA1D27892735A1 /* NCHUD.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NCHUD.m; sourceTree = "<group>"; };
+		7890216545790375B2249C22 /* NCStaticState.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NCStaticState.h; sourceTree = "<group>"; };
 		7BDEF99F3F2C70AC97322EAC /* NCRebind.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NCRebind.m; sourceTree = "<group>"; };
 		8004A91C99368FD3B4180A16 /* NCResources.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NCResources.h; sourceTree = "<group>"; };
 		89BA1F7EA536EEE2EAFE8910 /* NCInjector.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NCInjector.h; sourceTree = "<group>"; };
@@ -155,6 +165,7 @@
 		D848C82EEF2EB86D3999AFCD /* NoCompile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NoCompile.h; sourceTree = "<group>"; };
 		DC899B0E909B26AEBD1DD273 /* NoCompile.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NoCompile.m; sourceTree = "<group>"; };
 		F5A6BB4EB1D9E521D06D5FE5 /* NCInjector.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NCInjector.m; sourceTree = "<group>"; };
+		FB205A72492655C2B3737C51 /* NCStaticState.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NCStaticState.m; sourceTree = "<group>"; };
 		FB81AAE5DBBFF93F24086843 /* NCHUD.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NCHUD.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -286,6 +297,8 @@
 				7BDEF99F3F2C70AC97322EAC /* NCRebind.m */,
 				8004A91C99368FD3B4180A16 /* NCResources.h */,
 				3F71495DE7DFC8C0F7B57CC6 /* NCResources.m */,
+				7890216545790375B2249C22 /* NCStaticState.h */,
+				FB205A72492655C2B3737C51 /* NCStaticState.m */,
 				C52B0AA5E18A6B6132591A53 /* NCSweeper.h */,
 				4295D08946EC31D151B84F75 /* NCSweeper.m */,
 				675C4FFD98F99F2E7FDCFB39 /* NCSwiftMetadata.h */,
@@ -312,6 +325,7 @@
 				7C5784E2A48FE6D44D7662E9 /* NCProtocol.h in Headers */,
 				7073B732F0132CCFF100391C /* NCRebind.h in Headers */,
 				8B45DD615E7B4AD1AF9AC502 /* NCResources.h in Headers */,
+				58627EC11FC61D46245C6038 /* NCStaticState.h in Headers */,
 				8EFF5CDFFBA53975257014B7 /* NCSweeper.h in Headers */,
 				F9FFF04D93F5F9E7C6FC3567 /* NCSwiftMetadata.h in Headers */,
 				62074C20C5850D4DA2460F69 /* NCSwizzleGuard.h in Headers */,
@@ -331,6 +345,7 @@
 				60D936140EB0E3E6867CD298 /* NCProtocol.h in Headers */,
 				E5A01883C4F978D7854F8542 /* NCRebind.h in Headers */,
 				A96F2FF3FDB5C38832CC8D4A /* NCResources.h in Headers */,
+				E873290BC034E8ACDE393552 /* NCStaticState.h in Headers */,
 				7484992DE61F06467785AE84 /* NCSweeper.h in Headers */,
 				B74F0AE159A05E8D1C03E0DE /* NCSwiftMetadata.h in Headers */,
 				646290212ACF5858DD49AE86 /* NCSwizzleGuard.h in Headers */,
@@ -350,6 +365,7 @@
 				F79A450662E84F7A63259A5E /* NCProtocol.h in Headers */,
 				8F10DD1DCACC31B8142A703F /* NCRebind.h in Headers */,
 				5E7883B4CC1291249FBC7A3E /* NCResources.h in Headers */,
+				0006D3A6ADECDE09ED658B2A /* NCStaticState.h in Headers */,
 				DDE1EB805A93BBCAAD9F7D7D /* NCSweeper.h in Headers */,
 				A9CA810A7F307DDCDF0D1875 /* NCSwiftMetadata.h in Headers */,
 				CC9334AB444C4471D4E3A586 /* NCSwizzleGuard.h in Headers */,
@@ -544,6 +560,7 @@
 				BACCF6E781B7FFB371AC75EF /* NCMachO.m in Sources */,
 				BA65BAAA0B01BC7ED69F1DB7 /* NCRebind.m in Sources */,
 				EF5EF6EA5AA664200A04AF3C /* NCResources.m in Sources */,
+				2C9CB3FB181DF47FFCFC0E65 /* NCStaticState.m in Sources */,
 				4C4361028EF10EDFA04F7055 /* NCSweeper.m in Sources */,
 				5E847EF0AC780E277351DA6C /* NCSwizzleGuard.m in Sources */,
 				8BE79784C671D02435A52A90 /* NoCompile.m in Sources */,
@@ -563,6 +580,7 @@
 				6A376C9858C006F22820D0FC /* NCMachO.m in Sources */,
 				53582D7CC5D50AF2E79E375F /* NCRebind.m in Sources */,
 				D2C6C3BC6A74AAC0AEF65888 /* NCResources.m in Sources */,
+				9CEC9B9DAA49C89C5583838F /* NCStaticState.m in Sources */,
 				DDD1AEAEA4D2E7660CCE5689 /* NCSweeper.m in Sources */,
 				7E2A2DC52BABA2B2A13D6315 /* NCSwizzleGuard.m in Sources */,
 				C61D3B3FE8E445AD77F29232 /* NoCompile.m in Sources */,
@@ -582,6 +600,7 @@
 				8AF40D14B0BF189752903426 /* NCMachO.m in Sources */,
 				3CCD8994A384C7851AB25E8F /* NCRebind.m in Sources */,
 				81896B6425EFECED45CA1801 /* NCResources.m in Sources */,
+				43061B0F81FF0F8DE94B67AA /* NCStaticState.m in Sources */,
 				DF7159568E8860C30BD61436 /* NCSweeper.m in Sources */,
 				E247328BEBF16090B8007D87 /* NCSwizzleGuard.m in Sources */,
 				414C3FA0B83CC377B5898C77 /* NoCompile.m in Sources */,
@@ -601,6 +620,7 @@
 				D62EDF6CCEA714D0BBE1E5D2 /* NCMachO.m in Sources */,
 				9C9285D9D9BE2C99A7CF6D24 /* NCRebind.m in Sources */,
 				63718BBD911F36024E9DFC0F /* NCResources.m in Sources */,
+				42FD684F569AE197475CCA7D /* NCStaticState.m in Sources */,
 				8FE9420CDEEF45700F3ED673 /* NCSweeper.m in Sources */,
 				42F292D63F025763C55CBE66 /* NCSwizzleGuard.m in Sources */,
 				082CA81BC6B7FA8C10B7DC3D /* NoCompile.m in Sources */,
@@ -620,6 +640,7 @@
 				2692DBF846B5738D573B48BD /* NCMachO.m in Sources */,
 				920507A5BCA3E920C3C39B30 /* NCRebind.m in Sources */,
 				FD87921914192D282EE95A64 /* NCResources.m in Sources */,
+				3AA8227F58D4257E4DF6C884 /* NCStaticState.m in Sources */,
 				86C1EEAC27208BD2E8AAEEB8 /* NCSweeper.m in Sources */,
 				248609DC8FA12CF42D5CD88C /* NCSwizzleGuard.m in Sources */,
 				60FB22CA018B434E3FA191FC /* NoCompile.m in Sources */,
@@ -639,6 +660,7 @@
 				5C660F8F7BB85A314DBF77B2 /* NCMachO.m in Sources */,
 				F240B2416E2B162BF9F8F178 /* NCRebind.m in Sources */,
 				C480BFA25EA18D1EB4FA35F1 /* NCResources.m in Sources */,
+				2E95FC538B6BA6B6188166A1 /* NCStaticState.m in Sources */,
 				2F87C0C35B893056CE21072B /* NCSweeper.m in Sources */,
 				573FB2E6088721A25BF945EB /* NCSwizzleGuard.m in Sources */,
 				1DAE2E23797850BDD198215C /* NoCompile.m in Sources */,
@@ -820,7 +842,7 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.2.3;
+				MARKETING_VERSION = 0.2.4;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1056,7 +1078,7 @@
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.2.3;
+				MARKETING_VERSION = 0.2.4;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

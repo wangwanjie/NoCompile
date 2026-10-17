@@ -37,40 +37,131 @@ static NSObject *NCResourcesLock(void) {
     return lock;
 }
 
-/// 已更新的 bundle 条目：相对资源目录的路径 → 新文件的绝对路径
-static NSMutableDictionary<NSString *, NSString *> *gOverrides;
-/// 已更新的图片：名字 → @{ images: 变体数组, template: 是否模板 }
+/// 资源按 bundle 管理。bundleKey：主 bundle 为 @""，其他 bundle 为其目录名（如 "ExKit.framework"）
+/// 已更新的 bundle 条目：bundleKey → （相对 bundle 根目录的路径 → 新文件的绝对路径）
+static NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSString *> *> *gBundleOverrides;
+/// 已更新的图片：@"bundleKey|名字" → @{ images: 变体数组, template: 是否模板 }
 static NSMutableDictionary<NSString *, NSDictionary *> *gImages;
 /// 按名字缓存的新图，图片再次更新时清除
 static NSMutableDictionary<NSString *, NCPlatformImage *> *gImageCache;
-/// 当前镜像 bundle，以及历次生成的镜像 bundle 路径
-static NSBundle *gMirrorBundle;
-static NSMutableSet<NSString *> *gMirrorPaths;
+/// 已更新的颜色集：@"bundleKey|名字" → @{ red, green, blue, alpha, p3 }
+static NSMutableDictionary<NSString *, NSDictionary *> *gColors;
+/// 解析过的 .strings 文件：绝对路径 → 字典
+static NSMutableDictionary<NSString *, NSDictionary *> *gStringsCache;
+/// bundleKey → 真实 bundle 路径 / 当前镜像 bundle；历次镜像 bundle 路径 → bundleKey
+static NSMutableDictionary<NSString *, NSString *> *gBundlePaths;
+static NSMutableDictionary<NSString *, NSBundle *> *gMirrorBundles;
+static NSMutableDictionary<NSString *, NSString *> *gMirrorPathKeys;
 /// 快速判断，避免没有资源更新时 hook 里也加锁
 static volatile BOOL gHasOverrides = NO;
 static volatile BOOL gHasImages = NO;
+static volatile BOOL gHasColors = NO;
+static volatile BOOL gHasStrings = NO;
 static NSUInteger gGeneration = 0;
 
 /// 资源根目录在 bundle 内的相对路径：iOS 为空，macOS 为 Contents/Resources
-static NSString *NCResourceSubpath(void) {
-    NSString *bundlePath = NSBundle.mainBundle.bundlePath;
-    NSString *resourcePath = NSBundle.mainBundle.resourcePath;
+static NSString *NCResourceSubpathOfBundle(NSBundle *bundle) {
+    NSString *bundlePath = bundle.bundlePath;
+    NSString *resourcePath = bundle.resourcePath;
     if (resourcePath.length > bundlePath.length && [resourcePath hasPrefix:bundlePath]) {
         return [resourcePath substringFromIndex:bundlePath.length + 1];
     }
     return @"";
 }
 
+#pragma mark - bundle 标识
+
+/// 在已加载的 bundle 中按目录名（"ExKit.framework"）或可执行文件名查找
+static NSBundle *NCFindLoadedBundle(NSString *directoryName, NSString *executableName) {
+    NSMutableArray<NSBundle *> *all = [NSMutableArray arrayWithObject:NSBundle.mainBundle];
+    [all addObjectsFromArray:NSBundle.allFrameworks];
+    [all addObjectsFromArray:NSBundle.allBundles];
+    for (NSBundle *bundle in all) {
+        // 跳过 NoCompile 自己生成的镜像 bundle（它们与真实 bundle 同名，且会登记进 allBundles）
+        if ([bundle.bundlePath containsString:@"/NoCompileResources/mirror_"]) {
+            continue;
+        }
+        if (directoryName.length > 0 && [bundle.bundlePath.lastPathComponent isEqualToString:directoryName]) {
+            return bundle;
+        }
+        if (executableName.length > 0 && [bundle.executablePath.lastPathComponent isEqualToString:executableName]) {
+            return bundle;
+        }
+    }
+    // framework 可能还没被 NSBundle 登记（动态库延迟加载），到 App 的 Frameworks 目录里找
+    if (directoryName.length > 0) {
+        NSString *candidate = [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"]
+                               stringByAppendingPathComponent:directoryName];
+        if ([NSFileManager.defaultManager fileExistsAtPath:candidate]) {
+            return [NSBundle bundleWithPath:candidate];
+        }
+    }
+    return nil;
+}
+
+/// 资源包里的 bundle 描述 → bundleKey（主 bundle 为 @""）。找不到返回 nil
+static NSString *NCResolveBundleKey(NSString *hint) {
+    if (hint.length == 0) {
+        return @"";
+    }
+    NSBundle *main = NSBundle.mainBundle;
+    NSString *directoryName = nil;
+    NSString *executableName = nil;
+    if ([hint hasPrefix:@"module:"]) {
+        executableName = [hint substringFromIndex:7];
+    } else {
+        directoryName = hint;
+    }
+    if ([main.bundlePath.lastPathComponent isEqualToString:directoryName] ||
+        [main.executablePath.lastPathComponent isEqualToString:executableName]) {
+        return @"";
+    }
+    NSBundle *bundle = NCFindLoadedBundle(directoryName, executableName);
+    if (!bundle) {
+        return nil;
+    }
+    if (bundle == main) {
+        return @"";
+    }
+    NSString *key = bundle.bundlePath.lastPathComponent;
+    @synchronized (NCResourcesLock()) {
+        gBundlePaths[key] = bundle.bundlePath;
+    }
+    return key;
+}
+
+/// 某个 NSBundle 对应的 bundleKey：主 bundle / 其镜像为 @""，有过更新的其他 bundle 为目录名，其余为 nil
+static NSString *NCBundleKeyForBundle(NSBundle *bundle) {
+    if (bundle == nil || bundle == NSBundle.mainBundle) {
+        return @"";
+    }
+    if (!gHasOverrides && !gHasImages && !gHasColors && !gHasStrings) {
+        return nil;
+    }
+    NSString *path = bundle.bundlePath;
+    @synchronized (NCResourcesLock()) {
+        NSString *mirrored = gMirrorPathKeys[path];
+        if (mirrored) {
+            return mirrored;
+        }
+        NSString *name = path.lastPathComponent;
+        if ([gBundlePaths[name] isEqualToString:path]) {
+            return name;
+        }
+    }
+    return nil;
+}
+
 #pragma mark - 查询
 
 /// 名字对应的已更新条目。name 为 storyboard / nib 名，ext 为 storyboardc / nib。
 /// 同时匹配 xib 的设备变体（View~iphone.nib），任意 .lproj 下的条目都算
-static NSString *NCOverrideItemNamed(NSString *name, NSString *ext) {
+static NSString *NCOverrideItemNamed(NSString *bundleKey, NSString *name, NSString *ext) {
     if (!gHasOverrides || name.length == 0) {
         return nil;
     }
     @synchronized (NCResourcesLock()) {
-        for (NSString *item in gOverrides) {
+        for (NSString *item in gBundleOverrides[bundleKey]) {
             NSString *file = item.lastPathComponent;
             if (![file.pathExtension isEqualToString:ext]) {
                 continue;
@@ -84,20 +175,28 @@ static NSString *NCOverrideItemNamed(NSString *name, NSString *ext) {
     return nil;
 }
 
-/// 文件名对应的已更新文件绝对路径（供 pathForResource: 系列使用）
-static NSString *NCOverridePathForFile(NSString *fileName) {
+/// 文件名对应的已更新文件绝对路径（供 pathForResource: 系列使用）。
+/// subdirectory 为空时匹配资源目录根部或 .lproj 下的条目，与 Xcode 拷贝资源的位置一致；
+/// 指定了子目录时要求条目恰好位于该子目录
+static NSString *NCOverridePathForFile(NSString *bundleKey, NSString *fileName, NSString *subdirectory) {
     if (!gHasOverrides || fileName.length == 0) {
         return nil;
     }
     @synchronized (NCResourcesLock()) {
-        for (NSString *item in gOverrides) {
+        NSDictionary<NSString *, NSString *> *overrides = gBundleOverrides[bundleKey];
+        for (NSString *item in overrides) {
             if (![item.lastPathComponent isEqualToString:fileName]) {
                 continue;
             }
             NSString *directory = item.stringByDeletingLastPathComponent;
-            // 只处理资源目录根部或 .lproj 下的条目，与 Xcode 拷贝资源的位置一致
+            if (subdirectory.length > 0) {
+                if ([directory isEqualToString:subdirectory]) {
+                    return overrides[item];
+                }
+                continue;
+            }
             if (directory.length == 0 || [directory.pathExtension isEqualToString:@"lproj"]) {
-                return gOverrides[item];
+                return overrides[item];
             }
         }
     }
@@ -110,11 +209,12 @@ static BOOL NCIsMainOrMirror(NSBundle *bundle) {
 
 /// 加载 name.ext 时应使用的 bundle：资源已更新则返回镜像 bundle，否则原样返回
 static NSBundle *NCRedirectBundle(NSBundle *bundle, NSString *name, NSString *ext) {
-    if (!NCIsMainOrMirror(bundle) || !NCOverrideItemNamed(name, ext)) {
+    NSString *key = NCBundleKeyForBundle(bundle);
+    if (!key || !NCOverrideItemNamed(key, name, ext)) {
         return bundle;
     }
     @synchronized (NCResourcesLock()) {
-        return gMirrorBundle ?: bundle;
+        return gMirrorBundles[key] ?: bundle;
     }
 }
 
@@ -194,26 +294,46 @@ static NSImage *NCBuildImage(NSDictionary *entry) {
 }
 #endif
 
-/// 名字对应的新图；未更新过返回 nil
-static NCPlatformImage *NCOverrideImageNamed(NSString *name) {
+/// 名字对应的新图；未更新过返回 nil。
+/// bundle 为 nil 表示不关心所属 bundle（nib 解码时拿不到 bundle，按名字匹配任意 bundle 的更新）
+static NCPlatformImage *NCOverrideImageNamed(NSString *name, NSString *bundleKey) {
     if (!gHasImages || name.length == 0) {
         return nil;
     }
-    NSString *key = NCNormalizedImageName(name);
+    NSString *normalized = NCNormalizedImageName(name);
     @synchronized (NCResourcesLock()) {
-        NSDictionary *entry = gImages[key];
+        NSString *cacheKey = nil;
+        NSDictionary *entry = nil;
+        if (bundleKey) {
+            cacheKey = [NSString stringWithFormat:@"%@|%@", bundleKey, normalized];
+            entry = gImages[cacheKey];
+        } else {
+            // 任意 bundle：优先主 bundle，其次其他 bundle
+            for (NSString *key in gImages) {
+                NSArray<NSString *> *parts = [key componentsSeparatedByString:@"|"];
+                if (parts.count == 2 && [parts[1] isEqualToString:normalized] && (!entry || [parts[0] isEqualToString:@""])) {
+                    cacheKey = key;
+                    entry = gImages[key];
+                }
+            }
+        }
         if (!entry) {
             return nil;
         }
-        NCPlatformImage *image = gImageCache[key];
+        NCPlatformImage *image = gImageCache[cacheKey];
         if (!image) {
             image = NCBuildImage(entry);
             if (image) {
-                gImageCache[key] = image;
+                gImageCache[cacheKey] = image;
             }
         }
         return image;
     }
+}
+
+/// 图片查询用的 bundleKey：bundle 为主 bundle / nil 时是 @""，已更新过的其他 bundle 是其目录名，其余 NSNull（不会命中）
+static NSString *NCImageBundleKey(NSBundle *bundle) {
+    return NCBundleKeyForBundle(bundle) ?: @"\x01none";
 }
 
 #pragma mark - Hook
@@ -236,27 +356,109 @@ static IMP NCHookInstanceMethod(Class cls, SEL sel, IMP replacement) {
 
 static IMP gOrigPathForResource;
 static IMP gOrigURLForResource;
+static IMP gOrigPathForResourceInDirectory;
+static IMP gOrigURLForResourceSubdirectory;
+static IMP gOrigLocalizedString;
+
+static NSString *NCFileNameFor(NSString *name, NSString *ext) {
+    return ext.length > 0 ? [name stringByAppendingPathExtension:ext] : name;
+}
 
 static NSString *NCPathForResource(NSBundle *self, SEL _cmd, NSString *name, NSString *ext) {
-    if (self == NSBundle.mainBundle && name.length > 0) {
-        NSString *fileName = ext.length > 0 ? [name stringByAppendingPathExtension:ext] : name;
-        NSString *path = NCOverridePathForFile(fileName);
-        if (path) {
-            return path;
-        }
+    NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
+    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), nil) : nil;
+    if (path) {
+        return path;
     }
     return ((NSString *(*)(id, SEL, NSString *, NSString *))gOrigPathForResource)(self, _cmd, name, ext);
 }
 
 static NSURL *NCURLForResource(NSBundle *self, SEL _cmd, NSString *name, NSString *ext) {
-    if (self == NSBundle.mainBundle && name.length > 0) {
-        NSString *fileName = ext.length > 0 ? [name stringByAppendingPathExtension:ext] : name;
-        NSString *path = NCOverridePathForFile(fileName);
-        if (path) {
-            return [NSURL fileURLWithPath:path];
-        }
+    NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
+    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), nil) : nil;
+    if (path) {
+        return [NSURL fileURLWithPath:path];
     }
     return ((NSURL *(*)(id, SEL, NSString *, NSString *))gOrigURLForResource)(self, _cmd, name, ext);
+}
+
+static NSString *NCPathForResourceInDirectory(NSBundle *self, SEL _cmd, NSString *name, NSString *ext, NSString *subpath) {
+    NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
+    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), subpath) : nil;
+    if (path) {
+        return path;
+    }
+    return ((NSString *(*)(id, SEL, NSString *, NSString *, NSString *))gOrigPathForResourceInDirectory)(self, _cmd, name, ext, subpath);
+}
+
+static NSURL *NCURLForResourceSubdirectory(NSBundle *self, SEL _cmd, NSString *name, NSString *ext, NSString *subpath) {
+    NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
+    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), subpath) : nil;
+    if (path) {
+        return [NSURL fileURLWithPath:path];
+    }
+    return ((NSURL *(*)(id, SEL, NSString *, NSString *, NSString *))gOrigURLForResourceSubdirectory)(self, _cmd, name, ext, subpath);
+}
+
+/// 本地化字符串：bundle 里某张 .strings 表被更新过时，先在新表里找
+static NSString *NCOverrideLocalizedString(NSBundle *bundle, NSString *key, NSString *table) {
+    if (!gHasStrings || key.length == 0) {
+        return nil;
+    }
+    NSString *bundleKey = NCBundleKeyForBundle(bundle);
+    if (!bundleKey) {
+        return nil;
+    }
+    NSString *tableName = table.length > 0 ? table : @"Localizable";
+    NSString *fileName = [tableName stringByAppendingPathExtension:@"strings"];
+    NSString *chosen = nil;
+    @synchronized (NCResourcesLock()) {
+        NSDictionary<NSString *, NSString *> *overrides = gBundleOverrides[bundleKey];
+        NSArray<NSString *> *preferred = bundle.preferredLocalizations ?: @[];
+        NSString *fallback = nil;
+        for (NSString *item in overrides) {
+            if (![item.lastPathComponent isEqualToString:fileName]) {
+                continue;
+            }
+            NSString *directory = item.stringByDeletingLastPathComponent;
+            NSString *language = directory.stringByDeletingPathExtension;
+            if (directory.length > 0 && [preferred containsObject:language]) {
+                chosen = overrides[item];
+                break;
+            }
+            if (!fallback || [language isEqualToString:@"Base"] || directory.length == 0) {
+                fallback = overrides[item];
+            }
+        }
+        chosen = chosen ?: fallback;
+        if (chosen && !gStringsCache[chosen]) {
+            // .strings 是 OpenStep 风格的属性列表，NSDictionary 可直接解析
+            gStringsCache[chosen] = [NSDictionary dictionaryWithContentsOfFile:chosen] ?: @{};
+        }
+        return chosen ? gStringsCache[chosen][key] : nil;
+    }
+}
+
+static NSString *NCLocalizedString(NSBundle *self, SEL _cmd, NSString *key, NSString *value, NSString *table) {
+    NSString *override = NCOverrideLocalizedString(self, key, table);
+    if (override) {
+        return override;
+    }
+    return ((NSString *(*)(id, SEL, NSString *, NSString *, NSString *))gOrigLocalizedString)(self, _cmd, key, value, table);
+}
+
+/// 颜色集：@"bundleKey|名字" 命中时返回新颜色分量
+static NSDictionary *NCOverrideColorEntry(NSString *name, NSBundle *bundle) {
+    if (!gHasColors || name.length == 0) {
+        return nil;
+    }
+    NSString *bundleKey = NCBundleKeyForBundle(bundle);
+    if (!bundleKey) {
+        return nil;
+    }
+    @synchronized (NCResourcesLock()) {
+        return gColors[[NSString stringWithFormat:@"%@|%@", bundleKey, name]];
+    }
 }
 
 #if NC_UIKIT
@@ -281,7 +483,7 @@ static NSURL *NCURLForResource(NSBundle *self, SEL _cmd, NSString *name, NSStrin
         id value = [coder decodeObjectForKey:@"UIResourceName"];
         name = [value isKindOfClass:NSString.class] ? value : nil;
     }
-    UIImage *override = NCOverrideImageNamed(name);
+    UIImage *override = NCOverrideImageNamed(name, nil);
     if (!override) {
         return image;
     }
@@ -330,7 +532,7 @@ static NSArray *NCLoadNibNamed(NSBundle *self, SEL _cmd, NSString *name, id owne
 }
 
 static UIImage *NCImageNamed(id self, SEL _cmd, NSString *name) {
-    UIImage *image = NCOverrideImageNamed(name);
+    UIImage *image = NCOverrideImageNamed(name, @"");
     if (image) {
         return image;
     }
@@ -338,28 +540,57 @@ static UIImage *NCImageNamed(id self, SEL _cmd, NSString *name) {
 }
 
 static UIImage *NCImageNamedInBundleTraits(id self, SEL _cmd, NSString *name, NSBundle *bundle, UITraitCollection *traits) {
-    if (NCIsMainOrMirror(bundle)) {
-        UIImage *image = NCOverrideImageNamed(name);
-        if (image) {
-            return image;
-        }
+    UIImage *image = NCOverrideImageNamed(name, NCImageBundleKey(bundle));
+    if (image) {
+        return image;
     }
     return ((UIImage *(*)(id, SEL, NSString *, NSBundle *, UITraitCollection *))gOrigImageNamedInBundleTraits)(
         self, _cmd, name, bundle, traits);
 }
 
 static UIImage *NCImageNamedInBundleConfiguration(id self, SEL _cmd, NSString *name, NSBundle *bundle, id configuration) {
-    if (NCIsMainOrMirror(bundle)) {
-        UIImage *image = NCOverrideImageNamed(name);
-        if (image) {
-            return image;
-        }
+    UIImage *image = NCOverrideImageNamed(name, NCImageBundleKey(bundle));
+    if (image) {
+        return image;
     }
     return ((UIImage *(*)(id, SEL, NSString *, NSBundle *, id))gOrigImageNamedInBundleConfiguration)(
         self, _cmd, name, bundle, configuration);
 }
 
+static IMP gOrigColorNamed;
+static IMP gOrigColorNamedInBundle;
+
+static UIColor *NCColorFromEntry(NSDictionary *entry) {
+    CGFloat red = [entry[@"red"] doubleValue];
+    CGFloat green = [entry[@"green"] doubleValue];
+    CGFloat blue = [entry[@"blue"] doubleValue];
+    CGFloat alpha = [entry[@"alpha"] doubleValue];
+    if ([entry[@"p3"] boolValue]) {
+        return [UIColor colorWithDisplayP3Red:red green:green blue:blue alpha:alpha];
+    }
+    return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
+}
+
+static UIColor *NCColorNamed(id self, SEL _cmd, NSString *name) {
+    NSDictionary *entry = NCOverrideColorEntry(name, nil);
+    if (entry) {
+        return NCColorFromEntry(entry);
+    }
+    return ((UIColor *(*)(id, SEL, NSString *))gOrigColorNamed)(self, _cmd, name);
+}
+
+static UIColor *NCColorNamedInBundle(id self, SEL _cmd, NSString *name, NSBundle *bundle, UITraitCollection *traits) {
+    NSDictionary *entry = NCOverrideColorEntry(name, bundle);
+    if (entry) {
+        return NCColorFromEntry(entry);
+    }
+    return ((UIColor *(*)(id, SEL, NSString *, NSBundle *, UITraitCollection *))gOrigColorNamedInBundle)(self, _cmd, name, bundle, traits);
+}
+
 static void NCInstallPlatformHooks(void) {
+    gOrigColorNamed = NCHookClassMethod(UIColor.class, @selector(colorNamed:), (IMP)NCColorNamed);
+    gOrigColorNamedInBundle = NCHookClassMethod(UIColor.class, @selector(colorNamed:inBundle:compatibleWithTraitCollection:),
+                                                (IMP)NCColorNamedInBundle);
     gOrigStoryboardWithName = NCHookClassMethod(UIStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName);
     gOrigNibWithName = NCHookClassMethod(UINib.class, @selector(nibWithNibName:bundle:), (IMP)NCNibWithName);
     gOrigLoadNibNamed = NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:options:), (IMP)NCLoadNibNamed);
@@ -395,7 +626,7 @@ static BOOL NCLoadNibNamed(NSBundle *self, SEL _cmd, NSString *name, id owner, N
 }
 
 static NSImage *NCImageNamed(id self, SEL _cmd, NSString *name) {
-    NSImage *image = NCOverrideImageNamed(name);
+    NSImage *image = NCOverrideImageNamed(name, @"");
     if (image) {
         return image;
     }
@@ -403,16 +634,46 @@ static NSImage *NCImageNamed(id self, SEL _cmd, NSString *name) {
 }
 
 static NSImage *NCImageForResource(NSBundle *self, SEL _cmd, NSString *name) {
-    if (NCIsMainOrMirror(self)) {
-        NSImage *image = NCOverrideImageNamed(name);
-        if (image) {
-            return image;
-        }
+    NSImage *image = NCOverrideImageNamed(name, NCImageBundleKey(self));
+    if (image) {
+        return image;
     }
     return ((NSImage *(*)(id, SEL, NSString *))gOrigImageForResource)(self, _cmd, name);
 }
 
+static IMP gOrigColorNamed;
+static IMP gOrigColorNamedInBundle;
+
+static NSColor *NCColorFromEntry(NSDictionary *entry) {
+    CGFloat red = [entry[@"red"] doubleValue];
+    CGFloat green = [entry[@"green"] doubleValue];
+    CGFloat blue = [entry[@"blue"] doubleValue];
+    CGFloat alpha = [entry[@"alpha"] doubleValue];
+    if ([entry[@"p3"] boolValue]) {
+        return [NSColor colorWithDisplayP3Red:red green:green blue:blue alpha:alpha];
+    }
+    return [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha];
+}
+
+static NSColor *NCColorNamed(id self, SEL _cmd, NSString *name) {
+    NSDictionary *entry = NCOverrideColorEntry(name, nil);
+    if (entry) {
+        return NCColorFromEntry(entry);
+    }
+    return ((NSColor *(*)(id, SEL, NSString *))gOrigColorNamed)(self, _cmd, name);
+}
+
+static NSColor *NCColorNamedInBundle(id self, SEL _cmd, NSString *name, NSBundle *bundle) {
+    NSDictionary *entry = NCOverrideColorEntry(name, bundle);
+    if (entry) {
+        return NCColorFromEntry(entry);
+    }
+    return ((NSColor *(*)(id, SEL, NSString *, NSBundle *))gOrigColorNamedInBundle)(self, _cmd, name, bundle);
+}
+
 static void NCInstallPlatformHooks(void) {
+    gOrigColorNamed = NCHookClassMethod(NSColor.class, @selector(colorNamed:), (IMP)NCColorNamed);
+    gOrigColorNamedInBundle = NCHookClassMethod(NSColor.class, @selector(colorNamed:bundle:), (IMP)NCColorNamedInBundle);
     gOrigStoryboardWithName = NCHookClassMethod(NSStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName);
     gOrigNibInitWithName = NCHookInstanceMethod(NSNib.class, @selector(initWithNibNamed:bundle:), (IMP)NCNibInitWithName);
     gOrigLoadNibNamed = NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:topLevelObjects:), (IMP)NCLoadNibNamed);
@@ -426,12 +687,21 @@ static void NCInstallPlatformHooks(void) {
 static void NCInstallHooks(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        gOverrides = [NSMutableDictionary dictionary];
+        gBundleOverrides = [NSMutableDictionary dictionary];
         gImages = [NSMutableDictionary dictionary];
         gImageCache = [NSMutableDictionary dictionary];
-        gMirrorPaths = [NSMutableSet set];
+        gColors = [NSMutableDictionary dictionary];
+        gStringsCache = [NSMutableDictionary dictionary];
+        gBundlePaths = [NSMutableDictionary dictionary];
+        gMirrorBundles = [NSMutableDictionary dictionary];
+        gMirrorPathKeys = [NSMutableDictionary dictionary];
         gOrigPathForResource = NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:), (IMP)NCPathForResource);
         gOrigURLForResource = NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:), (IMP)NCURLForResource);
+        gOrigPathForResourceInDirectory = NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:inDirectory:),
+                                                               (IMP)NCPathForResourceInDirectory);
+        gOrigURLForResourceSubdirectory = NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:subdirectory:),
+                                                               (IMP)NCURLForResourceSubdirectory);
+        gOrigLocalizedString = NCHookInstanceMethod(NSBundle.class, @selector(localizedStringForKey:value:table:), (IMP)NCLocalizedString);
         NCInstallPlatformHooks();
     });
 }
@@ -482,13 +752,26 @@ static BOOL NCBuildMirror(NSString *realDir, NSString *mirrorDir, NSDictionary<N
     return YES;
 }
 
-/// 按当前全部已更新条目重新生成镜像 bundle。每次换新路径，避免 NSBundle 按路径缓存旧实例
-static BOOL NCRebuildMirrorBundle(void) {
-    NSString *bundlePath = NSBundle.mainBundle.bundlePath;
-    NSString *subpath = NCResourceSubpath();
+/// 按某个 bundle 当前全部已更新条目重新生成镜像 bundle。每次换新路径，避免 NSBundle 按路径缓存旧实例
+static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
+    NSString *bundlePath = nil;
+    NSBundle *realBundle = nil;
+    if (bundleKey.length == 0) {
+        realBundle = NSBundle.mainBundle;
+        bundlePath = realBundle.bundlePath;
+    } else {
+        @synchronized (NCResourcesLock()) {
+            bundlePath = gBundlePaths[bundleKey];
+        }
+        realBundle = bundlePath ? [NSBundle bundleWithPath:bundlePath] : nil;
+    }
+    if (!bundlePath || !realBundle) {
+        return NO;
+    }
+    NSString *subpath = NCResourceSubpathOfBundle(realBundle);
     NSMutableDictionary<NSString *, NSString *> *relativeToBundle = [NSMutableDictionary dictionary];
     @synchronized (NCResourcesLock()) {
-        [gOverrides enumerateKeysAndObjectsUsingBlock:^(NSString *item, NSString *absolute, BOOL *stop) {
+        [gBundleOverrides[bundleKey] enumerateKeysAndObjectsUsingBlock:^(NSString *item, NSString *absolute, BOOL *stop) {
             relativeToBundle[subpath.length > 0 ? [subpath stringByAppendingPathComponent:item] : item] = absolute;
         }];
     }
@@ -505,8 +788,8 @@ static BOOL NCRebuildMirrorBundle(void) {
         return NO;
     }
     @synchronized (NCResourcesLock()) {
-        gMirrorBundle = mirror;
-        [gMirrorPaths addObject:mirrorPath];
+        gMirrorBundles[bundleKey] = mirror;
+        gMirrorPathKeys[mirrorPath] = bundleKey;
     }
     return YES;
 }
@@ -520,7 +803,7 @@ static BOOL NCRebuildMirrorBundle(void) {
         return NO;
     }
     @synchronized (NCResourcesLock()) {
-        return [gMirrorPaths containsObject:bundle.bundlePath];
+        return gMirrorPathKeys[bundle.bundlePath] != nil;
     }
 }
 
@@ -583,15 +866,30 @@ static BOOL NCRebuildMirrorBundle(void) {
     NSArray<NSString *> *items = json[@"items"];
     NSArray<NSDictionary *> *images = json[@"images"];
 
-    // 1. 登记 bundle 条目并重建镜像 bundle
+    // 0. 确定资源所属 bundle（主 bundle 为 @""）
+    NSString *bundleKey = NCResolveBundleKey(json[@"bundle"]);
+    if (!bundleKey) {
+        result.message = [NSString stringWithFormat:@"找不到资源所属的 bundle：%@", json[@"bundle"]];
+        return;
+    }
+
+    // 1. 登记 bundle 条目并重建镜像 bundle（storyboard / nib / 原样拷贝的文件）
     if (items.count > 0) {
         @synchronized (NCResourcesLock()) {
+            NSMutableDictionary<NSString *, NSString *> *overrides = gBundleOverrides[bundleKey];
+            if (!overrides) {
+                overrides = [NSMutableDictionary dictionary];
+                gBundleOverrides[bundleKey] = overrides;
+            }
             for (NSString *item in items) {
-                gOverrides[item] = [root stringByAppendingPathComponent:item];
+                overrides[item] = [root stringByAppendingPathComponent:item];
+                if ([item.pathExtension isEqualToString:@"strings"]) {
+                    gHasStrings = YES;
+                }
             }
         }
         gHasOverrides = YES;
-        if (!NCRebuildMirrorBundle()) {
+        if (!NCRebuildMirrorBundle(bundleKey)) {
             result.message = @"无法生成镜像 bundle";
             return;
         }
@@ -605,7 +903,7 @@ static BOOL NCRebuildMirrorBundle(void) {
             variant[@"absolutePath"] = [root stringByAppendingPathComponent:image[@"path"]];
             [variants addObject:variant];
         }
-        NSString *key = NCNormalizedImageName(name);
+        NSString *key = [NSString stringWithFormat:@"%@|%@", bundleKey, NCNormalizedImageName(name)];
         @synchronized (NCResourcesLock()) {
             gImages[key] = @{ @"images": variants, @"template": json[@"template"] ?: @NO };
             [gImageCache removeObjectForKey:key];
@@ -613,7 +911,15 @@ static BOOL NCRebuildMirrorBundle(void) {
         gHasImages = YES;
     }
 
-    // 3. 刷新可见界面
+    // 3. 登记颜色集
+    if ([kind isEqualToString:@"colorset"] && [json[@"color"] isKindOfClass:NSDictionary.class]) {
+        @synchronized (NCResourcesLock()) {
+            gColors[[NSString stringWithFormat:@"%@|%@", bundleKey, name]] = json[@"color"];
+        }
+        gHasColors = YES;
+    }
+
+    // 4. 刷新可见界面
     NSArray<NSString *> *pending = nil;
     result.refreshedControllers = [NCSweeper refreshAfterResourceKind:kind name:name pendingControllers:&pending];
     result.pendingControllers = pending ?: @[];

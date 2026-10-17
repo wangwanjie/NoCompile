@@ -15,6 +15,7 @@
 #import "NCRebind.h"
 #import "NCSwiftMetadata.h"
 #import "NCSwizzleGuard.h"
+#import "NCStaticState.h"
 #import "NCSweeper.h"
 #import "NCLog.h"
 #import "NoCompile.h"
@@ -25,11 +26,54 @@
 @implementation NCInjectResult
 @end
 
+/// 历次注入中每个符号的最新实现：后注入的 dylib 引用到这些符号时，要指向最新实现而不是 App 里的原始版本
+/// （dyld 按符号表解析，App 镜像导出的永远是第一次编译进去的旧代码）
+static NSMutableDictionary<NSString *, NSValue *> *NCLatestSymbolImpls(void) {
+    static NSMutableDictionary *table;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        table = [NSMutableDictionary dictionary];
+    });
+    return table;
+}
+
 extern void NCRegisterClassAlias(Class newClass, Class oldClass);
 
 static BOOL NCHasSuffix(const char *name, size_t len, const char *suffix) {
     size_t suffixLen = strlen(suffix);
     return len >= suffixLen && strcmp(name + len - suffixLen, suffix) == 0;
+}
+
+/// 符号是否由 Swift 运行时 / 标准库镜像提供（这类符号不能被 App 的注入替换）
+static BOOL NCIsStdlibSymbol(const char *name) {
+    void *address = dlsym(RTLD_DEFAULT, name + 1);
+    if (!address) {
+        return NO;
+    }
+    Dl_info info;
+    if (!dladdr(address, &info) || !info.dli_fname) {
+        return NO;
+    }
+    return strstr(info.dli_fname, "libswift") != NULL;
+}
+
+/// 外部只读数据符号是否可整体替换：位于只读数据节（__DATA_CONST / __const）的 C 命名常量。
+/// C++ vtable / typeinfo、ObjC 元数据、Swift 元数据不处理
+static BOOL NCIsReplaceableConstantData(const char *name, const struct section_64 *section) {
+    if (!name || name[0] != '_') {
+        return NO;
+    }
+    const char *body = name + 1;
+    if (strncmp(body, "_Z", 2) == 0 || strncmp(body, "OBJC_", 5) == 0 || strncmp(body, "$s", 2) == 0
+        || strncmp(body, "_OBJC", 5) == 0 || strncmp(body, "swift", 5) == 0 || strncmp(body, "_swift", 6) == 0) {
+        return NO;
+    }
+    BOOL readOnlySegment = strncmp(section->segname, "__DATA_CONST", 16) == 0;
+    BOOL constSection = strncmp(section->sectname, "__const", 16) == 0;
+    if (!readOnlySegment && !constSection) {
+        return NO;
+    }
+    return YES;
 }
 
 /// 判断一个已定义在 __text 节中的符号是否可被函数级替换
@@ -42,8 +86,10 @@ static BOOL NCInjectableSymbol(const char *name, uint8_t type, BOOL preserveStat
 
     // Swift 符号：按 mangled 名后缀识别函数类实体（参考 SwiftTrace.injectableSymbol）
     if (body[0] == '$' && (body[1] == 's' || body[1] == 'S')) {
-        // 标准库符号（$sS / $ss）不处理
-        if (body[2] == 'S' || body[2] == 's') {
+        // 以 $sS / $ss 开头的符号可能是标准库自己的，也可能是 App 给标准库类型 / ObjC 类型（$sSo 开头，
+        // 如 UIView、UIColor）写的扩展方法。后者很常见，不能一律排除：
+        // 只有同名符号确实由 Swift 标准库镜像提供时才跳过
+        if ((body[2] == 'S' || body[2] == 's') && NCIsStdlibSymbol(name)) {
             return NO;
         }
         // static 成员在 mangled 名末尾多一个 Z（如 static func → FZ，static var getter → vgZ），先去掉再判断
@@ -110,9 +156,69 @@ static NSArray<Class> *NCOldClassesNamed(const char *className, Class excluding)
     return result;
 }
 
-/// ObjC 方法替换：把 newClass 的方法逐个写回 oldClass
+/// ObjC 类的实例变量布局是否发生变化（个数、名字、偏移或类型任一不同）。
+/// Swift 类不在这里判断（它们的存储属性变化由元数据大小比较处理）
+static BOOL NCObjCIvarLayoutChanged(Class oldClass, Class newClass) {
+    if (NCIsSwiftClass(oldClass) || NCIsSwiftClass(newClass)) {
+        return NO;
+    }
+    if (class_getInstanceSize(oldClass) == class_getInstanceSize(newClass)) {
+        // 大小相同时仍可能重排，下面逐个比较
+    }
+    unsigned int oldCount = 0, newCount = 0;
+    Ivar *oldIvars = class_copyIvarList(oldClass, &oldCount);
+    Ivar *newIvars = class_copyIvarList(newClass, &newCount);
+    BOOL changed = oldCount != newCount;
+    for (unsigned int i = 0; !changed && i < oldCount; i++) {
+        const char *oldName = ivar_getName(oldIvars[i]);
+        const char *newName = ivar_getName(newIvars[i]);
+        const char *oldType = ivar_getTypeEncoding(oldIvars[i]);
+        const char *newType = ivar_getTypeEncoding(newIvars[i]);
+        if (!oldName || !newName || strcmp(oldName, newName) != 0 || ivar_getOffset(oldIvars[i]) != ivar_getOffset(newIvars[i])
+            || (oldType && newType && strcmp(oldType, newType) != 0)) {
+            changed = YES;
+        }
+    }
+    free(oldIvars);
+    free(newIvars);
+    return changed;
+}
+
+/// 方法实现所在函数的符号名（如 `-[Foo bar]`）。Debug 产物保留了局部符号，取不到时返回 nil
+static NSString *NCFunctionNameForIMP(IMP imp) {
+    Dl_info info;
+    if (imp && dladdr((const void *)imp, &info) && info.dli_sname && info.dli_sname[0] != '\0') {
+        return @(info.dli_sname);
+    }
+    return nil;
+}
+
+/// ObjC 方法替换：把 newClass 的方法逐个写回 oldClass。
+///
+/// 按"函数体"而不是按选择子配对：旧类的方法可能被 method_exchangeImplementations 换过（+load 里的 swizzle），
+/// 此时选择子 `work` 指向的是 `-[Foo hookedWork]` 的函数体。直接按选择子替换会把交换还原，hook 链被破坏。
+/// 所以先按函数符号名找到旧类里当前指向该函数体的选择子，把新函数体写到那个选择子上，交换关系得以保留。
+/// 找不到对应函数体（新增方法、符号被剥离、block 实现）时退回按选择子替换。
 static NSUInteger NCSwizzleObjCMethods(Class oldClass, Class newClass) {
     NSUInteger replaced = 0;
+
+    unsigned int oldCount = 0;
+    Method *oldMethods = class_copyMethodList(oldClass, &oldCount);
+    NSMutableDictionary<NSString *, NSMutableArray<NSValue *> *> *selectorsByFunction = [NSMutableDictionary dictionary];
+    for (unsigned int i = 0; i < oldCount; i++) {
+        NSString *function = NCFunctionNameForIMP(method_getImplementation(oldMethods[i]));
+        if (!function) {
+            continue;
+        }
+        NSMutableArray<NSValue *> *selectors = selectorsByFunction[function];
+        if (!selectors) {
+            selectors = [NSMutableArray array];
+            selectorsByFunction[function] = selectors;
+        }
+        [selectors addObject:[NSValue valueWithPointer:method_getName(oldMethods[i])]];
+    }
+    free(oldMethods);
+
     unsigned int count = 0;
     Method *methods = class_copyMethodList(newClass, &count);
     for (unsigned int i = 0; i < count; i++) {
@@ -121,7 +227,18 @@ static NSUInteger NCSwizzleObjCMethods(Class oldClass, Class newClass) {
         if (sel == @selector(load) || sel == @selector(initialize)) {
             continue;
         }
-        class_replaceMethod(oldClass, sel, method_getImplementation(methods[i]), method_getTypeEncoding(methods[i]));
+        IMP imp = method_getImplementation(methods[i]);
+        const char *types = method_getTypeEncoding(methods[i]);
+        NSString *function = NCFunctionNameForIMP(imp);
+        NSArray<NSValue *> *targets = function ? selectorsByFunction[function] : nil;
+        if (targets.count > 0) {
+            for (NSValue *target in targets) {
+                class_replaceMethod(oldClass, (SEL)target.pointerValue, imp, types);
+                replaced++;
+            }
+            continue;
+        }
+        class_replaceMethod(oldClass, sel, imp, types);
         replaced++;
     }
     free(methods);
@@ -245,7 +362,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     // dlopen 会执行新镜像的 +load；加载期间拦截其中的 swizzling，避免 hook 链自我指向
     BOOL guard = NoCompile.suppressSwizzlingDuringLoad;
     if (guard) {
-        NCSwizzleGuardBegin();
+        NCSwizzleGuardBegin(dylibPath.fileSystemRepresentation);
     }
     // 新增文件的符号在 App 中不存在，之后的注入（如引用了新类型的旧文件）要靠全局查找链接到它
     void *handle = dlopen(dylibPath.fileSystemRepresentation, RTLD_NOW | (isNewFile ? RTLD_GLOBAL : RTLD_LOCAL));
@@ -274,9 +391,15 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     NSMutableArray<NSString *> *interposeNames = [NSMutableArray array];
     NSMutableArray<NSValue *> *interposeImpls = [NSMutableArray array];
     NSMutableArray<NSString *> *staticAddressors = [NSMutableArray array];
+    NSMutableSet<NSString *> *weakDefinedNames = [NSMutableSet set];
+    NSMutableArray<NSString *> *undefinedNames = [NSMutableArray array];
 
-    NCEnumerateSymbols(newImage, ^(const char *name, uintptr_t address, uint8_t type,
-                                   const struct section_64 *section, BOOL *stop) {
+    NCEnumerateSymbolsWithDesc(newImage, ^(const char *name, uintptr_t address, uint8_t type, uint16_t desc,
+                                           const struct section_64 *section, BOOL *stop) {
+        if (address == 0 && (type & N_TYPE) == N_UNDF) {
+            [undefinedNames addObject:@(name)];
+            return;
+        }
         if (address == 0 || !section) {
             return;
         }
@@ -290,6 +413,13 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
             [classSymbols addObject:@(name)];
             return;
         }
+        // 外部只读数据（`NSString *const kTitle`、`const int kLimit`、const 数组 / 结构体）：
+        // 其他镜像里的引用要指向新值，否则旧文件读到的仍是旧常量
+        if ((type & N_EXT) && NCIsReplaceableConstantData(name, section)) {
+            [interposeNames addObject:@(name)];
+            [interposeImpls addObject:[NSValue valueWithPointer:(void *)address]];
+            return;
+        }
         BOOL isText = strncmp(section->sectname, "__text", 16) == 0;
         if (!isText) {
             return;
@@ -297,6 +427,11 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
         if (NCInjectableSymbol(name, type, preserveStatics)) {
             [interposeNames addObject:@(name)];
             [interposeImpls addObject:[NSValue valueWithPointer:(void *)address]];
+            // 弱定义（C++ 模板 / inline 函数等）：dyld 的弱符号合并会让新镜像自己的引用也绑到旧镜像的那份，
+            // 新镜像内部同样需要改写，否则新代码调用到的 inline / 模板函数仍是旧实现
+            if (desc & N_WEAK_DEF) {
+                [weakDefinedNames addObject:@(name)];
+            }
         }
         if (preserveStatics && NCIsStaticAddressor(name)) {
             [staticAddressors addObject:@(name)];
@@ -307,6 +442,7 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     NSMutableArray<Class> *patchedClasses = [NSMutableArray array];
     NSMutableArray<Class> *addedClasses = [NSMutableArray array];
     NSUInteger objcReplaced = 0;
+    NSUInteger ivarLayoutSkipped = 0;
     long swiftPatched = 0;
     // 发生布局变化（增删方法或存储属性）的类名：既不覆写其 vtable，也不在其旧实例上重跑生命周期
     NSMutableArray<NSString *> *layoutChanged = [NSMutableArray array];
@@ -324,6 +460,16 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
             continue;
         }
         for (Class oldClass in oldClasses) {
+            // ObjC 类的 ivar 布局变了（新增 / 删除 / 重排 @property 的实例变量）：旧实例按旧大小分配，
+            // 新方法体按新偏移读写 ivar 会越过对象末尾、破坏堆内存。此时不替换这个类的方法，
+            // 只提示重新运行 App
+            if (NCObjCIvarLayoutChanged(oldClass, newClass)) {
+                if (![layoutChanged containsObject:@(className)]) {
+                    [layoutChanged addObject:@(className)];
+                }
+                ivarLayoutSkipped++;
+                continue;
+            }
             // 布局变化（增删方法改变 vtable，或增删存储属性改变实例大小）时不再拒绝注入，但也不能
             // 动旧实例：旧元数据的 vtable 槽位数、实例大小都已固定，覆写或重跑生命周期都会越界崩溃。
             // 这里只加载新代码、登记类别名、并替换 ObjC/@objc 方法（动态派发，增删方法是安全的）。
@@ -357,6 +503,44 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
         }
     }
 
+    // 2.8 新增的符号（App 里没有同名定义，如新增 / 改了签名的函数）：提升为全局，
+    //     之后注入的 dylib 才能引用到它们（否则 dlopen 报未解析符号）
+    if (!isNewFile) {
+        NSUInteger newSymbols = 0;
+        for (NSString *name in interposeNames) {
+            if (!dlsym(RTLD_DEFAULT, name.UTF8String + 1)) {
+                newSymbols++;
+            }
+        }
+        if (newSymbols > 0) {
+            dlopen(dylibPath.fileSystemRepresentation, RTLD_NOLOAD | RTLD_GLOBAL);
+        }
+    }
+
+    // 2.9 新镜像引用了此前注入过的符号：指向它们的最新实现
+    NSMutableDictionary<NSString *, NSValue *> *latest = NCLatestSymbolImpls();
+    NSMutableSet<NSString *> *definedHere = [NSMutableSet setWithArray:interposeNames];
+    if (latest.count > 0 && undefinedNames.count > 0) {
+        NSMutableArray<NSString *> *wanted = [NSMutableArray array];
+        for (NSString *name in undefinedNames) {
+            if (latest[name] && ![definedHere containsObject:name]) {
+                [wanted addObject:name];
+            }
+        }
+        if (wanted.count > 0) {
+            NCRebinding *refs = calloc(wanted.count, sizeof(NCRebinding));
+            for (NSUInteger i = 0; i < wanted.count; i++) {
+                refs[i].name = wanted[i].UTF8String;
+                refs[i].replacement = latest[wanted[i]].pointerValue;
+            }
+            NCRebindImage(newImage, refs, wanted.count);
+            free(refs);
+        }
+    }
+    for (NSUInteger i = 0; i < interposeNames.count; i++) {
+        latest[interposeNames[i]] = interposeImpls[i];
+    }
+
     // 3. 函数级替换：改写所有 App 镜像（含历史注入镜像）里对这些符号的引用
     NSUInteger rebound = 0;
     NSUInteger count = interposeNames.count;
@@ -367,11 +551,25 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
             rebindings[i].replacement = interposeImpls[i].pointerValue;
         }
         for (NCImage *image in NCAppImages()) {
-            // 新镜像内部对自身函数的调用无需改写
+            // 新镜像内部对自身（强）函数的调用无需改写
             if (image.header == newImage.header) {
                 continue;
             }
             rebound += NCRebindImage(image, rebindings, count);
+        }
+        // 新镜像内部：只改写弱定义符号的引用，让它们指向新镜像自己的那份
+        if (weakDefinedNames.count > 0) {
+            NCRebinding *weakRebindings = calloc(weakDefinedNames.count, sizeof(NCRebinding));
+            NSUInteger weakCount = 0;
+            for (NSUInteger i = 0; i < count; i++) {
+                if ([weakDefinedNames containsObject:interposeNames[i]]) {
+                    weakRebindings[weakCount].name = rebindings[i].name;
+                    weakRebindings[weakCount].replacement = rebindings[i].replacement;
+                    weakCount++;
+                }
+            }
+            NCRebindImage(newImage, weakRebindings, weakCount);
+            free(weakRebindings);
         }
         free(rebindings);
     }
@@ -380,13 +578,38 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
     if (preserveStatics && staticAddressors.count > 0) {
         [self rebindStaticAddressors:staticAddressors inImage:newImage];
     }
+    // 4.5 C / ObjC 的 static 变量（`static dispatch_once_t`、`static Foo *instance`、文件内计数器等）：
+    //     新镜像自带一份存储，不迁移的话单例会被重建、计数清零
+    if (preserveStatics) {
+        NSUInteger moved = NCTransferStaticState(newImage, NCAppImages(), sourceFiles);
+        if (moved > 0) {
+            NCLogInfo(@"已迁移 %lu 个 static 变量的状态", (unsigned long)moved);
+        }
+    }
 
-    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && categoriesAttached == 0 && addedClasses.count == 0 && !isNewFile) {
+    // dylib 只定义了 App 里没有的新符号（新增函数、改了签名的函数）时同样算成功：它们靠后续注入引用
+    BOOL definesOnlyNewSymbols = NO;
+    if (interposeNames.count > 0 && rebound == 0) {
+        definesOnlyNewSymbols = YES;
+        for (NSString *name in interposeNames) {
+            void *existing = dlsym(RTLD_DEFAULT, name.UTF8String + 1);
+            // 全局提升后 dlsym 能找到新镜像自己的符号：用地址区分是否是新镜像的
+            if (existing && !NCImageContainsAddress(newImage, existing)) {
+                definesOnlyNewSymbols = NO;
+                break;
+            }
+        }
+    }
+    if (objcReplaced == 0 && swiftPatched == 0 && rebound == 0 && categoriesAttached == 0 && addedClasses.count == 0 && !isNewFile
+        && ivarLayoutSkipped == 0 && !definesOnlyNewSymbols) {
         result.status = NCInjectStatusNothingInjected;
         result.message = @"未替换任何实现。请确认 Debug 配置的 Other Linker Flags 含 -Xlinker -interposable";
         return result;
     }
-    if (layoutChanged.count > 0) {
+    if (ivarLayoutSkipped > 0) {
+        NCLogWarn(@"%@ 的实例变量布局变了（新增 / 调整了带 ivar 的 @property 或成员变量）：旧实例按旧大小分配，直接替换方法会越界破坏内存，已跳过这些类的方法替换，请重新运行 App",
+                  [layoutChanged componentsJoinedByString:@", "]);
+    } else if (layoutChanged.count > 0) {
         // 布局已变化：新代码已加载，ObjC/@objc 方法的增改已即时生效；纯 Swift 的增删方法/属性
         // 需重新运行 App 后由新实例体现。已在屏幕上的旧实例保持原样，不在其上刷新以免越界
         NCLogWarn(@"%@ 增删了方法或存储属性：新代码已加载，ObjC/@objc 方法即时生效；纯 Swift 的增删需重新运行 App 才会在新实例上体现（屏幕上的旧实例保持原样）",

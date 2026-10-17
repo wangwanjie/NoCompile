@@ -209,6 +209,13 @@ void *NCSectionData(NCImage *image, const char *segmentName, const char *section
 }
 
 void NCEnumerateSymbols(NCImage *image, NCSymbolBlock block) {
+    NCEnumerateSymbolsWithDesc(image, ^(const char *name, uintptr_t address, uint8_t type, uint16_t desc,
+                                        const struct section_64 *section, BOOL *stop) {
+        block(name, address, type, section, stop);
+    });
+}
+
+void NCEnumerateSymbolsWithDesc(NCImage *image, NCSymbolDescBlock block) {
     __block const struct symtab_command *symtab = NULL;
     __block const struct segment_command_64 *linkedit = NULL;
     NCEnumerateLoadCommands(image, ^(const struct load_command *command, BOOL *stop) {
@@ -252,9 +259,9 @@ void NCEnumerateSymbols(NCImage *image, NCSymbolBlock block) {
             if (symbol->n_sect >= 1 && symbol->n_sect <= sections.count) {
                 section = (const struct section_64 *)sections[symbol->n_sect - 1].pointerValue;
             }
-            block(name, (uintptr_t)(symbol->n_value + image.slide), symbol->n_type, section, &stop);
+            block(name, (uintptr_t)(symbol->n_value + image.slide), symbol->n_type, symbol->n_desc, section, &stop);
         } else if (kind == N_UNDF) {
-            block(name, 0, symbol->n_type, NULL, &stop);
+            block(name, 0, symbol->n_type, symbol->n_desc, NULL, &stop);
         }
     }
 }
