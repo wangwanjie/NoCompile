@@ -179,6 +179,10 @@ Docs/                架构、接入指南、发布说明
 
 App 图标由 `swift Scripts/generate_icons.swift` 程序化生成。
 
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=wangwanjie/NoCompile&type=Date)](https://star-history.com/#wangwanjie/NoCompile&Date)
+
 ## 许可证
 
 MIT License，详见 [LICENSE](LICENSE)。
