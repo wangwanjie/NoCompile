@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>NoCompile</title>
+        <item>
+            <title>0.2.4</title>
+            <pubDate>Sun, 18 Oct 2026 03:29:08 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.4</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.4/NoCompile_v0.2.4_arm64.dmg" length="3774128" type="application/octet-stream" sparkle:edSignature="pYhzKvX/C6814scNbHC3xc5Ki11o31EGMnr3z/Rlo1SoBDPTI7pt6EnJPe5ust+daw9tormunBWRRgBzPeR1Aw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.4&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;安装包按芯片拆分&lt;/strong&gt;：从本版本起分别提供 Apple 芯片（`_arm64`）与 Intel（`_x86_64`）两个 DMG，体积更小；Sparkle 自动更新也按架构分别推送。已安装的旧版会自动升级到与本机芯片匹配的版本&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;iOS 与 macOS App 同时连接时，只属于其他平台的源文件不再被借用别的模块的编译命令重编（此前会报找不到 AppKit），资源也按平台分别下发，不再报找不到所属 bundle&lt;/li&gt;&lt;li&gt;CocoaPods `resource_bundles` 中的 xcassets 能正确判定所属 bundle 并热重载&lt;/li&gt;&lt;li&gt;编译命令持久化缓存，Xcode 清理旧构建日志后仍能找到命令；Xcode 显式模块 PCH 不兼容时自建 PCH&lt;/li&gt;&lt;li&gt;以 `$sSo` 开头的 Swift 扩展符号不再被误判为标准库符号&lt;/li&gt;&lt;li&gt;C / ObjC `static` 变量状态随注入迁移；swizzle 按函数体配对；弱符号正确重绑&lt;/li&gt;&lt;li&gt;ObjC ivar 布局变化时跳过方法替换，避免越界访问&lt;/li&gt;&lt;li&gt;新增符号提升为全局，后注入的 dylib 绑定到最新实现&lt;/li&gt;&lt;li&gt;framework 头文件副本同步、显式模块头文件依赖，以及按改动的标识符筛选依赖文件&lt;/li&gt;&lt;li&gt;framework 内资源、strings、json、颜色集支持热重载，修复克隆文件事件导致的循环触发&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;示例&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;示例工程扩展为多模块 workspace（动态 framework、静态库、本地 SPM）并新增 CocoaPods 版本，附约 120 个场景的端到端自测&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;&amp;gt; 升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <link>https://github.com/wangwanjie/NoCompile</link>
+        <description>NoCompile release feed.</description>
+        <language>en</language>
+    </channel>
+</rss>
