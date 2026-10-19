@@ -245,6 +245,30 @@ static NSUInteger NCSwizzleObjCMethods(Class oldClass, Class newClass) {
     return replaced;
 }
 
+/// 把旧类里新类没有的方法补到新类上。
+///
+/// dylib 内部的 `[Foo alloc]`、`[Foo new]` 引用的是新镜像自己的那份类对象，创建出来的实例属于"新类"。
+/// 而 App 里其他文件定义的分类（如 `Foo+QA.m`）在启动时只挂在旧类上，新类并没有这些方法，
+/// 新类的实例收到这类消息就会 unrecognized selector 崩溃。这里把旧类当前的方法补到新类（已有同名方法的不覆盖，
+/// 新类自己的实现优先），实例方法和类方法都处理。
+static NSUInteger NCInheritMissingMethods(Class oldClass, Class newClass) {
+    NSUInteger added = 0;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(oldClass, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        SEL sel = method_getName(methods[i]);
+        if (sel == @selector(load) || sel == @selector(initialize)) {
+            continue;
+        }
+        // class_addMethod 只在新类自身没有该方法时才添加，不会覆盖新类的实现
+        if (class_addMethod(newClass, sel, method_getImplementation(methods[i]), method_getTypeEncoding(methods[i]))) {
+            added++;
+        }
+    }
+    free(methods);
+    return added;
+}
+
 /// ObjC 分类在磁盘上的头部布局（与 objc4 的 category_t 前两个字段一致），这里只读取宿主类
 typedef struct {
     const char *name;
@@ -486,6 +510,9 @@ static long NCPatchSwiftVTable(Class oldClass, Class newClass, BOOL *outLayoutCh
             // ObjC / @objc 方法：动态派发，新增或改写都能即时安全生效
             objcReplaced += NCSwizzleObjCMethods(oldClass, newClass);
             objcReplaced += NCSwizzleObjCMethods(object_getClass(oldClass), object_getClass(newClass));
+            // 新类的实例（dylib 内 alloc 出来的）也要能响应旧类上由其他文件的分类等提供的方法
+            NCInheritMissingMethods(oldClass, newClass);
+            NCInheritMissingMethods(object_getClass(oldClass), object_getClass(newClass));
             NCRegisterClassAlias(newClass, oldClass);
             if (![patchedClasses containsObject:oldClass]) {
                 [patchedClasses addObject:oldClass];

@@ -226,6 +226,7 @@ static NSUInteger gInjectionCount = 0;
     NSDictionary *hello = @{
         @"protocol": @(NC_PROTOCOL_VERSION),
         @"clientVersion": NC_CLIENT_VERSION,
+        @"clientRevision": @(NC_CLIENT_REVISION),
         @"clientImage": imagePath ?: @"",
         @"clientUUID": imageUUID ?: @"",
         @"bundleID": NSBundle.mainBundle.bundleIdentifier ?: @"",
