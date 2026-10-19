@@ -93,6 +93,7 @@ enum ScenarioCatalog {
         s("B12", "ObjC", "后台高频调用时注入", "Scenarios/ObjC/B12ObjCConcurrency.m", objc("B12ObjCConcurrency")),
         s("B13", "ObjC", "@try/@catch 异常展开", "Scenarios/ObjC/B13ObjCException.m", objc("B13ObjCException")),
         s("B14", "ObjC", "运行时：动态类 / performSelector / 关联对象", "Scenarios/ObjC/B14ObjCRuntime.m", objc("B14ObjCRuntime")),
+        s("B15", "ObjC", "宿主类在本文件 new 自己，调用其他文件分类的方法", "Scenarios/ObjC/B15CrossFileCategory.m", objc("B15CrossFileCategory")),
 
         // MARK: C 系列：C / C++
         s("C01", "C/C++", "C++ 虚函数类层次", "Scenarios/Cpp/C01Shape.cpp", objc("C01CppBridge")),

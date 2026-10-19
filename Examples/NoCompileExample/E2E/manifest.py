@@ -104,6 +104,7 @@ SCENARIOS = [
     tok("B12", f"{APP}/ObjC/B12ObjCConcurrency.m", monotonic=[("B12", r"ticks=(\d+)")], xfail="static 状态是一次性拷贝：启动时创建的定时器 block 仍是旧代码，继续写旧存储，新代码读到的是拷贝出来的快照"),
     tok("B13", f"{APP}/ObjC/B13ObjCException.m"),
     tok("B14", f"{APP}/ObjC/B14ObjCRuntime.m"),
+    tok("B15", f"{APP}/ObjC/B15CrossFileCategory.m"),
 
     # ---- C：C / C++ ----
     tok("C01", f"{APP}/Cpp/C01Shape.cpp", n=2),
