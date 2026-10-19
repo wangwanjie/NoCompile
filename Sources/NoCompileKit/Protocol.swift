@@ -10,9 +10,11 @@ public enum NCProtocol {
     public static let magic: UInt32 = 0x504D434E   // "NCMP"
     public static let version: Int = 1
     /// 客户端版本：须与 Sources/NoCompileClient/NCProtocol.h 的 NC_CLIENT_VERSION、
-    /// App/project.yml 的 MARKETING_VERSION 同步更新。客户端握手时上报自己的版本，
-    /// 不一致说明 App 里还是旧客户端（例如 App 包内拷贝的 bundle 未随 Mac 端更新），需要重新编译 App
+    /// App/project.yml 的 MARKETING_VERSION 同步更新。仅用于展示与诊断，不参与兼容性判断
     public static let clientVersion: String = "0.2.4"
+    /// 客户端修订号：须与 NCProtocol.h 的 NC_CLIENT_REVISION 一致。握手时比对，不一致则不推送热重载并提示重新编译 App。
+    /// 只有客户端（Sources/NoCompileClient）的行为或与 Mac 端的交互发生不兼容变化时才递增；发版改版本号不需要动它
+    public static let clientRevision: Int = 1
     public static let macPort: UInt16 = 21890
     public static let devicePort: UInt16 = 21891
     public static let maxJSONLength: UInt32 = 16 * 1024 * 1024

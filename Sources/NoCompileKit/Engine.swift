@@ -80,8 +80,6 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     public var maxHeaderDependents: Int = 10
     /// 一批改动中的源文件超过这个数量（多半是切换分支）时不再逐个注入，提示重新编译
     public var maxBatchSourceFiles: Int = 100
-    /// Mac 端随附的客户端 bundle 所在目录，用于判断 App 内拷贝的 bundle 是否过期。默认取主 bundle 的资源目录
-    public var bundledClientDirectory: String? = Bundle.main.resourcePath
     /// 下发给 App 端的偏好设置，变更后立即推送给所有已连接的 App
     public var clientConfig: [String: Any] = [:] {
         didSet {
@@ -711,6 +709,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 connection.send(NCMessage(type: .helloAck,
                                           json: ["protocol": NCProtocol.version,
                                                  "clientVersion": NCProtocol.clientVersion,
+                                                 "clientRevision": NCProtocol.clientRevision,
                                                  "config": self.clientConfig]))
                 let version = connection.clientVersion ?? "未知"
                 self.log("🔌 已连接：\(connection.displayName)，客户端 \(version)", level: 1)
@@ -736,7 +735,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
 
     /// 握手后检查客户端是否与 Mac 端匹配；不匹配时提示用户重新编译 App，并不再向它推送注入
     private func checkCompatibility(of connection: ServerConnection) {
-        let issue = ClientCompatibility.issue(for: connection.clientInfo, bundledClientDirectory: bundledClientDirectory)
+        let issue = ClientCompatibility.issue(for: connection.clientInfo)
         connection.compatibilityIssue = issue
         guard let issue else {
             return
@@ -811,7 +810,6 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             lines.append("保存即注入：\(self.injectsOnSave)，头文件：\(self.watchesHeaders)，资源：\(self.watchesResources)")
             lines.append("排除关键字：\(self.excludedKeywords.joined(separator: ", "))")
             lines.append("客户端配置：\(Self.describe(self.clientConfig))")
-            lines.append("随附客户端 bundle 目录：\(self.bundledClientDirectory ?? "无")")
             lines.append("已解析日志：")
             for (path, date) in self.parsedLogs.sorted(by: { $0.value > $1.value }) {
                 let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
