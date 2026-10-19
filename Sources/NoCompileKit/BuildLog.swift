@@ -24,6 +24,8 @@ public struct RawCompileCommand: Codable {
     public let moduleName: String?    // Swift 模块名
     public let platform: String       // iphonesimulator / iphoneos / macosx
     public let target: String?        // -target 三元组，链接时沿用
+    /// 由构建清单（manifest.json）借用模板合成的命令，而非日志里的真实命令；旧缓存里没有该字段
+    public var synthesized: Bool? = nil
 
     /// -target 三元组里的架构，例如 arm64-apple-ios15.0-simulator → arm64
     public var arch: String? {
@@ -221,6 +223,20 @@ public struct ParsedCommands: Codable {
         }
         let suffix = "|" + Self.canonicalPath(source)
         return clangFiles.keys.contains(where: { $0.hasSuffix(suffix) })
+    }
+
+    /// 去掉由构建清单合成的命令，只保留日志里的真实命令（写入命令缓存前使用）
+    public func droppingSynthesized() -> ParsedCommands {
+        var result = self
+        var files: [String: [RawCompileCommand]] = [:]
+        for (key, commands) in clangFiles {
+            let real = commands.filter { $0.synthesized != true }
+            if !real.isEmpty {
+                files[key] = real
+            }
+        }
+        result.clangFiles = files
+        return result
     }
 
     /// 所有 clang 命令（含各架构）

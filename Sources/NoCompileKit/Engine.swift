@@ -94,6 +94,9 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var commands = ParsedCommands()
     /// 已解析过的日志及其修改时间，只解析新出现 / 有变化的日志
     private var parsedLogs: [String: Date] = [:]
+    /// 已读取的构建清单（manifest.json）→ 指纹（修改时间 + 大小）。只在内存里记录：
+    /// 清单合成的命令不写入命令缓存（数万条命令会让缓存膨胀到数百 MB），每次启动重新读取清单即可
+    private var parsedManifests: [String: String] = [:]
     private var headerIndex: HeaderDependencyIndex?
     private let headerAnalyzer = HeaderChangeAnalyzer()
     private let recompiler: Recompiler
@@ -103,6 +106,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var watcher: FileWatcher?
     private var watchRoots: [String] = []
     private var connections: [ServerConnection] = []
+    /// 已因不属于当前工程而断开过的客户端（bundleID 或显示名），仅在 workQueue 上访问
+    private var ignoredClients = Set<String>()
     /// 所有已接受的连接（加锁访问）：stop() 时不经 workQueue 立即关闭，
     /// 让客户端尽快重连到新引擎，不必等旧引擎手头的编译结束
     private var liveConnections: [ServerConnection] = []
@@ -191,20 +196,28 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             let date = BuildLog.modificationDate(of: path)
             return parsedLogs[path] != date
         }
-        guard !changed.isEmpty else {
+        // 构建清单：日志被 Xcode 清理后，清单仍保存着最近一次构建的全部编译任务，用来补全日志里缺的文件
+        let manifests = BuildManifest.manifestFiles(derivedDataPath: buildLog.derivedDataPath)
+        let changedManifests = manifests.filter { parsedManifests[$0] != BuildManifest.fingerprint(of: $0) }
+        guard !changed.isEmpty || !changedManifests.isEmpty else {
             return
         }
         let start = Date()
-        let isIncremental = !parsedLogs.isEmpty || commands.clangFileCount > 0 || !commands.swiftModules.isEmpty
-        log(isIncremental ? "解析新的构建日志（\(changed.count) 份）…" : "解析构建日志（\(changed.count) 份）…", level: 0)
-        let fresh = BuildLog.parse(logs: changed)
-        commands = isIncremental ? fresh.merging(older: commands) : fresh
-        for path in changed {
-            parsedLogs[path] = BuildLog.modificationDate(of: path)
+        if !changed.isEmpty {
+            let isIncremental = !parsedLogs.isEmpty || commands.clangFileCount > 0 || !commands.swiftModules.isEmpty
+            log(isIncremental ? "解析新的构建日志（\(changed.count) 份）…" : "解析构建日志（\(changed.count) 份）…", level: 0)
+            let fresh = BuildLog.parse(logs: changed)
+            commands = isIncremental ? fresh.merging(older: commands) : fresh
+            for path in changed {
+                parsedLogs[path] = BuildLog.modificationDate(of: path)
+            }
+            // 已不存在的日志不再登记；命令本身保留在缓存里
+            parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
         }
-        // 已不存在的日志不再登记；命令本身保留在缓存里
-        parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
-        CommandCache.save(derivedDataPath: buildLog.derivedDataPath, commands: commands, parsedLogs: parsedLogs)
+        if !changedManifests.isEmpty {
+            fillCommandsFromManifests(changedManifests, allManifests: manifests, derivedDataPath: buildLog.derivedDataPath)
+        }
+        CommandCache.save(derivedDataPath: buildLog.derivedDataPath, commands: commands.droppingSynthesized(), parsedLogs: parsedLogs)
         // 重新构建过：.d 依赖文件随之更新，头文件索引失效，并在后台预先重建
         headerIndex?.invalidate()
         if watchesHeaders, let index = headerIndex {
@@ -224,6 +237,29 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         if commands.signingIdentity == nil {
             Diagnostics.shared.log("解析日志", "未从构建日志中取得签名身份（真机注入需要）", level: .debug)
         }
+    }
+
+    /// 读取构建清单，给日志里没有命令的 C/ObjC/C++ 文件合成命令。
+    /// 清单从新到旧依次处理，同一文件以较新的清单为准；日志里的真实命令始终优先
+    private func fillCommandsFromManifests(_ changedManifests: [String], allManifests: [String], derivedDataPath: String) {
+        let start = Date()
+        let before = commands.clangFileCount
+        let workingDirectory = (projectPath as NSString).deletingLastPathComponent
+        var tasks: [BuildManifest.CompileTask] = []
+        for path in allManifests where changedManifests.contains(path) {
+            let parsedTasks = BuildManifest.parseCompileTasks(manifestPath: path)
+            Diagnostics.shared.log("构建清单", "\((path as NSString).deletingLastPathComponent.components(separatedBy: "/").last ?? path)："
+                + "\(parsedTasks.count) 个 CompileC 任务", level: .info)
+            tasks.append(contentsOf: parsedTasks)
+            parsedManifests[path] = BuildManifest.fingerprint(of: path)
+        }
+        let filled = BuildManifest.fill(commands, with: tasks, fallbackWorkingDirectory: workingDirectory)
+        commands = filled.commands
+        // 已不存在的清单不再登记
+        parsedManifests = parsedManifests.filter { FileManager.default.fileExists(atPath: $0.key) }
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(start))
+        log("读取构建清单（\(changedManifests.count) 份，\(elapsed)s）：补全 \(filled.added) 个文件的编译命令，"
+            + "C/ObjC/C++ 文件 \(before) → \(commands.clangFileCount)", level: 0)
     }
 
     private func startServer() {
@@ -706,6 +742,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             connection.updateClientInfo(info)
             workQueue.async { [weak self] in
                 guard let self, !self.isStopped else { return }
+                // 不属于当前工程的 App（如另一个工程、残留的模拟器实例）直接断开，不列入控制台也不推送注入
+                guard self.belongsToOpenProject(connection) else {
+                    self.dropForeignClient(connection)
+                    return
+                }
                 connection.send(NCMessage(type: .helloAck,
                                           json: ["protocol": NCProtocol.version,
                                                  "clientVersion": NCProtocol.clientVersion,
@@ -731,6 +772,54 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         default:
             break
         }
+    }
+
+    /// 客户端的 App 是否由当前打开的工程构建：bundleID 须在该工程的构建产物中出现
+    /// 在 workQueue 上调用
+    private func belongsToOpenProject(_ connection: ServerConnection) -> Bool {
+        guard let bundleID = connection.clientInfo["bundleID"] as? String, !bundleID.isEmpty else {
+            return false
+        }
+        return projectAppBundleIDs().contains(bundleID)
+    }
+
+    /// 扫描当前工程 DerivedData/Build/Products 下各配置目录中的 .app，收集其 CFBundleIdentifier
+    /// 每次握手时重新扫描，保证新构建的 App 能被识别
+    private func projectAppBundleIDs() -> Set<String> {
+        guard let derivedDataPath = buildLog?.derivedDataPath else {
+            return []
+        }
+        let fileManager = FileManager.default
+        let productsDir = (derivedDataPath as NSString).appendingPathComponent("Build/Products")
+        var bundleIDs = Set<String>()
+        for configuration in (try? fileManager.contentsOfDirectory(atPath: productsDir)) ?? [] {
+            let configurationDir = (productsDir as NSString).appendingPathComponent(configuration)
+            for item in (try? fileManager.contentsOfDirectory(atPath: configurationDir)) ?? [] where item.hasSuffix(".app") {
+                let appPath = (configurationDir as NSString).appendingPathComponent(item)
+                // iOS 的 Info.plist 在 .app 根目录，macOS 在 Contents 下
+                for plistPath in [appPath + "/Info.plist", appPath + "/Contents/Info.plist"] {
+                    if let plist = NSDictionary(contentsOfFile: plistPath),
+                       let bundleID = plist["CFBundleIdentifier"] as? String {
+                        bundleIDs.insert(bundleID)
+                        break
+                    }
+                }
+            }
+        }
+        return bundleIDs
+    }
+
+    /// 断开不属于当前工程的客户端。同一个 bundleID 只在控制台提示一次，避免它每 2 秒重连刷屏
+    /// 在 workQueue 上调用
+    private func dropForeignClient(_ connection: ServerConnection) {
+        let bundleID = connection.clientInfo["bundleID"] as? String ?? ""
+        let key = bundleID.isEmpty ? connection.displayName : bundleID
+        if ignoredClients.insert(key).inserted {
+            log("忽略 \(connection.displayName)：它不是当前工程构建的 App", level: 1)
+        }
+        Diagnostics.shared.log("连接", "断开非当前工程的客户端：\(connection.displayName)，bundlePath=\(connection.clientInfo["bundlePath"] as? String ?? "")")
+        connections.removeAll { $0 === connection }
+        connection.close()
     }
 
     /// 握手后检查客户端是否与 Mac 端匹配；不匹配时提示用户重新编译 App，并不再向它推送注入

@@ -450,6 +450,14 @@ public final class Recompiler {
             tokens.append(contentsOf: ["-Xclang", "-fno-validate-pch"])
             compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
         }
+        // 构建清单合成的命令拿不到文件级的编译参数：Pods 里按文件标了 -fno-objc-arc 的非 ARC 源码，
+        // 在 ARC 下会报 "ARC forbids ..."。此时改用 -fno-objc-arc 重试一次
+        if !compile.succeeded, command.synthesized == true,
+           Self.isARCForbiddenFailure(compile.stderr + compile.stdout) {
+            // -fobjc-arc 多半写在 resp 文件里，这里追加到命令末尾，clang 以最后出现的为准
+            tokens.append("-fno-objc-arc")
+            compile = Shell.run(tokens[0], Array(tokens.dropFirst()), workingDirectory: command.workingDirectory)
+        }
         if !compile.succeeded || !FileManager.default.fileExists(atPath: objectPath) {
             let message = extractCompileError(compile.stderr + compile.stdout) ?? "编译失败"
             Diagnostics.shared.failure(stage: "编译", file: sourceFile, summary: message, command: tokens,
@@ -457,6 +465,12 @@ public final class Recompiler {
             return (message, compile.stdout + compile.stderr, nil)
         }
         return (nil, "编译成功：\((sourceFile as NSString).lastPathComponent)", command.target)
+    }
+
+    /// 非 ARC 源码被按 ARC 编译时的典型报错
+    static func isARCForbiddenFailure(_ output: String) -> Bool {
+        return output.contains("ARC forbids") || output.contains("not available in automatic reference counting mode")
+            || output.contains("automatic reference counting")
     }
 
     /// 自建 PCH 重建后更新 `-include-pch` 的路径
