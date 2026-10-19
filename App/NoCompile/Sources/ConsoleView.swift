@@ -128,6 +128,26 @@ private struct HeaderBar: View {
                 Label(model.hasProject ? "切换工程" : "选择工程", systemImage: "folder")
             }
 
+            // 最近工程列表：当前工程不再重复列出
+            let others = preferences.recentProjects.filter { $0 != preferences.projectPath || !model.hasProject }
+            if !others.isEmpty {
+                Menu {
+                    ForEach(others, id: \.self) { path in
+                        Button {
+                            model.open(project: path)
+                        } label: {
+                            Text((path as NSString).lastPathComponent)
+                        }
+                        .help(path)
+                    }
+                } label: {
+                    Label("最近", systemImage: "clock.arrow.circlepath")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("快速切换到最近打开的工程")
+            }
+
             if !model.hasProject, let recent = preferences.recentProjects.first {
                 // 断开后可一键重新打开最近的工程
                 Button {
