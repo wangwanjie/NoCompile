@@ -28,6 +28,7 @@ targets:
       - path: Shared
         excludes: [Example-Bridging-Header.h.unused]
       - path: iOS
+        excludes: [Info.plist]  # xcodegen 版专用，Pods 版使用 Info-Pods.plist，避免重复生成 Info.plist
       - path: Scenarios
         excludes:
           - NotInTarget/**

@@ -3,7 +3,7 @@ PODS:
   - ExKit (1.0.0):
     - ExCore
   - ExPlayer (1.0.0)
-  - NoCompile (0.2.3)
+  - NoCompile (0.2.5)
 
 DEPENDENCIES:
   - ExCore (from `Modules/ExCore`)
@@ -25,7 +25,7 @@ SPEC CHECKSUMS:
   ExCore: f62dd303659451183dec13367ae4c65dbe1ddcbf
   ExKit: b5171c861bcbd4f39d527799e56e111b91e9897e
   ExPlayer: f5068dbd5f166ce999a104b83008396e7d150812
-  NoCompile: 5d2e1d5b1fb48f368ee77f670c77a77ccaa8c817
+  NoCompile: f25fb97d9bfce16803408f3f615314b2f30451a2
 
 PODFILE CHECKSUM: 21b68e5e260126f74a1e89c95071c7ea0707418d
 
