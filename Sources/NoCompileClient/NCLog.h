@@ -19,6 +19,8 @@ typedef void (^NCLogForwarder)(NCLogLevel level, NSString *message);
 
 void NCLogSetForwarder(_Nullable NCLogForwarder forwarder);
 void NCLogMessage(NCLogLevel level, NSString *format, ...) NS_FORMAT_FUNCTION(2, 3);
+/// 只打印到本地控制台（Xcode），不转发到 Mac 端。用于 Mac 端已经从结构化结果里得到的信息，避免日志重复
+void NCLogLocal(NCLogLevel level, NSString *format, ...) NS_FORMAT_FUNCTION(2, 3);
 
 #define NCLogInfo(...)    NCLogMessage(NCLogLevelInfo, __VA_ARGS__)
 #define NCLogSuccess(...) NCLogMessage(NCLogLevelSuccess, __VA_ARGS__)

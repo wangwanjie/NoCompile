@@ -85,10 +85,12 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
 
     NSMutableArray<NSString *> *refreshed = [NSMutableArray array];
 
-    // 1. 兼容项：+injected
+    // 1. 兼容项：+injected。同名类可能有多份（主程序与历次注入的镜像各一份），每个类名只调用一次
     SEL injectedSel = NSSelectorFromString(@"injected");
+    NSMutableSet<NSString *> *notified = [NSMutableSet set];
     for (Class cls in patchedClasses) {
-        if (class_respondsToSelector(object_getClass(cls), injectedSel)) {
+        if (![notified containsObject:@(class_getName(cls))] && class_respondsToSelector(object_getClass(cls), injectedSel)) {
+            [notified addObject:@(class_getName(cls))];
             ((void (*)(id, SEL))objc_msgSend)(cls, injectedSel);
         }
     }
@@ -325,15 +327,15 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     for (NCViewController *controller in controllers) {
         NSString *name = NSStringFromClass(controller.class);
         if ([layoutChangedClasses containsObject:name]) {
-            // 控制器自身增删了方法/存储属性：旧实例布局已固定，跳过原地刷新以免越界崩溃
-            NCLogWarn(@"%@ 增删了方法/存储属性，屏幕上的旧实例布局已固定，为避免越界未在其上刷新：重新运行 App，或返回后重新进入该页面即可用新代码", name);
+            // 控制器自身的内存布局变了：新代码没有替换进来（注入时已提示重新运行 App），不在旧实例上刷新
+            NCLogLocal(NCLogLevelWarning, @"%@ 的内存布局变了，未在屏幕上的旧实例上刷新，重新运行 App 后生效", name);
             continue;
         }
         NSString *shortName = [name componentsSeparatedByString:@"."].lastObject;
         if ([controller respondsToSelector:injectedSel]) {
             // 兼容项：业务方自定义了刷新逻辑
             ((void (*)(id, SEL))objc_msgSend)(controller, injectedSel);
-        } else if (NoCompile.autoReloadViewControllers) {
+        } else if (NoCompile.autoReloadViewControllers && ![self isContainerController:controller]) {
             [self reloadController:controller];
         } else {
             // 默认不自动重建已加载的控制器：新代码已生效，重新进入页面（新建实例）即可看到改动
@@ -374,6 +376,19 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return [self refreshControllers:[self outermostControllers:targets]
                  layoutChangedClasses:layoutChangedClasses
                               pending:pending];
+}
+
+/// 容器控制器（导航、标签栏、分栏、翻页的子类）不原地重建：重建会移除全部子控制器，等于清空导航栈
++ (BOOL)isContainerController:(NCViewController *)controller {
+#if NC_UIKIT
+    return [controller isKindOfClass:UINavigationController.class] || [controller isKindOfClass:UITabBarController.class]
+        || [controller isKindOfClass:UISplitViewController.class] || [controller isKindOfClass:UIPageViewController.class];
+#elif NC_APPKIT
+    return [controller isKindOfClass:NSTabViewController.class] || [controller isKindOfClass:NSSplitViewController.class]
+        || [controller isKindOfClass:NSPageController.class];
+#else
+    return NO;
+#endif
 }
 
 /// 判断类是否重写了 -loadView（自定义根视图的控制器需要重新 loadView）

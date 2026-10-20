@@ -1,6 +1,11 @@
 //
 //  NCConnection.m
 //
+//  线程约定：读循环独占 _ioQueue，写入在 _writeQueue 上串行执行。
+//  关闭时只 shutdown 唤醒阻塞的读写，描述符本身由读循环退出后在写队列上关闭——
+//  这样任何线程都不会在 close 之后再用到这个 fd 号（它可能已被 App 复用为别的文件，
+//  在 guarded fd 上误操作会触发 EXC_GUARD 崩溃）。
+//
 
 #if DEBUG || NOCOMPILE_FORCE_ENABLE
 
@@ -11,23 +16,35 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <stdatomic.h>
 
 @implementation NCConnection {
     int _fd;
     dispatch_queue_t _ioQueue;      // 读循环（长期阻塞）
     dispatch_queue_t _writeQueue;   // 写（独立队列，避免被读循环饿死）
-    BOOL _open;
+    atomic_bool _open;
+    /// open 是否调用过：没调用过的连接由 dealloc 负责关闭描述符
+    atomic_bool _started;
 }
 
 - (instancetype)initWithSocket:(int)fd {
     self = [super init];
     if (self) {
         _fd = fd;
+        atomic_init(&_open, false);
+        atomic_init(&_started, false);
         _ioQueue = dispatch_queue_create("com.nocompile.connection.read", DISPATCH_QUEUE_SERIAL);
         _writeQueue = dispatch_queue_create("com.nocompile.connection.write", DISPATCH_QUEUE_SERIAL);
         [self configureSocket];
     }
     return self;
+}
+
+- (void)dealloc {
+    if (!atomic_load(&_started) && _fd >= 0) {
+        close(_fd);
+    }
 }
 
 + (instancetype)connectToHost:(NSString *)host port:(uint16_t)port {
@@ -56,14 +73,15 @@
 }
 
 - (BOOL)isOpen {
-    return _open;
+    return atomic_load(&_open);
 }
 
 - (void)open {
-    if (_open) {
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&_started, &expected, true)) {
         return;
     }
-    _open = YES;
+    atomic_store(&_open, true);
     [self.delegate connectionDidOpen:self];
     dispatch_async(_ioQueue, ^{
         [self readLoop];
@@ -71,14 +89,12 @@
 }
 
 - (void)close {
-    if (!_open) {
+    bool expected = true;
+    if (!atomic_compare_exchange_strong(&_open, &expected, false)) {
         return;
     }
-    _open = NO;
-    if (_fd >= 0) {
-        close(_fd);
-        _fd = -1;
-    }
+    // 只唤醒阻塞中的读写；描述符由读循环退出时关闭
+    shutdown(_fd, SHUT_RDWR);
 }
 
 #pragma mark - 读
@@ -89,6 +105,9 @@
     uint8_t *cursor = buffer;
     while (received < length) {
         ssize_t n = read(_fd, cursor + received, length - received);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
         if (n <= 0) {
             return NO;
         }
@@ -98,18 +117,19 @@
 }
 
 - (void)readLoop {
-    while (_open) {
+    NSString *reason = @"连接已断开";
+    while (self.isOpen) {
         NCFrameHeader header = {0};
         if (![self readFully:&header length:sizeof(header)]) {
             break;
         }
         if (header.magic != NC_PROTOCOL_MAGIC) {
-            [self failWithReason:@"协议魔数不匹配"];
-            return;
+            reason = @"协议魔数不匹配";
+            break;
         }
         if (header.jsonLength > NC_MAX_JSON_LENGTH || header.dataLength > NC_MAX_DATA_LENGTH) {
-            [self failWithReason:@"帧长度超出上限"];
-            return;
+            reason = @"帧长度超出上限";
+            break;
         }
         NSDictionary *json = nil;
         NSData *data = nil;
@@ -118,32 +138,37 @@
             if (![self readFully:jsonData.mutableBytes length:header.jsonLength]) {
                 break;
             }
-            json = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:NULL];
+            id object = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:NULL];
+            json = [object isKindOfClass:NSDictionary.class] ? object : nil;
         }
         if (header.dataLength > 0) {
             NSMutableData *payload = [NSMutableData dataWithLength:(NSUInteger)header.dataLength];
-            if (![self readFully:payload.mutableBytes length:(size_t)header.dataLength]) {
+            if (!payload || ![self readFully:payload.mutableBytes length:(size_t)header.dataLength]) {
                 break;
             }
             data = payload;
         }
-        [self.delegate connection:self didReceiveType:(NCMessageType)header.type json:json data:data];
+        @autoreleasepool {
+            [self.delegate connection:self didReceiveType:(NCMessageType)header.type json:json data:data];
+        }
     }
-    if (_open) {
-        [self failWithReason:@"连接已断开"];
-    }
-}
-
-- (void)failWithReason:(NSString *)reason {
     [self close];
     NSError *error = [NSError errorWithDomain:@"NoCompile" code:-1
                                      userInfo:@{ NSLocalizedDescriptionKey: reason }];
     [self.delegate connection:self didCloseWithError:error];
+    // 写队列上排在前面的写入会因 shutdown 立即失败，之后再关闭描述符
+    int fd = _fd;
+    dispatch_async(_writeQueue, ^{
+        close(fd);
+    });
 }
 
 #pragma mark - 写
 
 - (void)sendType:(NCMessageType)type json:(NSDictionary *)json data:(NSData *)data {
+    if (!self.isOpen) {
+        return;
+    }
     NSData *jsonData = nil;
     if (json) {
         jsonData = [NSJSONSerialization dataWithJSONObject:json options:0 error:NULL];
@@ -166,14 +191,18 @@
     });
 }
 
+/// 在写队列上执行。连接已关闭时不再写入（描述符可能即将或已经被关闭）
 - (void)writeFully:(NSData *)frame {
     const uint8_t *bytes = frame.bytes;
     size_t total = frame.length;
     size_t sent = 0;
-    while (sent < total && _open) {
+    while (sent < total && self.isOpen) {
         ssize_t n = write(_fd, bytes + sent, total - sent);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
         if (n <= 0) {
-            [self failWithReason:@"写入失败"];
+            [self close];
             return;
         }
         sent += (size_t)n;

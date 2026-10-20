@@ -12,43 +12,47 @@
 #import <Foundation/Foundation.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
+#include <stdatomic.h>
+#include <pthread.h>
 
 @interface NCDynamicCastInstaller : NSObject
 + (void)install;
 @end
 
-/// 新类 → 原始（最初的）类 的映射
-static NSMapTable<Class, Class> *NCAliasMap(void) {
-    static NSMapTable *map;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        map = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsOpaquePersonality | NSPointerFunctionsOpaqueMemory
-                                    valueOptions:NSPointerFunctionsOpaquePersonality | NSPointerFunctionsOpaqueMemory];
-    });
-    return map;
+/// 新类 → 原始（最初的）类 的映射。
+/// isKindOfClass: 每帧被调用成千上万次，读取不能加锁：映射以不可变快照发布，读者原子地取当前快照；
+/// 写入（只在注入时发生）加锁复制出新快照再替换。旧快照不释放（数量很少），读者无需担心被释放
+static _Atomic(CFDictionaryRef) gAliasSnapshot = NULL;
+static pthread_mutex_t gAliasWriteLock = PTHREAD_MUTEX_INITIALIZER;
+
+/// 在给定快照里把类归一到它的原始类（别名登记时已直接指向最初的类，查一次即可）
+static Class NCCanonicalClassIn(CFDictionaryRef snapshot, Class cls) {
+    if (!snapshot || !cls) {
+        return cls;
+    }
+    const void *mapped = CFDictionaryGetValue(snapshot, (__bridge const void *)cls);
+    return mapped ? (__bridge Class)mapped : cls;
 }
 
-/// 把某个类归一到它的"原始类"：顺着别名链一直回溯
 static Class NCCanonicalClass(Class cls) {
-    Class result = cls;
-    @synchronized (NCAliasMap()) {
-        Class mapped = [NCAliasMap() objectForKey:result];
-        while (mapped) {
-            result = mapped;
-            mapped = [NCAliasMap() objectForKey:result];
-        }
-    }
-    return result;
+    return NCCanonicalClassIn(atomic_load_explicit(&gAliasSnapshot, memory_order_acquire), cls);
 }
 
 void NCRegisterClassAlias(Class newClass, Class oldClass) {
     if (!newClass || !oldClass || newClass == oldClass) {
         return;
     }
-    @synchronized (NCAliasMap()) {
-        // 记录到"旧类的原始类"，保证多次注入后仍指向最初的类
-        [NCAliasMap() setObject:NCCanonicalClass(oldClass) forKey:newClass];
-    }
+    pthread_mutex_lock(&gAliasWriteLock);
+    CFDictionaryRef current = atomic_load_explicit(&gAliasSnapshot, memory_order_acquire);
+    CFMutableDictionaryRef next = current
+        ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, current)
+        : CFDictionaryCreateMutable(kCFAllocatorDefault, 0, NULL, NULL);
+    // 记录到「旧类的原始类」，保证多次注入后仍指向最初的类
+    CFDictionarySetValue(next, (__bridge const void *)newClass, (__bridge const void *)NCCanonicalClassIn(current, oldClass));
+    CFDictionaryRef published = CFDictionaryCreateCopy(kCFAllocatorDefault, next);
+    CFRelease(next);
+    atomic_store_explicit(&gAliasSnapshot, published, memory_order_release);
+    pthread_mutex_unlock(&gAliasWriteLock);
     [NCDynamicCastInstaller install];
 }
 
@@ -78,20 +82,20 @@ void NCRegisterClassAlias(Class newClass, Class oldClass) {
 // 下面两个方法会以 NSObject 实例方法的身份被调用，self 为被判定对象
 
 - (BOOL)nc_isKindOfClass:(Class)aClass {
-    Class selfCanonical = NCCanonicalClass(object_getClass(self));
-    Class targetCanonical = NCCanonicalClass(aClass);
-    Class current = selfCanonical;
-    while (current) {
-        if (current == targetCanonical) {
+    CFDictionaryRef snapshot = atomic_load_explicit(&gAliasSnapshot, memory_order_acquire);
+    Class targetCanonical = NCCanonicalClassIn(snapshot, aClass);
+    // 沿继承链逐级归一：父类也可能是某次注入产生的新类
+    for (Class current = object_getClass(self); current; current = class_getSuperclass(current)) {
+        if (NCCanonicalClassIn(snapshot, current) == targetCanonical) {
             return YES;
         }
-        current = class_getSuperclass(current);
     }
     return NO;
 }
 
 - (BOOL)nc_isMemberOfClass:(Class)aClass {
-    return NCCanonicalClass(object_getClass(self)) == NCCanonicalClass(aClass);
+    CFDictionaryRef snapshot = atomic_load_explicit(&gAliasSnapshot, memory_order_acquire);
+    return NCCanonicalClassIn(snapshot, object_getClass(self)) == NCCanonicalClassIn(snapshot, aClass);
 }
 
 @end
