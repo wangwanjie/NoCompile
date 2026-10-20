@@ -149,57 +149,93 @@ public enum ProjectInfo {
 public final class HeaderDependencyIndex {
 
     private let intermediates: String
-    /// 头文件路径 → 实现文件序号
-    private var headerToSources: [String: [Int32]] = [:]
-    private var sources: [String] = []
-    private var built = false
-    private let lock = NSLock()
+
+    /// 一份完整的索引。扫描在锁外进行，完成后整体替换
+    private struct Snapshot {
+        /// 头文件路径 → 实现文件序号
+        var headerToSources: [String: [Int32]] = [:]
+        var sources: [String] = []
+        /// 显式模块构建（Xcode 16+ 默认）下，源文件的 .d 里只列出所依赖模块的 .pcm，不列模块里的头文件；
+        /// 头文件列在模块自己的 .d 里。这里记录 头文件 → 模块、模块 → 依赖它的实现文件，两级查找
+        var headerToModules: [String: [String]] = [:]
+        var moduleToSources: [String: [Int32]] = [:]
+    }
+
+    /// condition 同时充当锁：保护 snapshot / generation / building
+    private let condition = NSCondition()
+    private var snapshot: Snapshot?
+    /// 失效计数：invalidate() 只把它加一，正在进行的扫描结束时发现计数变了就丢弃结果
+    private var generation = 0
+    private var snapshotGeneration = -1
+    /// 正在扫描的代数；其他查询者等它完成，避免同时扫描两遍
+    private var buildingGeneration: Int?
 
     private static let implementationExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx", "swift"]
-    /// 显式模块构建（Xcode 16+ 默认）下，源文件的 .d 里只列出所依赖模块的 .pcm，不列模块里的头文件；
-    /// 头文件列在模块自己的 .d 里。这里记录 头文件 → 模块、模块 → 依赖它的实现文件，两级查找
-    private var headerToModules: [String: [String]] = [:]
-    private var moduleToSources: [String: [Int32]] = [:]
 
     public init(derivedDataPath: String) {
         self.intermediates = "\(derivedDataPath)/Build/Intermediates.noindex"
     }
 
-    /// 标记失效，下次查询时重建
+    /// 标记失效，下次查询时重建。不等待正在进行的扫描，不会阻塞调用方
     public func invalidate() {
-        lock.lock()
-        built = false
-        lock.unlock()
+        condition.lock()
+        generation += 1
+        condition.unlock()
+    }
+
+    /// 取最新的索引：已是最新直接返回；同一代正在扫描就等它；否则在锁外扫描
+    private func currentSnapshot() -> Snapshot {
+        condition.lock()
+        while true {
+            if let snapshot, snapshotGeneration == generation {
+                condition.unlock()
+                return snapshot
+            }
+            if buildingGeneration == generation {
+                condition.wait()
+                continue
+            }
+            break
+        }
+        let target = generation
+        buildingGeneration = target
+        condition.unlock()
+
+        let built = Self.build(intermediates: intermediates)
+
+        condition.lock()
+        // 扫描期间又失效了（重新构建过）：结果仍可用于本次查询，但不缓存
+        if generation == target {
+            snapshot = built
+            snapshotGeneration = target
+        }
+        if buildingGeneration == target {
+            buildingGeneration = nil
+        }
+        condition.broadcast()
+        condition.unlock()
+        return built
     }
 
     /// 依赖该头文件、且仍存在的实现文件
     public func sources(dependingOn header: String) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        if !built {
-            build()
-        }
+        let index = currentSnapshot()
         var ids = Set<Int32>()
         for key in Set([header, ParsedCommands.canonicalPath(header)]) {
-            ids.formUnion(headerToSources[key] ?? [])
-            for module in headerToModules[key] ?? [] {
-                ids.formUnion(moduleToSources[module] ?? [])
+            ids.formUnion(index.headerToSources[key] ?? [])
+            for module in index.headerToModules[key] ?? [] {
+                ids.formUnion(index.moduleToSources[module] ?? [])
             }
         }
         let fm = FileManager.default
-        return ids.map { sources[Int($0)] }.filter { fm.fileExists(atPath: $0) }.sorted()
+        return ids.map { index.sources[Int($0)] }.filter { fm.fileExists(atPath: $0) }.sorted()
     }
 
     /// 构建产物目录里与某头文件同名的副本（framework 的 Headers 目录等）。
     /// Xcode 把 framework 的公开头文件复制到构建产物里，使用方 `#import <Foo/Foo.h>` 读到的是副本，
     /// 副本只在下次完整构建时才会更新，所以改了源头文件后要同步副本，使用方重编时才能看到改动
     public func productCopies(ofHeaderNamed name: String) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        if !built {
-            build()
-        }
-        return headerToSources.keys.filter {
+        return currentSnapshot().headerToSources.keys.filter {
             ($0 as NSString).lastPathComponent == name
                 && ($0.contains("/Build/Products/") || $0.contains("/Intermediates.noindex/"))
         }.sorted()
@@ -207,22 +243,15 @@ public final class HeaderDependencyIndex {
 
     /// 被超过 threshold 个实现文件引用的头文件（公共头文件、PCH 引入的头文件等），不含构建产物里的副本
     public func widelyUsedHeaders(threshold: Int) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        if !built {
-            build()
-        }
-        return headerToSources.filter {
+        return currentSnapshot().headerToSources.filter {
             $0.value.count > threshold && !$0.key.contains("/DerivedData/") && !$0.key.contains("/Build/Products/")
         }.map { $0.key }
     }
 
-    private func build() {
+    /// 扫描全部 .d 文件建立索引（不持锁，可能耗时数秒）
+    private static func build(intermediates: String) -> Snapshot {
         let start = Date()
-        headerToSources.removeAll()
-        headerToModules.removeAll()
-        moduleToSources.removeAll()
-        sources.removeAll()
+        var index = Snapshot()
         var sourceIDs: [String: Int32] = [:]
         var canonical: [String: String] = [:]
         var fileCount = 0
@@ -244,8 +273,8 @@ public final class HeaderDependencyIndex {
             }
             fileCount += 1
             let module = item.deletingPathExtension().appendingPathExtension("pcm").path
-            for dep in Self.dependencies(in: data) where !Self.isSystemPath(dep) && !dep.hasSuffix(".pcm") && !dep.hasSuffix(".modulemap") {
-                headerToModules[ParsedCommands.canonicalPath(dep), default: []].append(module)
+            for dep in dependencies(in: data) where !isSystemPath(dep) && !dep.hasSuffix(".pcm") && !dep.hasSuffix(".modulemap") {
+                index.headerToModules[ParsedCommands.canonicalPath(dep), default: []].append(module)
                 knownModules.insert(module)
             }
         }
@@ -254,12 +283,12 @@ public final class HeaderDependencyIndex {
                 continue
             }
             fileCount += 1
-            let deps = Self.dependencies(in: data)
+            let deps = dependencies(in: data)
             // 被编译的源文件：与 .d 同名的实现文件（Xcode 27 的 .d 首个依赖是 SDKSettings.json，不能直接取第一个），
             // 没有同名的再取第一个实现文件；都没有则跳过
             let stem = item.deletingPathExtension().lastPathComponent
             let implementations = deps.filter {
-                Self.implementationExtensions.contains(($0 as NSString).pathExtension.lowercased())
+                implementationExtensions.contains(($0 as NSString).pathExtension.lowercased())
             }
             guard let primary = implementations.first(where: {
                 (($0 as NSString).lastPathComponent as NSString).deletingPathExtension == stem
@@ -270,14 +299,14 @@ public final class HeaderDependencyIndex {
             if let existing = sourceIDs[primary] {
                 id = existing
             } else {
-                id = Int32(sources.count)
-                sources.append(primary)
+                id = Int32(index.sources.count)
+                index.sources.append(primary)
                 sourceIDs[primary] = id
             }
             for dep in deps where dep.hasSuffix(".pcm") && knownModules.contains(dep) {
-                moduleToSources[dep, default: []].append(id)
+                index.moduleToSources[dep, default: []].append(id)
             }
-            for dep in deps where dep != primary && !Self.isSystemPath(dep) && !Self.isImplementation(dep) {
+            for dep in deps where dep != primary && !isSystemPath(dep) && !isImplementation(dep) {
                 // CocoaPods 的 Pods/Headers 下是指向 Pod 源码的符号链接，.d 里记录的是链接路径，
                 // 而文件监听给出的是真实路径：统一规范化后再建索引
                 let key: String
@@ -287,12 +316,12 @@ public final class HeaderDependencyIndex {
                     key = ParsedCommands.canonicalPath(dep)
                     canonical[dep] = key
                 }
-                headerToSources[key, default: []].append(id)
+                index.headerToSources[key, default: []].append(id)
             }
         }
-        built = true
-        Diagnostics.shared.log("头文件索引", "扫描 \(fileCount) 个 .d 文件，\(sources.count) 个实现文件、\(headerToSources.count) 个头文件，"
+        Diagnostics.shared.log("头文件索引", "扫描 \(fileCount) 个 .d 文件，\(index.sources.count) 个实现文件、\(index.headerToSources.count) 个头文件，"
             + "用时 \(String(format: "%.2f", Date().timeIntervalSince(start)))s")
+        return index
     }
 
     private static func isImplementation(_ path: String) -> Bool {

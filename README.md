@@ -29,7 +29,7 @@
 | **获取编译命令** | 纯正则扫描 `.xcactivitylog`，Xcode 升级后格式一变就失效；或改写 Xcode 工具链、依赖 SourceKit 私有日志 | 解析日志拿到模块的 driver 命令后，交给官方 `swiftc -###` 展开出单文件的 frontend 命令。参数由编译器自己生成，Xcode 升级能自动跟随 |
 | **语言支持** | 部分工具不支持 C++，Swift 仅支持函数替换 | C / C++ / ObjC / Swift 统一支持。C/C++ 自由函数通过 GOT 重绑覆盖 |
 | **进程内替换** | ObjC swizzle、Dobby inline hook、vtable patch 各自为政 | 统一三层：ObjC `class_replaceMethod` + Swift vtable 覆写 + fishhook 式符号重绑 |
-| **触发方式** | 部分工具默认要手动按快捷键 | 保存即注入，FSEvents 自动触发 |
+| **触发方式** | 部分工具默认要手动按快捷键 | 保存即注入，FSEvents 自动触发；漏检时可点「检查改动」或按全局快捷键 ⌃⌥⌘R 补上 |
 | **资源与新文件** | storyboard / xib 仅限模拟器且依赖 Xcode 先编译，不支持图片与新增文件 | storyboard、xib、图片保存即生效（含真机）；运行中新建的源文件也能注入 |
 | **中文 / 空格路径** | 明确不支持中文路径，空格路径也会出错 | 全程用参数数组传递给子进程，不拼接 shell 字符串，天然支持 |
 | **真机连接** | 靠 UDP 广播找 Mac，常连不上 | 以 USB（usbmuxd）为主通道，稳定可靠 |
@@ -134,12 +134,13 @@ python3 E2E/run_e2e.py --clean
 
 ## 使用约束
 
-热重载的主体是替换**函数体**，仅改方法体（不动方法/属性数量）即时生效。增删方法或存储属性改变了内存布局，这类改动不再拒绝注入、也不会崩溃，按下面的规则处理：
+热重载的主体是替换**函数体**，仅改方法体（不动方法/属性的数量与顺序）即时生效。以下改动会改变类的内存布局，NoCompile 为避免崩溃**不替换该类的实现**，并在日志与 App 浮层里提示重新运行 App：
 
-- **ObjC / @objc 方法**：增删改都即时生效（运行时动态派发，`class_replaceMethod` 可安全地新增方法）。
-- **纯 Swift 的增删方法 / 存储属性**：会加载新代码，屏幕上已存在的旧实例保持原样——旧实例的 vtable 槽位数和实例大小在分配时已固定，Debug（`-Onone`）下方法走 vtable 静态派发，在旧实例上覆写或重跑生命周期会越界崩溃。重新运行 App 后，新代码由走新元数据的新实例体现；日志会列出发生布局变化的类名。
+- 增删、调换顺序或修改类型的存储属性 / ObjC 实例变量（旧实例按旧布局分配，新代码按新偏移读写会越界）；
+- 增删或调换顺序的 Swift 方法（旧元数据的 vtable 已固定，按新槽位派发会调用到别的方法）；
+- SwiftUI `some View` 返回的视图结构变了（具体类型不同，替换会破坏内存）。在 `body` 末尾加 `.enableInjection()`（或用 `AnyView` 包裹）即可热重载结构改动。
 
-改方法体随时热重载；加减 Swift 的方法/属性会安全加载并提示重新运行 App。
+同一文件里布局没变的其他类、自由函数照常生效。
 
 其他要点：
 
@@ -150,7 +151,7 @@ python3 E2E/run_e2e.py --clean
 
 ## SwiftUI
 
-SwiftUI 视图的刷新依赖通知。每次注入后，NoCompile 会发出 `NoCompileDidInjectNotification`（同时发出与 Inject / HotSwiftUI 兼容的 `INJECTION_BUNDLE_NOTIFICATION`）。配合社区的 `@ObserveInjection` 即可自动重绘。
+SwiftUI 视图的刷新依赖通知。每次注入后，NoCompile 会发出 `NoCompileDidInjectNotification`（同时发出与 Inject / HotSwiftUI 兼容的 `INJECTION_BUNDLE_NOTIFICATION`）。配合社区的 `@ObserveInjection` 即可自动重绘；`body` 末尾的 `.enableInjection()` 把返回类型擦除成 `AnyView`，增删子视图这类结构改动才能热重载。
 
 ## 目录结构
 

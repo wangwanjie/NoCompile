@@ -15,9 +15,14 @@ public final class HeaderChangeAnalyzer {
 
     // MARK: - 快照
 
-    /// 记录一批头文件的当前内容（引擎启动后在后台为"被大量文件引用的头文件"建立基线）
-    public func prime(headers: [String]) {
+    /// 记录一批头文件的当前内容（引擎启动后在后台为"被大量文件引用的头文件"建立基线）。
+    /// 修改时间晚于 cutoff 的跳过：那是用户在基线建立期间刚保存的新内容，拿它当旧内容会比不出差异
+    public func prime(headers: [String], modifiedBefore cutoff: Date = Date()) {
         for header in headers {
+            let modified = (try? FileManager.default.attributesOfItem(atPath: header))?[.modificationDate] as? Date
+            if let modified, modified > cutoff {
+                continue
+            }
             guard let text = try? String(contentsOfFile: header, encoding: .utf8) else {
                 continue
             }
@@ -95,7 +100,8 @@ public final class HeaderChangeAnalyzer {
             oldText = Self.gitHeadContent(of: header)
         }
         update(header, text: newText)
-        guard let oldText else {
+        // 新旧内容相同（基线读到的已经是保存后的内容）：比不出改了什么，按拿不到旧内容处理，由调用方退而用全部声明的标识符
+        guard let oldText, oldText != newText else {
             return nil
         }
         let oldLines = oldText.components(separatedBy: "\n")

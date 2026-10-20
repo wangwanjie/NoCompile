@@ -14,8 +14,11 @@
 static NSUInteger NCRebindSection(NCImage *image,
                                   const struct section_64 *section,
                                   const uint32_t *indirectSymtab,
+                                  uint32_t indirectCount,
                                   const struct nlist_64 *symtab,
+                                  uint32_t symbolCount,
                                   const char *strtab,
+                                  uint32_t stringsSize,
                                   const NCRebinding *rebindings,
                                   NSUInteger count) {
     uint32_t type = section->flags & SECTION_TYPE;
@@ -29,12 +32,22 @@ static NSUInteger NCRebindSection(NCImage *image,
 
     __block NSUInteger changed = 0;
     for (uint32_t i = 0; i < slotCount; i++) {
+        // 越界保护：间接符号表 / 符号表 / 字符串表的下标都要校验
+        if (indirectBase + i >= indirectCount) {
+            break;
+        }
         uint32_t symtabIndex = indirectSymtab[indirectBase + i];
         if (symtabIndex == INDIRECT_SYMBOL_ABS || symtabIndex == INDIRECT_SYMBOL_LOCAL ||
             symtabIndex == (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) {
             continue;
         }
+        if (symtabIndex >= symbolCount) {
+            continue;
+        }
         uint32_t strx = symtab[symtabIndex].n_un.n_strx;
+        if (strx >= stringsSize) {
+            continue;
+        }
         const char *symbolName = strtab + strx;
         for (NSUInteger r = 0; r < count; r++) {
             if (strcmp(symbolName, rebindings[r].name) != 0) {
@@ -45,10 +58,13 @@ static NSUInteger NCRebindSection(NCImage *image,
             }
             // 指针可能落在只读的 __DATA_CONST，需要临时开写
             void **slot = &indirectSlots[i];
-            NCWithWritableMemory(slot, sizeof(void *), ^{
+            // 写入失败（页面无法改为可写）不计入，避免把没生效的替换报告成成功
+            BOOL written = NCWithWritableMemory(slot, sizeof(void *), ^{
                 *slot = rebindings[r].replacement;
             });
-            changed++;
+            if (written) {
+                changed++;
+            }
             break;
         }
     }
@@ -93,7 +109,8 @@ NSUInteger NCRebindImage(NCImage *image, const NCRebinding *rebindings, NSUInteg
         if (strcmp(segment->segname, SEG_DATA) != 0 && strcmp(segment->segname, "__DATA_CONST") != 0) {
             return;
         }
-        changed += NCRebindSection(image, section, indirectSymtab, symtab, strtab, rebindings, count);
+        changed += NCRebindSection(image, section, indirectSymtab, dysymtabCommand->nindirectsyms,
+                                   symtab, symtabCommand->nsyms, strtab, symtabCommand->strsize, rebindings, count);
     });
     return changed;
 }

@@ -45,6 +45,15 @@ public struct RawCompileCommand: Codable {
         guard let target else {
             return "unknown"
         }
+        // watchOS / visionOS（如 iOS 工程里的 Watch App）单独归类，不能混进 iOS 的命令里被 iOS 客户端选中。
+        // tvOS 与 iOS 客户端上报的平台名相同，仍按 iOS 归类
+        let os = target.split(separator: "-").dropFirst(2).first ?? ""
+        if os.hasPrefix("watchos") {
+            return target.hasSuffix("-simulator") ? "watchsimulator" : "watchos"
+        }
+        if os.hasPrefix("xros") || os.hasPrefix("visionos") {
+            return target.hasSuffix("-simulator") ? "xrsimulator" : "xros"
+        }
         if target.hasSuffix("-simulator") {
             return "iphonesimulator"
         }
@@ -266,10 +275,10 @@ public struct ParsedCommands: Codable {
                   let command = clangCommand(for: parts[1], platform: platform, arch: arch) else {
                 continue
             }
-            // 共同目录层级越深越接近；同语言额外加权，优先保证编译参数（如 -fobjc-arc、-std）一致
+            // 共同目录层级越深越接近；同语言额外加权（相当于近 1.5 级目录），优先保证编译参数（如 -fobjc-arc、-std）一致
             var score = Self.commonDirectoryDepth(parts[1], target) * 2
             if Self.clangLanguage(forPath: parts[1]) == language {
-                score += 1
+                score += 3
             }
             if best == nil || score > best!.score {
                 best = (parts[1], command, score)

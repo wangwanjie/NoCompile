@@ -42,6 +42,15 @@ void NCRegisterInjectedImagePath(NSString *path) {
     }
 }
 
+BOOL NCIsInjectedImagePath(NSString *path) {
+    if (path.length == 0) {
+        return NO;
+    }
+    @synchronized (NCInjectedPaths()) {
+        return [NCInjectedPaths() containsObject:path];
+    }
+}
+
 /// NoCompile 客户端自身所在镜像的路径，需要从"App 镜像"中排除，避免改写自己
 static const char *NCSelfImagePath(void) {
     static const char *selfPath;
@@ -100,6 +109,10 @@ static BOOL NCIsAppImagePath(const char *path, NSString *bundlePath) {
         return YES;
     }
     return NO;
+}
+
+BOOL NCPathIsAppImage(const char *path) {
+    return NCIsAppImagePath(path, NSBundle.mainBundle.bundlePath);
 }
 
 NSArray<NCImage *> *NCAppImages(void) {
@@ -175,19 +188,6 @@ void NCEnumerateSections(NCImage *image, void (^block)(const struct segment_comm
             }
         }
     });
-}
-
-const struct section_64 *NCSectionAtIndex(NCImage *image, uint8_t index) {
-    __block const struct section_64 *result = NULL;
-    __block uint8_t current = 0;
-    NCEnumerateSections(image, ^(const struct segment_command_64 *segment, const struct section_64 *section, BOOL *stop) {
-        current++;
-        if (current == index) {
-            result = section;
-            *stop = YES;
-        }
-    });
-    return result;
 }
 
 void *NCSectionData(NCImage *image, const char *segmentName, const char *sectionName, size_t *size) {
@@ -280,9 +280,11 @@ BOOL NCWithWritableMemory(void *address, size_t size, void (NS_NOESCAPE ^block)(
     vm_prot_t originalProtection = VM_PROT_READ;
     kern_return_t kr = vm_region_64(mach_task_self(), &regionAddress, &regionSize, VM_REGION_BASIC_INFO_64,
                                     (vm_region_info_t)&info, &infoCount, &objectName);
-    if (kr == KERN_SUCCESS) {
-        originalProtection = info.protection;
+    // 地址未映射时 vm_region 返回的是其后的下一个区域，不能用它的保护属性
+    if (kr != KERN_SUCCESS || regionAddress > start) {
+        return NO;
     }
+    originalProtection = info.protection;
     // 本工具只修改数据页，代码页不在此函数的处理范围内
     if (originalProtection & VM_PROT_EXECUTE) {
         return NO;

@@ -65,6 +65,24 @@ private struct GeneralSettings: View {
                 SettingToggle(title: "保存即注入",
                               detail: "保存源文件后自动编译并注入。关闭后改动会累积，在控制台手动注入。",
                               isOn: $preferences.injectsOnSave)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("「检查改动」全局快捷键")
+                            .font(.system(size: 13))
+                        Text("在 Xcode 等任意 App 中按下，扫描工程目录并热重载没被自动监听到的改动。控制台顶栏也有同名按钮。")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Picker("", selection: $preferences.checkChangesHotKey) {
+                        ForEach(HotKeyPreset.allCases) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
                 SettingToggle(title: "监听头文件变更",
                               detail: "修改 .h 时自动重编依赖它的 .m / .mm / .c / .cpp。",
                               isOn: $preferences.watchesHeaders)
@@ -147,7 +165,7 @@ private struct ProjectSettings: View {
                         get: { preferences.projectPath },
                         set: { model.open(project: $0) })) {
                         ForEach(preferences.recentProjects, id: \.self) { path in
-                            Text((path as NSString).lastPathComponent).tag(path)
+                            Text(Preferences.projectTitle(path)).tag(path)
                         }
                     }
                 }

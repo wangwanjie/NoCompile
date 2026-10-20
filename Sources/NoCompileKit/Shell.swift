@@ -146,6 +146,9 @@ public enum Shell {
         }
         while true {
             let n = read(fd, buffer, bufferSize)
+            if n < 0 && errno == EINTR {
+                continue
+            }
             if n <= 0 {
                 break
             }

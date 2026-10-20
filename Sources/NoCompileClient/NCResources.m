@@ -6,6 +6,7 @@
 #if DEBUG || NOCOMPILE_FORCE_ENABLE
 
 #import "NCResources.h"
+#include <stdatomic.h>
 #import "NCSweeper.h"
 #import "NCLog.h"
 #import "NoCompile.h"
@@ -338,20 +339,28 @@ static NSString *NCImageBundleKey(NSBundle *bundle) {
 
 #pragma mark - Hook
 
-static IMP NCHookClassMethod(Class cls, SEL sel, IMP replacement) {
-    Method method = class_getClassMethod(cls, sel);
+/// 替换方法实现，原实现写入 *outOriginal。
+/// 必须先写好原实现、再替换：被 hook 的方法（如 pathForResource:ofType:）会在其他线程被高频调用，
+/// 若先替换后赋值，替换实现在这段间隙里读到的原实现还是 NULL，调用即崩溃
+static void NCHookMethod(Method method, IMP replacement, IMP *outOriginal) {
     if (!method) {
-        return NULL;
+        return;
     }
-    return method_setImplementation(method, replacement);
+    *outOriginal = method_getImplementation(method);
+    atomic_thread_fence(memory_order_release);
+    IMP previous = method_setImplementation(method, replacement);
+    // 读取与替换之间若有别人改过实现，以替换前一刻的实现为准
+    if (previous && previous != *outOriginal) {
+        *outOriginal = previous;
+    }
 }
 
-static IMP NCHookInstanceMethod(Class cls, SEL sel, IMP replacement) {
-    Method method = class_getInstanceMethod(cls, sel);
-    if (!method) {
-        return NULL;
-    }
-    return method_setImplementation(method, replacement);
+static void NCHookClassMethod(Class cls, SEL sel, IMP replacement, IMP *outOriginal) {
+    NCHookMethod(class_getClassMethod(cls, sel), replacement, outOriginal);
+}
+
+static void NCHookInstanceMethod(Class cls, SEL sel, IMP replacement, IMP *outOriginal) {
+    NCHookMethod(class_getInstanceMethod(cls, sel), replacement, outOriginal);
 }
 
 static IMP gOrigPathForResource;
@@ -588,17 +597,17 @@ static UIColor *NCColorNamedInBundle(id self, SEL _cmd, NSString *name, NSBundle
 }
 
 static void NCInstallPlatformHooks(void) {
-    gOrigColorNamed = NCHookClassMethod(UIColor.class, @selector(colorNamed:), (IMP)NCColorNamed);
-    gOrigColorNamedInBundle = NCHookClassMethod(UIColor.class, @selector(colorNamed:inBundle:compatibleWithTraitCollection:),
-                                                (IMP)NCColorNamedInBundle);
-    gOrigStoryboardWithName = NCHookClassMethod(UIStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName);
-    gOrigNibWithName = NCHookClassMethod(UINib.class, @selector(nibWithNibName:bundle:), (IMP)NCNibWithName);
-    gOrigLoadNibNamed = NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:options:), (IMP)NCLoadNibNamed);
-    gOrigImageNamed = NCHookClassMethod(UIImage.class, @selector(imageNamed:), (IMP)NCImageNamed);
-    gOrigImageNamedInBundleTraits = NCHookClassMethod(UIImage.class, @selector(imageNamed:inBundle:compatibleWithTraitCollection:),
-                                                      (IMP)NCImageNamedInBundleTraits);
+    NCHookClassMethod(UIColor.class, @selector(colorNamed:), (IMP)NCColorNamed, &gOrigColorNamed);
+    NCHookClassMethod(UIColor.class, @selector(colorNamed:inBundle:compatibleWithTraitCollection:),
+                      (IMP)NCColorNamedInBundle, &gOrigColorNamedInBundle);
+    NCHookClassMethod(UIStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName, &gOrigStoryboardWithName);
+    NCHookClassMethod(UINib.class, @selector(nibWithNibName:bundle:), (IMP)NCNibWithName, &gOrigNibWithName);
+    NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:options:), (IMP)NCLoadNibNamed, &gOrigLoadNibNamed);
+    NCHookClassMethod(UIImage.class, @selector(imageNamed:), (IMP)NCImageNamed, &gOrigImageNamed);
+    NCHookClassMethod(UIImage.class, @selector(imageNamed:inBundle:compatibleWithTraitCollection:),
+                      (IMP)NCImageNamedInBundleTraits, &gOrigImageNamedInBundleTraits);
     SEL configurationSel = NSSelectorFromString(@"imageNamed:inBundle:withConfiguration:");
-    gOrigImageNamedInBundleConfiguration = NCHookClassMethod(UIImage.class, configurationSel, (IMP)NCImageNamedInBundleConfiguration);
+    NCHookClassMethod(UIImage.class, configurationSel, (IMP)NCImageNamedInBundleConfiguration, &gOrigImageNamedInBundleConfiguration);
     NCHookNibImagePlaceholder();
 }
 
@@ -672,13 +681,13 @@ static NSColor *NCColorNamedInBundle(id self, SEL _cmd, NSString *name, NSBundle
 }
 
 static void NCInstallPlatformHooks(void) {
-    gOrigColorNamed = NCHookClassMethod(NSColor.class, @selector(colorNamed:), (IMP)NCColorNamed);
-    gOrigColorNamedInBundle = NCHookClassMethod(NSColor.class, @selector(colorNamed:bundle:), (IMP)NCColorNamedInBundle);
-    gOrigStoryboardWithName = NCHookClassMethod(NSStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName);
-    gOrigNibInitWithName = NCHookInstanceMethod(NSNib.class, @selector(initWithNibNamed:bundle:), (IMP)NCNibInitWithName);
-    gOrigLoadNibNamed = NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:topLevelObjects:), (IMP)NCLoadNibNamed);
-    gOrigImageNamed = NCHookClassMethod(NSImage.class, @selector(imageNamed:), (IMP)NCImageNamed);
-    gOrigImageForResource = NCHookInstanceMethod(NSBundle.class, @selector(imageForResource:), (IMP)NCImageForResource);
+    NCHookClassMethod(NSColor.class, @selector(colorNamed:), (IMP)NCColorNamed, &gOrigColorNamed);
+    NCHookClassMethod(NSColor.class, @selector(colorNamed:bundle:), (IMP)NCColorNamedInBundle, &gOrigColorNamedInBundle);
+    NCHookClassMethod(NSStoryboard.class, @selector(storyboardWithName:bundle:), (IMP)NCStoryboardWithName, &gOrigStoryboardWithName);
+    NCHookInstanceMethod(NSNib.class, @selector(initWithNibNamed:bundle:), (IMP)NCNibInitWithName, &gOrigNibInitWithName);
+    NCHookInstanceMethod(NSBundle.class, @selector(loadNibNamed:owner:topLevelObjects:), (IMP)NCLoadNibNamed, &gOrigLoadNibNamed);
+    NCHookClassMethod(NSImage.class, @selector(imageNamed:), (IMP)NCImageNamed, &gOrigImageNamed);
+    NCHookInstanceMethod(NSBundle.class, @selector(imageForResource:), (IMP)NCImageForResource, &gOrigImageForResource);
 }
 
 #endif
@@ -695,13 +704,13 @@ static void NCInstallHooks(void) {
         gBundlePaths = [NSMutableDictionary dictionary];
         gMirrorBundles = [NSMutableDictionary dictionary];
         gMirrorPathKeys = [NSMutableDictionary dictionary];
-        gOrigPathForResource = NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:), (IMP)NCPathForResource);
-        gOrigURLForResource = NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:), (IMP)NCURLForResource);
-        gOrigPathForResourceInDirectory = NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:inDirectory:),
-                                                               (IMP)NCPathForResourceInDirectory);
-        gOrigURLForResourceSubdirectory = NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:subdirectory:),
-                                                               (IMP)NCURLForResourceSubdirectory);
-        gOrigLocalizedString = NCHookInstanceMethod(NSBundle.class, @selector(localizedStringForKey:value:table:), (IMP)NCLocalizedString);
+        NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:), (IMP)NCPathForResource, &gOrigPathForResource);
+        NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:), (IMP)NCURLForResource, &gOrigURLForResource);
+        NCHookInstanceMethod(NSBundle.class, @selector(pathForResource:ofType:inDirectory:),
+                             (IMP)NCPathForResourceInDirectory, &gOrigPathForResourceInDirectory);
+        NCHookInstanceMethod(NSBundle.class, @selector(URLForResource:withExtension:subdirectory:),
+                             (IMP)NCURLForResourceSubdirectory, &gOrigURLForResourceSubdirectory);
+        NCHookInstanceMethod(NSBundle.class, @selector(localizedStringForKey:value:table:), (IMP)NCLocalizedString, &gOrigLocalizedString);
         NCInstallPlatformHooks();
     });
 }
@@ -822,9 +831,15 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
                       [NSString stringWithFormat:@"NoCompileIncoming/%@", NSUUID.UUID.UUIDString]];
     NSUInteger offset = 0;
     for (NSDictionary *file in files) {
+        if (![file isKindOfClass:NSDictionary.class]) {
+            *error = @"资源包格式错误";
+            return nil;
+        }
         NSString *relative = file[@"path"];
         NSUInteger length = [file[@"length"] unsignedIntegerValue];
-        if (relative.length == 0 || [relative containsString:@".."] || offset + length > data.length) {
+        // 先比较 length 与剩余长度，避免 offset + length 溢出后绕过检查
+        if (![relative isKindOfClass:NSString.class] || relative.length == 0 || [relative containsString:@".."]
+            || offset > data.length || length > data.length - offset) {
             *error = @"资源包数据不完整";
             return nil;
         }

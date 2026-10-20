@@ -64,7 +64,7 @@ clang -arch <arch> -isysroot <sdk> -dynamiclib \
 
 Swift 类方法通过 vtable 静态派发。Swift 类的元数据布局（见 `NCSwiftMetadata.h`）里，vtable 紧跟在 `IVarDestroyer` 字段之后，长度由 `classSize` 决定。把新类元数据的 vtable 槽位逐个复制进旧类元数据即可。
 
-如果新旧 `classSize`（或 `classAddressPoint`）不一致，说明增删了方法或改了 vtable 布局。这时**不覆写** vtable：旧实例仍指向旧元数据，其 vtable 槽位数是旧的；Debug（`-Onone`）下方法一律走 vtable 静态派发，若覆写后的旧方法体调用了新增方法，会按新槽位下标越界崩溃。所以布局变化时只加载新代码、登记类别名，并照常替换 ObjC / `@objc` 方法（动态派发，增删安全）。纯 Swift 的增删方法要重新运行 App 后，由走新元数据的新实例体现。发生布局变化的类名会上报（`layoutChangedClasses`），刷新环节据此跳过这些类在屏幕上的旧实例，避免在其上重跑生命周期。
+覆写前逐槽核对：同一下标上新旧实现必须是同名函数（用 `dladdr` 取符号名；字段偏移等非函数槽位跳过）。新旧 `classSize`（或 `classAddressPoint`）不一致，或某个槽位的函数名对不上（调换了方法声明顺序、改了方法名），都视为 vtable 布局变化，**不覆写**，见下文「布局变化时为何不动旧实例」。
 
 ### 3. 符号重绑（interpose）
 
@@ -116,7 +116,16 @@ dylib 被 `dlopen` 时会重新执行类和分类的 `+load`。如果 `+load` �
 - 覆写旧 vtable 的共有前缀：Debug 下 `self.新方法()` 走 vtable 静态派发，覆写后的旧方法体一旦调用新增方法，就按新槽位下标访问越界（`EXC_BAD_ACCESS`）。
 - 用新类重新实例化换进容器：Swift 控制器常自定义 `init()` 而不继承 `init(nibName:bundle:)`，调用未继承的初始化器会触发 Swift 运行时陷阱（`EXC_BREAKPOINT`），而且这是陷阱不是 ObjC 异常，`@try` 拦不住，直接杀进程。
 
-所以布局变化时的策略是：加载新代码、登记类别名、替换 ObjC/`@objc` 方法（动态派发安全），并把发生布局变化的类名交给 sweeper，让它跳过这些类在屏幕上的旧实例（不重跑生命周期）。纯 Swift 的增删方法/属性在重新运行 App 后由新实例体现。这与 InjectionIII 的取舍一致，区别是 NoCompile 不再直接拒绝或放任崩溃，而是安全加载并明确提示。
+替换 ObjC / `@objc` 方法同样不安全：被替换的方法体（`viewWillAppear:` 的 override、outlet 的 getter、`dealloc`、`.cxx_destruct`）按新镜像的字段偏移读写成员、按新槽位派发，在按旧布局分配的旧实例上同样越界。函数级重绑（直接调用的 final 方法、分配构造器 `fC`）也一样。
+
+所以布局变化（实例大小、ivar 名字 / 偏移 / 类型、vtable 槽位数或顺序任一变化）时的策略是：这个类的实现一律不替换（ObjC 方法、vtable、该类成员符号的函数级重绑都跳过），只登记类别名、给新类补齐方法，让新镜像内部创建的实例能通过类型判定；日志与浮层提示重新运行 App。同一文件里布局没变的其他类、自由函数照常替换。这与 InjectionIII 的取舍一致。
+
+另外两类同样会破坏内存的情况也在替换前拦下：
+
+- 类的分配构造器 `fC` 不做函数级重绑（只重绑初始化构造器 `fc`）：否则旧代码里的 `Foo()` 会分配出「新类」实例，旧代码对它做 `as? Foo` 按元数据指针比较会失败甚至崩溃。结构体 / 枚举只有 `fC`，照常重绑。
+- 返回 `some View` 等不透明类型的函数：比较新旧不透明类型描述符（`…QOMQ`）里具体类型的 mangled 名（符号引用解析成符号名），不同就不重绑。
+
+分类在 `+load` 里 swizzle 宿主类（如 `UIViewController+Track.m`）时，重新加载会让新旧函数体互相调用陷入无限递归。dlopen 后按函数名修正宿主类上的方法：被交换过的旧条目改指向新函数体，新条目沿用旧条目当前（交换后）的实现，交换关系得以保持。加载期间对 `method_exchangeImplementations` 的拦截覆盖所有 App 镜像，`+load` 经其他文件里的工具方法间接交换也能拦住。
 
 整个注入过程（dlopen、替换、刷新）都在主线程串行执行，避免和 UI 代码并发。
 

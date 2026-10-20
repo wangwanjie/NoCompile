@@ -56,6 +56,10 @@ public final class ServerConnection {
 
     /// 连接的稳定标识
     public let id = UUID().uuidString
+    /// 连接建立的时间
+    public let connectedAt = Date()
+    /// usbmuxd 中的设备序列号（UDID）。仅真机 USB 连接有值，由 DeviceBridge 在 start() 之前设置
+    public var usbSerial: String?
 
     /// 平台的中文名
     public var platformTitle: String {
@@ -67,10 +71,97 @@ public final class ServerConnection {
         }
     }
 
-    /// 展示用名称：App 名 + 平台
+    public var bundleID: String { clientInfo["bundleID"] as? String ?? "" }
+    /// App 进程号（新版客户端上报），用于识别同一进程的重复连接
+    public var processID: Int? { clientInfo["pid"] as? Int }
+
+    /// 设备标识：同一台设备（某台模拟器、某台真机、本机 Mac）上的连接取值相同
+    public var deviceKey: String {
+        let info = clientInfo
+        let reported = info["deviceID"] as? String ?? ""
+        switch platformName {
+        case "simulator":
+            if !reported.isEmpty {
+                return "simulator:\(reported)"
+            }
+            if let udid = SimulatorDevice.udid(fromHome: info["home"] as? String) {
+                return "simulator:\(udid)"
+            }
+        case "device":
+            // USB 连接以 usbmuxd 的序列号为准，Wi-Fi 连接退而用客户端上报的标识
+            if let usbSerial, !usbSerial.isEmpty {
+                return "device:\(usbSerial)"
+            }
+            if !reported.isEmpty {
+                return "device:\(reported)"
+            }
+        case "macosx":
+            return "macosx:local"
+        default:
+            break
+        }
+        return "connection:\(id)"
+    }
+
+    /// 进程标识：同一个 App 进程的多条连接（如 USB 与 Wi-Fi 同时连上）取值相同；旧客户端没有 pid 时按连接区分
+    public var processKey: String {
+        if let pid = processID {
+            return "\(deviceKey)|\(pid)"
+        }
+        return "\(deviceKey)|\(id)"
+    }
+
+    /// 设备名：新版客户端上报；旧客户端的模拟器从 CoreSimulator 的 device.plist 读取
+    public var deviceName: String {
+        let info = clientInfo
+        if let name = info["deviceName"] as? String, !name.isEmpty {
+            return name
+        }
+        switch platformName {
+        case "simulator":
+            if let udid = SimulatorDevice.udid(fromHome: info["home"] as? String),
+               let device = SimulatorDevice.info(udid: udid) {
+                return device.name
+            }
+        case "macosx":
+            return SimulatorDevice.hostName
+        default:
+            break
+        }
+        return machine
+    }
+
+    /// 系统版本，如 "iOS 27.1"；未知时为空
+    public var systemVersion: String {
+        let info = clientInfo
+        if let version = info["systemVersion"] as? String, !version.isEmpty {
+            return version
+        }
+        if platformName == "simulator", let udid = SimulatorDevice.udid(fromHome: info["home"] as? String) {
+            return SimulatorDevice.info(udid: udid)?.runtime ?? ""
+        }
+        return ""
+    }
+
+    /// App 主程序（及 Xcode 16 起的 .debug.dylib）的 LC_UUID，用来与 DerivedData 中的构建产物比对。
+    /// 旧客户端没有 imageUUIDs，退而用客户端所在镜像的 UUID（静态链接时就是主程序）
+    public var imageUUIDs: Set<String> {
+        let info = clientInfo
+        var result = Set((info["imageUUIDs"] as? [String] ?? []).map { $0.uppercased() })
+        if result.isEmpty, let uuid = info["clientUUID"] as? String, !uuid.isEmpty {
+            result.insert(uuid.uppercased())
+        }
+        return result
+    }
+
+    /// 展示用名称：App 名 @ 设备名（平台）
     public var displayName: String {
-        let bundleID = clientInfo["bundleID"] as? String ?? ""
-        return "\(shortName)（\(platformTitle)\(bundleID.isEmpty ? "" : "，\(bundleID)")）"
+        return "\(shortName) @ \(deviceLabel)"
+    }
+
+    /// 设备的展示名：设备名（平台）
+    public var deviceLabel: String {
+        return "\(deviceName)（\(platformTitle)）"
     }
 
     private let fd: Int32
@@ -178,5 +269,46 @@ public final class ServerConnection {
                 }
             }
         }
+    }
+}
+
+/// 模拟器信息：从 ~/Library/Developer/CoreSimulator/Devices/<UDID>/device.plist 读取（供旧客户端使用）
+enum SimulatorDevice {
+    private static let lock = NSLock()
+    private static var cache: [String: (name: String, runtime: String)] = [:]
+
+    /// 本机名称（macOS 客户端的设备名）
+    static let hostName: String = Host.current().localizedName ?? "本机 Mac"
+
+    /// 从 App 的 home 路径（.../CoreSimulator/Devices/<UDID>/data/Containers/...）中取出模拟器 UDID
+    static func udid(fromHome home: String?) -> String? {
+        guard let home, let range = home.range(of: "/CoreSimulator/Devices/") else {
+            return nil
+        }
+        let rest = home[range.upperBound...]
+        let udid = rest.prefix { $0 != "/" }
+        return udid.count == 36 ? String(udid) : nil
+    }
+
+    static func info(udid: String) -> (name: String, runtime: String)? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[udid] {
+            return cached
+        }
+        let path = NSHomeDirectory() + "/Library/Developer/CoreSimulator/Devices/\(udid)/device.plist"
+        guard let plist = NSDictionary(contentsOfFile: path), let name = plist["name"] as? String else {
+            return nil
+        }
+        // runtime 形如 com.apple.CoreSimulator.SimRuntime.iOS-27-1 → iOS 27.1
+        var runtime = (plist["runtime"] as? String ?? "").components(separatedBy: ".").last ?? ""
+        if let dash = runtime.firstIndex(of: "-") {
+            let os = runtime[..<dash]
+            let version = runtime[runtime.index(after: dash)...].replacingOccurrences(of: "-", with: ".")
+            runtime = "\(os) \(version)"
+        }
+        let value = (name, runtime)
+        cache[udid] = value
+        return value
     }
 }

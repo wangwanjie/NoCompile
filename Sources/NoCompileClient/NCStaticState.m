@@ -149,10 +149,11 @@ static NSArray<NCStaticVar *> *NCZeroFillStatics(NCImage *image) {
         if (sectionType != S_ZEROFILL && sectionType != S_GB_ZEROFILL) {
             return;
         }
-        // 编译器生成的符号（字符串字面量、块字面量、ObjC 元数据）不是用户 static 变量
+        // 编译器生成的符号（字符串字面量、块字面量、ObjC 元数据）不是用户 static 变量。
+        // C++ 的初始化守卫（__ZGV…）也不迁移：守卫标记「已初始化」被搬过去、对象本身却没搬（见下）时，新代码会直接使用全零对象
         if (strncmp(name, "_OBJC", 5) == 0 || strncmp(name, "__OBJC", 6) == 0 || strncmp(name, "___", 3) == 0
             || strncmp(name, "l_", 2) == 0 || strncmp(name, "L_", 2) == 0 || strncmp(name, "ltmp", 4) == 0
-            || strncmp(name, "_$s", 3) == 0) {
+            || strncmp(name, "_$s", 3) == 0 || strncmp(name, "__ZGV", 5) == 0) {
             return;
         }
         [candidates addObject:@{@"name": @(name), @"address": @(address), @"section": key,
@@ -224,6 +225,11 @@ NSUInteger NCTransferStaticState(NCImage *newImage, NSArray<NCImage *> *oldImage
     for (NCStaticVar *var in newStatics) {
         NCStaticVar *old = oldByName[var.name].firstObject;
         if (!old || var.span == 0 || var.span > 4096) {
+            continue;
+        }
+        // C++ 函数内的 static 对象（__ZZ…，如 static std::map）可能含指向自身的内部指针，按字节搬到新地址后
+        // 新对象的节点仍指回旧对象，遍历越界或死循环。只迁移指针 / 整数大小的变量（实例指针、dispatch_once_t 等）
+        if ([var.name hasPrefix:@"__Z"] && var.span > sizeof(void *)) {
             continue;
         }
         size_t length = var.span;

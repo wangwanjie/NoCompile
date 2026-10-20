@@ -13,11 +13,12 @@ import Foundation
 enum CommandCache {
 
     /// 缓存格式版本，结构变化时递增（旧缓存直接丢弃）
-    private static let schemaVersion = 1
+    private static let schemaVersion = 2
 
     private struct Payload: Codable {
         var schema: Int
-        /// 生成缓存时的 Xcode 开发者目录：Xcode 升级后 SDK、工具链路径可能变化，缓存作废
+        /// 生成缓存时的 Xcode 开发者目录与版本号（如 "/Applications/Xcode.app/Contents/Developer|17A100"）：
+        /// Xcode 原地升级后路径不变但 SDK 目录名带版本号，缓存里的命令会指向已不存在的 SDK，必须作废
         var developerDir: String
         var derivedDataPath: String
         /// 已解析的日志及其修改时间（秒），这些日志不必再解析
@@ -44,9 +45,19 @@ enum CommandCache {
         return "\(directory)/\(name)-\(String(hash, radix: 16)).json"
     }
 
-    private static var developerDir: String {
-        return ProcessInfo.processInfo.environment["DEVELOPER_DIR"] ?? "/Applications/Xcode.app/Contents/Developer"
-    }
+    /// 当前 Xcode 的标识：开发者目录 + 构建版本号。GUI 进程拿不到 DEVELOPER_DIR，以 xcode-select 的结果为准
+    private static let developerDir: String = {
+        var directory = ProcessInfo.processInfo.environment["DEVELOPER_DIR"] ?? ""
+        if directory.isEmpty {
+            directory = Shell.run("/usr/bin/xcode-select", ["-p"], timeout: 10).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if directory.isEmpty {
+            directory = "/Applications/Xcode.app/Contents/Developer"
+        }
+        let versionPlist = ((directory as NSString).deletingLastPathComponent as NSString).appendingPathComponent("version.plist")
+        let build = NSDictionary(contentsOfFile: versionPlist)?["ProductBuildVersion"] as? String ?? ""
+        return "\(directory)|\(build)"
+    }()
 
     static func load(derivedDataPath: String) -> Loaded? {
         let file = path(forDerivedData: derivedDataPath)

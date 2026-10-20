@@ -28,6 +28,8 @@ final class Preferences: ObservableObject {
     @Published var notifiesOnFailure: Bool { didSet { save(notifiesOnFailure, "notifiesOnFailure") } }
     /// 注入成功 / 失败时播放提示音
     @Published var playsSounds: Bool { didSet { save(playsSounds, "playsSounds") } }
+    /// 「检查改动」的全局快捷键
+    @Published var checkChangesHotKey: HotKeyPreset { didSet { save(checkChangesHotKey.rawValue, "checkChangesHotKey") } }
 
     // MARK: - 工程
 
@@ -69,6 +71,7 @@ final class Preferences: ObservableObject {
         opensConsoleOnLaunch = bool("opensConsoleOnLaunch", true)
         notifiesOnFailure = bool("notifiesOnFailure", true)
         playsSounds = bool("playsSounds", false)
+        checkChangesHotKey = HotKeyPreset(rawValue: defaults.string(forKey: "checkChangesHotKey") ?? "") ?? .controlOptionCommandR
         projectPath = defaults.string(forKey: "projectPath") ?? ""
         recentProjects = defaults.stringArray(forKey: "recentProjects") ?? []
         customDerivedData = defaults.string(forKey: "customDerivedData") ?? ""
@@ -103,6 +106,24 @@ final class Preferences: ObservableObject {
             .filter { !$0.isEmpty }
     }
 
+    /// 工程在列表中的标识：工程名 + 所在目录。不同目录下常有同名工程（如多份 kugou.xcworkspace），只看名字分不清
+    static func projectLabel(_ path: String) -> (name: String, location: String) {
+        let name = (path as NSString).lastPathComponent
+        var directory = ((path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
+        // 目录太深时只保留最后 3 级
+        let parts = directory.components(separatedBy: "/").filter { !$0.isEmpty }
+        if parts.count > 4 {
+            directory = "…/" + parts.suffix(3).joined(separator: "/")
+        }
+        return (name, directory)
+    }
+
+    /// 单行展示：「工程名 — 目录」
+    static func projectTitle(_ path: String) -> String {
+        let label = projectLabel(path)
+        return "\(label.name) — \(label.location)"
+    }
+
     /// 记录最近打开的工程（最多 8 个）
     func rememberProject(_ path: String) {
         var list = recentProjects.filter { $0 != path }
@@ -119,6 +140,7 @@ final class Preferences: ObservableObject {
         opensConsoleOnLaunch = true
         notifiesOnFailure = true
         playsSounds = false
+        checkChangesHotKey = .controlOptionCommandR
         customDerivedData = ""
         excludedKeywords = ""
         autoReloadViewControllers = false
@@ -126,5 +148,26 @@ final class Preferences: ObservableObject {
         showsHUD = true
         suppressSwizzlingDuringLoad = true
         maxLogLines = 2000
+    }
+}
+
+/// 「检查改动」全局快捷键的可选组合（Carbon 热键，不需要辅助功能权限）
+enum HotKeyPreset: String, CaseIterable, Identifiable {
+    case off
+    case controlOptionCommandR
+    case shiftOptionCommandR
+    case controlOptionCommandH
+    case controlOptionCommandJ
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "关闭"
+        case .controlOptionCommandR: return "⌃⌥⌘R"
+        case .shiftOptionCommandR: return "⇧⌥⌘R"
+        case .controlOptionCommandH: return "⌃⌥⌘H"
+        case .controlOptionCommandJ: return "⌃⌥⌘J"
+        }
     }
 }

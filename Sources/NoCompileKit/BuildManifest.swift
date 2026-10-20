@@ -26,6 +26,8 @@ enum BuildManifest {
         let arch: String
         /// clang 的 -x 语言名：objective-c / objective-c++ / c / c++
         let language: String
+        /// 该 target 的前缀头文件（GCC_PREFIX_HEADER），没有为 nil
+        let prefixHeader: String?
     }
 
     /// DerivedData 下所有清单文件，按修改时间从新到旧
@@ -55,12 +57,15 @@ enum BuildManifest {
     private static let sourceExtensions = [".m", ".mm", ".c", ".cpp", ".cc", ".cxx"]
 
     /// 流式扫描清单里的 commands 对象，只对 CompileC 任务做 JSON 解码。
-    /// 大型工程的清单可达数百 MB，整体交给 JSONSerialization 会占用数 GB 内存，所以按字节切分条目
-    static func parseCompileTasks(manifestPath: String) -> [CompileTask] {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: manifestPath), options: .alwaysMapped) else {
-            return []
+    /// 大型工程的清单可达数百 MB，整体交给 JSONSerialization 会占用数 GB 内存，所以按字节切分条目。
+    /// complete 表示读到了 commands 的结尾；Xcode 正在改写清单时可能只读到一部分。
+    /// 整体读入内存而不是 mmap：映射期间文件被截断重写会触发 SIGBUS 让 NoCompile 崩溃
+    static func parseCompileTasks(manifestPath: String) -> (tasks: [CompileTask], complete: Bool) {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: manifestPath)) else {
+            return ([], false)
         }
         var tasks: [CompileTask] = []
+        var complete = false
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             let bytes = raw.bindMemory(to: UInt8.self)
             guard let base = bytes.baseAddress, !bytes.isEmpty else {
@@ -82,6 +87,7 @@ enum BuildManifest {
                     index += 1
                 }
                 guard index < total, bytes[index] == UInt8(ascii: "\"") else {
+                    complete = index < total && bytes[index] == UInt8(ascii: "}")
                     return
                 }
                 let keyStart = index + 1
@@ -112,7 +118,7 @@ enum BuildManifest {
                 }
             }
         }
-        return tasks
+        return (tasks, complete)
     }
 
     /// 字符串结束引号的位置（from 指向开头引号之后的第一个字节），处理反斜杠转义
@@ -185,65 +191,84 @@ enum BuildManifest {
             return nil
         }
         let resp = inputs.first(where: { $0.hasSuffix(".resp") })
-        return CompileTask(source: source, output: output, resp: resp, platform: platform, arch: arch, language: language)
+        let prefixHeader = inputs.first(where: { $0.hasSuffix(".pch") })
+        return CompileTask(source: source, output: output, resp: resp, platform: platform, arch: arch,
+                           language: language, prefixHeader: prefixHeader)
     }
 
-    /// 由中间产物路径推断平台：".../Debug-iphoneos/Foo.build/Objects-normal/arm64/X.o" → iphoneos。
-    /// macOS 的配置目录不带平台后缀（Debug / Release）
-    static func platform(ofIntermediatePath path: String) -> String? {
+    /// 中间产物路径里的配置目录：".../Debug-iphoneos/Foo.build/Objects-normal/arm64/X.o" → Debug-iphoneos
+    static func configurationDirectory(ofIntermediatePath path: String) -> String? {
         let components = path.components(separatedBy: "/")
         guard let buildIndex = components.lastIndex(where: { $0.hasSuffix(".build") }), buildIndex > 0 else {
             return nil
         }
-        let configuration = components[buildIndex - 1]
+        return components[buildIndex - 1]
+    }
+
+    /// 由中间产物路径推断平台：".../Debug-iphoneos/Foo.build/Objects-normal/arm64/X.o" → iphoneos。
+    /// macOS 的配置目录不带平台后缀（Debug / Release，或 Debug-Staging 这类带连字符的自定义配置名）
+    static func platform(ofIntermediatePath path: String) -> String? {
+        guard let configuration = configurationDirectory(ofIntermediatePath: path) else {
+            return nil
+        }
         if let dash = configuration.lastIndex(of: "-") {
             let suffix = String(configuration[configuration.index(after: dash)...])
-            let known: Set<String> = ["iphoneos", "iphonesimulator", "macosx", "maccatalyst", "appletvos", "appletvsimulator"]
-            return known.contains(suffix) ? suffix : nil
+            let known: Set<String> = ["iphoneos", "iphonesimulator", "macosx", "maccatalyst", "appletvos", "appletvsimulator",
+                                      "watchos", "watchsimulator", "xros", "xrsimulator"]
+            if known.contains(suffix) {
+                return suffix
+            }
         }
-        // 无后缀：macOS 构建（Debug / Release / 自定义配置名）。归档路径里的配置目录同样落在这一类
+        // 无平台后缀：macOS 构建。归档路径里的配置目录同样落在这一类
         return "macosx"
     }
 
     // MARK: - 合成命令
 
     /// 把清单里的 CompileC 任务合成为 clang 命令，补进 commands 里还没有真实命令的文件，返回补全后的结果与新增条数。
-    /// 合成命令借用真实命令作模板：优先同一份 resp（同 target 同架构，-target / -isysroot 精确一致），
-    /// 其次同平台同架构的任意一条（部署版本可能与该 target 略有出入，不影响单文件编译；其前缀头文件与警告开关属于模板的 target，会被替换或去掉）。
+    /// 合成命令借用真实命令作模板：
+    /// 1. 优先同一份 resp（同 target 同架构同语言，-target / -isysroot 精确一致）；
+    /// 2. 其次同平台、同架构、同配置目录（如 Debug-iphonesimulator）的任意一条。跨 target 借用时，前缀头文件换成本任务自己的，
+    ///    警告开关去掉；配置目录必须一致，避免用 Release 的参数编译 Debug 运行中的代码。
+    /// 模板里 Xcode 追加的文件级参数（如 -fno-objc-arc）属于模板文件自己，一律去掉。
     /// 上次合成的命令（synthesized）会被本次结果覆盖，避免 resp 路径随构建参数变化后残留过期命令
     static func fill(_ commands: ParsedCommands, with tasks: [CompileTask],
                      fallbackWorkingDirectory: String) -> (commands: ParsedCommands, added: Int) {
         var byResp: [String: RawCompileCommand] = [:]
-        var byPlatformArch: [String: RawCompileCommand] = [:]
+        var byConfiguration: [String: RawCompileCommand] = [:]
         for command in commands.allClangCommands where command.synthesized != true {
-            if let resp = respPath(in: command.tokens), byResp[resp] == nil {
-                byResp[resp] = command
+            // 同一键下优先选没有文件级参数的命令，模板越「干净」越不容易把别的文件的特殊参数带过去
+            let clean = ClangCommandEditing.fileLevelFlags(in: command.tokens).isEmpty
+            if let resp = ClangCommandEditing.respPath(in: command.tokens) {
+                if byResp[resp] == nil || (clean && !ClangCommandEditing.fileLevelFlags(in: byResp[resp]!.tokens).isEmpty) {
+                    byResp[resp] = command
+                }
             }
-            let key = "\(command.platform)|\(command.arch ?? "?")"
-            if byPlatformArch[key] == nil {
-                byPlatformArch[key] = command
+            guard let output = ClangCommandEditing.value(after: "-o", in: command.tokens),
+                  let configuration = configurationDirectory(ofIntermediatePath: output) else {
+                continue
+            }
+            let key = "\(command.platform)|\(command.arch ?? "?")|\(configuration)"
+            if byConfiguration[key] == nil || (clean && !ClangCommandEditing.fileLevelFlags(in: byConfiguration[key]!.tokens).isEmpty) {
+                byConfiguration[key] = command
             }
         }
         var result = commands
         var added = 0
         var refreshed = Set<String>()
-        for task in tasks {
-            let sameTarget = task.resp.flatMap { byResp[$0] }
-            guard let template = sameTarget ?? byPlatformArch["\(task.platform)|\(task.arch)"] else {
-                continue
-            }
+
+        func apply(_ task: CompileTask, template: RawCompileCommand, sameTarget: Bool) {
             let key = ParsedCommands.clangKey(platform: task.platform, source: task.source)
             var existing = result.clangFiles[key] ?? []
             // 已有真实命令：以真实命令为准
             if existing.contains(where: { $0.arch == task.arch && $0.synthesized != true }) {
-                continue
+                return
             }
-            // 同一次填充里先出现的清单（更新的构建）优先，后面的清单不再覆盖
+            // 同一次填充里先处理的（同 target 模板优先，其次更新的清单）为准，后面的不再覆盖
             let refreshKey = "\(key)|\(task.arch)"
-            if refreshed.contains(refreshKey) {
-                continue
+            guard refreshed.insert(refreshKey).inserted else {
+                return
             }
-            refreshed.insert(refreshKey)
             if existing.contains(where: { $0.arch == task.arch }) {
                 existing.removeAll { $0.arch == task.arch }
             } else {
@@ -251,51 +276,50 @@ enum BuildManifest {
             }
             var command = RawCompileCommand(
                 kind: .clangFile,
-                tokens: rewrite(template: template.tokens, task: task, sameTarget: sameTarget != nil),
+                tokens: rewrite(template: template.tokens, task: task, sameTarget: sameTarget),
                 workingDirectory: template.workingDirectory.isEmpty ? fallbackWorkingDirectory : template.workingDirectory,
                 moduleName: nil, platform: task.platform, target: template.target)
             command.synthesized = true
             existing.append(command)
             result.clangFiles[key] = existing
         }
+
+        // 第一遍：能找到同 target 模板的任务
+        var crossTarget: [CompileTask] = []
+        for task in tasks {
+            if let resp = task.resp, let template = byResp[resp] {
+                apply(task, template: template, sameTarget: true)
+            } else {
+                crossTarget.append(task)
+            }
+        }
+        // 第二遍：借用同平台、同架构、同配置目录的其他 target 的命令。没有 resp 的任务拿不到 -I / -D，跳过
+        for task in crossTarget where task.resp != nil {
+            guard let configuration = configurationDirectory(ofIntermediatePath: task.output),
+                  let template = byConfiguration["\(task.platform)|\(task.arch)|\(configuration)"],
+                  ClangCommandEditing.respPath(in: template.tokens) != nil else {
+                continue
+            }
+            apply(task, template: template, sameTarget: false)
+        }
         return (result, added)
     }
 
-    private static func respPath(in tokens: [String]) -> String? {
-        guard let token = tokens.first(where: { $0.hasPrefix("@") && $0.hasSuffix(".resp") }) else {
-            return nil
-        }
-        return String(token.dropFirst())
-    }
-
-    /// CocoaPods 的前缀头文件固定放在 "<Pods>/Target Support Files/<Target>/<Target>-prefix.pch"。
-    /// 由模板里的 -include 路径找到 Pods 目录，再按本任务的 target 名拼出对应的前缀头文件，文件存在才返回
-    private static func ownPrefixHeader(templateValue: String, task: CompileTask) -> String? {
-        guard let range = templateValue.range(of: "/Target Support Files/"),
-              let name = targetName(ofIntermediatePath: task.output) else {
-            return nil
-        }
-        let candidate = "\(templateValue[..<range.upperBound])\(name)/\(name)-prefix.pch"
-        return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
-    }
-
-    /// ".../KGCommontools.build/Objects-normal/arm64/X.o" → KGCommontools
-    static func targetName(ofIntermediatePath path: String) -> String? {
-        let components = path.components(separatedBy: "/")
-        guard let index = components.lastIndex(of: "Objects-normal"), index > 0,
-              components[index - 1].hasSuffix(".build") else {
-            return nil
-        }
-        return String(components[index - 1].dropLast(".build".count))
-    }
-
-    /// 以模板命令为底，换上该任务自己的 resp / 源文件 / 输出 / 语言。
-    /// 模板来自其他 target 时，去掉 -include / -include-pch：前缀头文件属于模板所在的 target，借给别的 target 会找错头文件
+    /// 以模板命令为底，换上该任务自己的 resp / 源文件 / 输出 / 语言，去掉模板文件自己的文件级参数。
+    /// 模板来自其他 target 时，前缀头文件换成本任务的（没有就去掉），警告开关去掉
     private static func rewrite(template: [String], task: CompileTask, sameTarget: Bool) -> [String] {
         var tokens: [String] = []
         var index = 0
+        var skippingFileFlags = false
         while index < template.count {
             let token = template[index]
+            if skippingFileFlags {
+                if !ClangCommandEditing.fileFlagsTerminators.contains(token) {
+                    index += 1
+                    continue
+                }
+                skippingFileFlags = false
+            }
             if token == "-c", index + 1 < template.count {
                 tokens.append(contentsOf: ["-c", task.source])
                 index += 2
@@ -312,10 +336,7 @@ enum BuildManifest {
                 continue
             }
             if !sameTarget, token == "-include" || token == "-include-pch", index + 1 < template.count {
-                // 前缀头文件属于模板所在的 target：能按 CocoaPods 的命名规则换成本 target 的就换，找不到就去掉
-                if token == "-include", let own = ownPrefixHeader(templateValue: template[index + 1], task: task) {
-                    tokens.append(contentsOf: ["-include", own])
-                }
+                // 前缀头文件属于模板所在的 target，已在 resp 之后换成本任务自己的
                 index += 2
                 continue
             }
@@ -324,8 +345,12 @@ enum BuildManifest {
                 index += 1
                 continue
             }
-            if token.hasPrefix("@"), token.hasSuffix(".resp"), let resp = task.resp {
-                tokens.append("@" + resp)
+            if token.hasPrefix("@"), token.hasSuffix(".resp") {
+                tokens.append("@" + (task.resp ?? String(token.dropFirst())))
+                if !sameTarget, let prefixHeader = task.prefixHeader {
+                    tokens.append(contentsOf: ["-include", prefixHeader])
+                }
+                skippingFileFlags = true
                 index += 1
                 continue
             }
@@ -333,5 +358,59 @@ enum BuildManifest {
             index += 1
         }
         return tokens
+    }
+}
+
+/// clang 命令的通用编辑：Xcode 的 CompileC 命令形如
+/// `clang -x <语言> -target … @<common-args.resp> <文件级参数> -include <前缀头> -MMD -MT … -c <源文件> -o <输出>`，
+/// resp 里是 target 级参数（-D、-I、-std、-fobjc-arc 等），resp 之后、-include / -MMD 等之前是该文件单独设置的参数
+enum ClangCommandEditing {
+
+    /// 文件级参数段的结束标记
+    static let fileFlagsTerminators: Set<String> = [
+        "-include", "-include-pch", "-MMD", "-MD", "-MT", "-MF", "--serialize-diagnostics",
+        "-c", "-o", "-index-unit-output-path", "-index-store-path", "-fsyntax-only",
+    ]
+
+    /// 命令引用的 resp 参数文件路径
+    static func respPath(in tokens: [String]) -> String? {
+        guard let token = tokens.first(where: { $0.hasPrefix("@") && $0.hasSuffix(".resp") }) else {
+            return nil
+        }
+        return String(token.dropFirst())
+    }
+
+    /// resp 之后的文件级参数
+    static func fileLevelFlags(in tokens: [String]) -> [String] {
+        guard let start = tokens.firstIndex(where: { $0.hasPrefix("@") && $0.hasSuffix(".resp") }) else {
+            return []
+        }
+        var flags: [String] = []
+        for token in tokens[(start + 1)...] {
+            if fileFlagsTerminators.contains(token) {
+                break
+            }
+            flags.append(token)
+        }
+        return flags
+    }
+
+    /// 去掉文件级参数
+    static func removingFileLevelFlags(_ tokens: [String]) -> [String] {
+        guard let start = tokens.firstIndex(where: { $0.hasPrefix("@") && $0.hasSuffix(".resp") }) else {
+            return tokens
+        }
+        let count = fileLevelFlags(in: tokens).count
+        var result = tokens
+        result.removeSubrange((start + 1) ..< (start + 1 + count))
+        return result
+    }
+
+    /// 参数的值（如 "-o" 之后的路径）
+    static func value(after flag: String, in tokens: [String]) -> String? {
+        guard let index = tokens.firstIndex(of: flag), index + 1 < tokens.count else {
+            return nil
+        }
+        return tokens[index + 1]
     }
 }

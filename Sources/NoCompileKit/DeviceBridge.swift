@@ -12,9 +12,16 @@ import Foundation
 public final class DeviceBridge {
 
     private let onConnection: (ServerConnection) -> Void
-    private var running = false
+    /// 轮询是否继续，加锁访问（stop 在其他线程调用）
+    private var _running = false
+    private var running: Bool {
+        get { stateLock.withLock { _running } }
+        set { stateLock.withLock { _running = newValue } }
+    }
     private var connectedDevices = Set<Int>()
     private let queue = DispatchQueue(label: "com.nocompile.devicebridge")
+    /// 上一次写入日志的设备列表摘要，仅在 queue 上访问；状态不变时不重复记录
+    private var lastDeviceSummary = ""
 
     public init(onConnection: @escaping (ServerConnection) -> Void) {
         self.onConnection = onConnection
@@ -32,16 +39,29 @@ public final class DeviceBridge {
     }
 
     private func pollLoop() {
+        // 仅在 queue 上访问：已报告过连接失败的设备，避免每 2 秒重复写日志
+        var failedDevices = Set<Int>()
         while running {
-            let devices = listDevices()
+            let list = listDevices()
+            let devices = list.map { $0.map { $0.id } }
+            reportDeviceList(devices)
+            // 设备拔掉后移出失败集合，重新插入时可再次报告
+            failedDevices.formIntersection(devices ?? [])
             let busy = stateLock.withLock { connectedDevices }
-            for deviceID in devices where !busy.contains(deviceID) {
+            for (deviceID, serial) in list ?? [] where !busy.contains(deviceID) {
                 // App 未运行时 Connect 会失败，下一轮继续尝试
                 guard let fd = connect(deviceID: deviceID, port: NCProtocol.devicePort) else {
+                    if failedDevices.insert(deviceID).inserted {
+                        Diagnostics.shared.log("真机", "设备 \(deviceID) 连接端口 \(NCProtocol.devicePort) 失败："
+                                               + "App 未运行，或未包含 NoCompile 客户端（需 Debug 构建），将继续重试", level: .warning)
+                    }
                     continue
                 }
+                failedDevices.remove(deviceID)
+                Diagnostics.shared.log("真机", "设备 \(deviceID) 已通过 usbmuxd 连接，等待 App 握手")
                 stateLock.withLock { _ = connectedDevices.insert(deviceID) }
                 let connection = ServerConnection(fd: fd)
+                connection.usbSerial = serial
                 // 连接断开后释放该设备，允许 App 重启后重连
                 connection.onClose = { [weak self] in
                     guard let self else { return }
@@ -113,9 +133,10 @@ public final class DeviceBridge {
         return (try? PropertyListSerialization.propertyList(from: body, options: [], format: nil)) as? [String: Any]
     }
 
-    private func listDevices() -> [Int] {
+    /// 返回 usbmuxd 中已连接的设备（DeviceID 与序列号）；usbmuxd 不可达时返回 nil
+    private func listDevices() -> [(id: Int, serial: String)]? {
         guard let fd = openMuxSocket() else {
-            return []
+            return nil
         }
         defer { Darwin.close(fd) }
         let request: [String: Any] = [
@@ -124,17 +145,38 @@ public final class DeviceBridge {
             "ProgName": "NoCompile",
         ]
         guard sendPlist(request, over: fd, tag: 1), let response = readPlist(over: fd) else {
-            return []
+            return nil
         }
-        var ids: [Int] = []
+        var devices: [(id: Int, serial: String)] = []
         if let deviceList = response["DeviceList"] as? [[String: Any]] {
             for device in deviceList {
-                if let id = device["DeviceID"] as? Int {
-                    ids.append(id)
+                guard let id = device["DeviceID"] as? Int else {
+                    continue
                 }
+                let properties = device["Properties"] as? [String: Any]
+                devices.append((id, properties?["SerialNumber"] as? String ?? "\(id)"))
             }
         }
-        return ids
+        return devices
+    }
+
+    /// 列表内容变化时写一条日志（usbmuxd 不可达、无设备、发现设备三种状态）
+    private func reportDeviceList(_ devices: [Int]?) {
+        let summary: String
+        var level = Diagnostics.Level.info
+        if let devices {
+            summary = devices.isEmpty
+                ? "usbmuxd 中没有已连接的 iOS 设备"
+                : "usbmuxd 发现 \(devices.count) 台设备（DeviceID：\(devices.map(String.init).joined(separator: ", "))）"
+        } else {
+            summary = "无法连接 usbmuxd（/var/run/usbmuxd），真机暂不可用"
+            level = .warning
+        }
+        guard summary != lastDeviceSummary else {
+            return
+        }
+        lastDeviceSummary = summary
+        Diagnostics.shared.log("真机", summary, level: level)
     }
 
     /// 连接设备端口，成功返回隧道 fd

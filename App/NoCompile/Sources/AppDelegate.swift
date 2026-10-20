@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildMainMenu()
         setupStatusItem()
         observeModel()
+        setupHotKey()
 
         if preferences.notifiesOnFailure {
             model.requestNotificationPermission()
@@ -59,7 +60,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        GlobalHotKey.shared.unregister()
         model.stopEngine()
+    }
+
+    // MARK: - 全局快捷键
+
+    /// 「检查改动」全局快捷键：偏好里切换组合后立即重新注册
+    private func setupHotKey() {
+        GlobalHotKey.shared.onPress = { [weak self] in
+            self?.model.checkForChanges()
+        }
+        preferences.$checkChangesHotKey
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] preset in
+                guard let self else { return }
+                if !GlobalHotKey.shared.register(preset) {
+                    self.model.appendLog("全局快捷键 \(preset.title) 注册失败，可能已被其他 App 占用，请在偏好设置中换一个组合",
+                                         level: 2, category: .watch)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// 解析启动参数：--project <路径>
@@ -172,13 +193,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .error: stateTitle = "● 出错，详见控制台"
         }
         menu.addItem(disabledItem(stateTitle))
-        menu.addItem(disabledItem("工程：\(model.projectName)"))
-        menu.addItem(disabledItem("已连接：\(model.clients.isEmpty ? "无" : model.clients.map { "\($0.name)（\($0.platformTitle)）" }.joined(separator: "、"))"))
+        menu.addItem(disabledItem("工程：\(model.hasProject ? Preferences.projectTitle(preferences.projectPath) : "未选择")"))
+        if let active = model.activeClient {
+            menu.addItem(disabledItem("当前设备：\(active.name) @ \(active.deviceName)\(active.isOnline ? "" : "（离线）")"))
+        } else {
+            menu.addItem(disabledItem("当前设备：无"))
+        }
+        // 多台设备时可直接切换
+        if model.clients.count > 1 {
+            let devices = NSMenuItem(title: "切换设备", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            for client in model.clients {
+                let item = NSMenuItem(title: "\(client.name) @ \(client.deviceName)（\(client.platformTitle)）\(client.isOnline ? "" : " · 离线")",
+                                      action: #selector(selectDevice(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = client.id
+                item.state = client.isActive ? .on : .off
+                submenu.addItem(item)
+            }
+            devices.submenu = submenu
+            menu.addItem(devices)
+        }
         if let last = model.records.first {
             menu.addItem(disabledItem("最近：\(last.success ? "✓" : "✗") \(last.file)"))
         }
 
         menu.addItem(.separator())
+        let check = actionItem("检查改动并热重载", #selector(checkForChanges), "")
+        if preferences.checkChangesHotKey != .off {
+            check.title += "（\(preferences.checkChangesHotKey.title)）"
+        }
+        check.isEnabled = model.isRunning
+        menu.addItem(check)
         if !model.pendingFiles.isEmpty {
             menu.addItem(actionItem("注入 \(model.pendingFiles.count) 个待处理改动", #selector(injectPending), "i"))
         }
@@ -193,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let recent = NSMenuItem(title: "最近打开", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for path in preferences.recentProjects {
-                let item = NSMenuItem(title: (path as NSString).lastPathComponent, action: #selector(openRecent(_:)), keyEquivalent: "")
+                let item = NSMenuItem(title: Preferences.projectTitle(path), action: #selector(openRecent(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = path
                 item.toolTip = path
@@ -205,9 +251,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        let saveItem = actionItem("保存即注入", #selector(toggleInjectOnSave), "")
-        saveItem.state = preferences.injectsOnSave ? .on : .off
-        menu.addItem(saveItem)
         menu.addItem(actionItem("偏好设置…", #selector(showSettings), ","))
         menu.addItem(actionItem("导出诊断包…", #selector(exportDiagnostics), ""))
         menu.addItem(actionItem("检查更新…", #selector(checkForUpdates), ""))
@@ -245,8 +288,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func toggleInjectOnSave() {
-        preferences.injectsOnSave.toggle()
+    @objc private func checkForChanges() {
+        model.checkForChanges()
+    }
+
+    @objc private func selectDevice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, let client = model.clients.first(where: { $0.id == id }) else {
+            return
+        }
+        model.selectDevice(client)
     }
 
     @objc private func exportDiagnostics() {
@@ -284,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fileMenu.addItem(actionItem("选择工程…", #selector(chooseProject), "o"))
         fileMenu.addItem(actionItem("断开工程", #selector(closeProject), ""))
         fileMenu.addItem(actionItem("注入待处理改动", #selector(injectPending), "i"))
+        fileMenu.addItem(actionItem("检查改动并热重载", #selector(checkForChanges), "r"))
         fileMenu.addItem(.separator())
         fileMenu.addItem(actionItem("导出诊断包…", #selector(exportDiagnostics), ""))
         fileItem.submenu = fileMenu

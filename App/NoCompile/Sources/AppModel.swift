@@ -14,6 +14,9 @@ struct LogLine: Identifiable {
     let id = UUID()
     let date: Date
     let level: Int      // 0 信息 / 1 成功 / 2 警告 / 3 错误
+    let category: LogCategory
+    /// App 端日志的来源（App 名 @ 设备）
+    let source: String?
     let text: String
 }
 
@@ -22,6 +25,7 @@ final class AppModel: ObservableObject, EngineDelegate {
     static let shared = AppModel()
 
     @Published private(set) var state: EngineState = .idle
+    /// 已接入的设备（每台设备一个 App），含离线的当前设备
     @Published private(set) var clients: [ClientSummary] = []
     @Published private(set) var records: [InjectionRecord] = []
     @Published private(set) var logs: [LogLine] = []
@@ -72,6 +76,11 @@ final class AppModel: ObservableObject, EngineDelegate {
         return !preferences.projectPath.isEmpty
     }
 
+    /// 当前设备（接收热重载）
+    var activeClient: ClientSummary? {
+        return clients.first { $0.isActive }
+    }
+
     var successCount: Int { records.filter { $0.success }.count }
     var failureCount: Int { records.filter { !$0.success }.count }
     var averageDuration: TimeInterval {
@@ -106,8 +115,9 @@ final class AppModel: ObservableObject, EngineDelegate {
         notifiedIncompatibleClients.removeAll()
         applyPreferences(to: engine)
         appendLog("打开工程：\(path)", level: 0)
-        engine.start()
+        // 先登记为当前引擎再启动，启动过程中的回调才不会被当成旧引擎的而丢弃
         self.engine = engine
+        engine.start()
         isRunning = true
     }
 
@@ -139,6 +149,29 @@ final class AppModel: ObservableObject, EngineDelegate {
 
     func injectPendingChanges() {
         engine?.triggerPendingInjection()
+    }
+
+    /// 切换当前设备：之后的热重载推给它，并补推它还没有的改动
+    func selectDevice(_ client: ClientSummary) {
+        guard !client.isActive else {
+            return
+        }
+        // 界面先行切换，引擎随后回报最新状态
+        clients = clients.map { item in
+            var item = item
+            item.isActive = item.id == client.id
+            return item
+        }
+        engine?.selectDevice(client.id)
+    }
+
+    /// 手动检查改动（按钮与全局快捷键）：扫描工程目录，把未被监听到的改动交给热重载
+    func checkForChanges() {
+        guard let engine else {
+            appendLog("还没有打开工程，无法检查改动", level: 2, category: .watch)
+            return
+        }
+        engine.checkForChanges()
     }
 
     func clearLogs() {
@@ -203,17 +236,22 @@ final class AppModel: ObservableObject, EngineDelegate {
 
     // MARK: - EngineDelegate（均在主线程回调）
 
+    // 每个回调都先确认来自当前引擎：切换工程后旧引擎迟到的回调直接丢弃
+
     func engine(_ engine: Engine, didChangeState state: EngineState) {
+        guard engine === self.engine else { return }
         self.state = state
     }
 
-    func engine(_ engine: Engine, didLog message: String, level: Int) {
-        appendLog(message, level: level)
+    func engine(_ engine: Engine, didLog entry: EngineLog) {
+        guard engine === self.engine else { return }
+        appendLog(entry.message, level: entry.level, category: entry.category, source: entry.source)
     }
 
     func engine(_ engine: Engine, didUpdateClientCount count: Int) {}
 
     func engine(_ engine: Engine, didUpdateClients clients: [ClientSummary]) {
+        guard engine === self.engine else { return }
         self.clients = clients
         // 客户端与 Mac 端版本不一致：发系统通知提醒重新编译 App（每个连接只提醒一次）
         for client in clients {
@@ -226,6 +264,7 @@ final class AppModel: ObservableObject, EngineDelegate {
     }
 
     func engine(_ engine: Engine, didRecord record: InjectionRecord) {
+        guard engine === self.engine else { return }
         records.insert(record, at: 0)
         if records.count > 200 {
             records.removeLast(records.count - 200)
@@ -239,18 +278,20 @@ final class AppModel: ObservableObject, EngineDelegate {
     }
 
     func engine(_ engine: Engine, didUpdatePendingFiles files: [String]) {
+        guard engine === self.engine else { return }
         pendingFiles = files
     }
 
     // MARK: - 日志
 
-    func appendLog(_ text: String, level: Int) {
+    func appendLog(_ text: String, level: Int, category: LogCategory = .general, source: String? = nil) {
         let date = Date()
-        logWriter.write("[\(timeString(date))] \(text)\n")
+        let entry = EngineLog(level: level, category: category, message: text, source: source)
+        logWriter.write("[\(timeString(date))] \(entry.plainText)\n")
         let displayed = text.count > maxDisplayedLogLength
             ? String(text.prefix(maxDisplayedLogLength)) + "…（已截断，完整内容见日志文件）"
             : text
-        bufferedLogs.append(LogLine(date: date, level: level, text: displayed))
+        bufferedLogs.append(LogLine(date: date, level: level, category: category, source: source, text: displayed))
         guard !logFlushScheduled else {
             return
         }
@@ -354,25 +395,27 @@ final class AppModel: ObservableObject, EngineDelegate {
         var lines: [String] = ["[偏好]"]
         lines.append("工程：\(preferences.projectPath)")
         lines.append("最近工程：\(preferences.recentProjects.joined(separator: "、"))")
+        lines.append("检查改动快捷键：\(preferences.checkChangesHotKey.title)")
         lines.append("自定义 DerivedData：\(preferences.customDerivedData)")
         lines.append("排除关键字：\(preferences.excludedKeywords)")
         lines.append("保存即注入：\(preferences.injectsOnSave)，头文件：\(preferences.watchesHeaders)，资源：\(preferences.watchesResources)")
         lines.append("客户端配置：\(preferences.clientConfig.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", "))")
         lines.append("引擎运行中：\(isRunning)，状态：\(state)")
         lines.append("")
-        lines.append("[已连接 App]")
+        lines.append("[已接入设备]")
         if clients.isEmpty {
             lines.append("无")
         }
         for client in clients {
-            lines.append("\(client.name)（\(client.platformTitle)，\(client.bundleID)，\(client.machine)），客户端版本 \(client.clientVersion ?? "未知")，"
-                + "兼容性：\(client.compatibilityIssue ?? "正常")")
+            let flags = (client.isActive ? "［当前］" : "") + (client.isOnline ? "" : "［离线］")
+            lines.append("\(flags)\(client.name) @ \(client.deviceName)（\(client.platformTitle) \(client.systemVersion)，\(client.bundleID)，\(client.machine)），"
+                + "客户端版本 \(client.clientVersion ?? "未知")，兼容性：\(client.compatibilityIssue ?? "正常")")
         }
         lines.append("")
         lines.append("[最近注入（新→旧，最多 100 条）]")
         for record in records.prefix(100) {
             let status = record.success ? "成功" : "失败"
-            var line = "\(Diagnostics.shared.timestamp(record.date))  \(status)  \(record.file) → \(record.clientName)（\(record.platformTitle)）\(String(format: "%.2f", record.duration))s"
+            var line = "\(Diagnostics.shared.timestamp(record.date))  \(status)  \(record.file) → \(record.clientName) @ \(record.deviceName)（\(record.platformTitle)）\(String(format: "%.2f", record.duration))s"
             if !record.message.isEmpty {
                 line += "\n    \(record.message.replacingOccurrences(of: "\n", with: "\n    "))"
             }

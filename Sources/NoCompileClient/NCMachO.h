@@ -42,9 +42,6 @@ void NCEnumerateSymbolsWithDesc(NCImage *image, NCSymbolDescBlock block);
 void NCEnumerateSections(NCImage *image, void (^block)(const struct segment_command_64 *segment,
                                                        const struct section_64 *section, BOOL *stop));
 
-/// 按 1 起始的节序号（nlist.n_sect）取节
-const struct section_64 *_Nullable NCSectionAtIndex(NCImage *image, uint8_t index);
-
 /// 取指定节在内存中的地址与大小，segmentName 传 NULL 表示任意段
 void *_Nullable NCSectionData(NCImage *image, const char *_Nullable segmentName, const char *sectionName, size_t *size);
 
@@ -56,5 +53,11 @@ BOOL NCImageContainsAddress(NCImage *image, const void *address);
 
 /// 记录一个注入镜像，使其在之后被视为 App 镜像
 void NCRegisterInjectedImagePath(NSString *path);
+
+/// 是否为此前注入过的镜像
+BOOL NCIsInjectedImagePath(NSString *path);
+
+/// 镜像路径是否属于 App 自身（主程序、App 内的 framework、DerivedData 产物、注入镜像），系统库返回 NO
+BOOL NCPathIsAppImage(const char *_Nullable path);
 
 NS_ASSUME_NONNULL_END

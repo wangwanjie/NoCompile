@@ -45,6 +45,21 @@ enum Theme {
         }
     }
 
+    /// 日志分类标签的颜色
+    static func color(for category: LogCategory) -> NSColor {
+        switch category {
+        case .general: return .secondaryLabelColor
+        case .watch: return .systemTeal
+        case .build: return .systemBrown
+        case .compile: return .systemOrange
+        case .inject: return NSColor(accent)
+        case .resource: return .systemPink
+        case .connection: return .systemBlue
+        case .device: return .systemIndigo
+        case .app: return .systemGreen
+        }
+    }
+
     static func symbol(forLevel level: Int) -> String {
         switch level {
         case 1: return "checkmark.circle.fill"
@@ -115,12 +130,14 @@ private struct HeaderBar: View {
                 .help(model.pendingFiles.map { ($0 as NSString).lastPathComponent }.joined(separator: "\n"))
             }
 
-            Toggle(isOn: $preferences.injectsOnSave) {
-                Text("保存即注入")
+            if model.isRunning {
+                Button {
+                    model.checkForChanges()
+                } label: {
+                    Label("检查改动", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help(checkChangesHelp)
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help("关闭后，改动会累积为待注入，点击按钮手动注入")
 
             Button {
                 model.chooseProject()
@@ -136,7 +153,8 @@ private struct HeaderBar: View {
                         Button {
                             model.open(project: path)
                         } label: {
-                            Text((path as NSString).lastPathComponent)
+                            // 工程名 + 所在目录：同名工程（如多份 kugou.xcworkspace）也能分清
+                            Text(Preferences.projectTitle(path))
                         }
                         .help(path)
                     }
@@ -153,7 +171,7 @@ private struct HeaderBar: View {
                 Button {
                     model.open(project: recent)
                 } label: {
-                    Label("重新打开 \((recent as NSString).lastPathComponent)", systemImage: "arrow.clockwise")
+                    Label("重新打开 \(Preferences.projectLabel(recent).name)", systemImage: "arrow.clockwise")
                 }
                 .help(recent)
             }
@@ -177,6 +195,11 @@ private struct HeaderBar: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(VisualEffect(material: .headerView))
+    }
+
+    private var checkChangesHelp: String {
+        let shortcut = preferences.checkChangesHotKey == .off ? "" : "（全局快捷键 \(preferences.checkChangesHotKey.title)）"
+        return "扫描工程目录，把没有被自动监听到的改动交给热重载\(shortcut)"
     }
 }
 
@@ -219,14 +242,22 @@ private struct Sidebar: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SectionHeader(title: "已连接 App", count: model.clients.count)
+                SectionHeader(title: "设备", count: model.clients.count)
                 if model.clients.isEmpty {
                     EmptyHint(symbol: "iphone.slash",
                               title: "暂无连接",
                               detail: "在 Xcode 中运行接入了 NoCompile 的 App。\n真机请用数据线连接。")
                 } else {
+                    if model.clients.count > 1 {
+                        Text("热重载只推送到当前设备，点击其他设备即可切换，并自动补推它缺少的改动。")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     ForEach(model.clients) { client in
-                        ClientCard(client: client)
+                        ClientCard(client: client, selectable: model.clients.count > 1) {
+                            model.selectDevice(client)
+                        }
                     }
                 }
 
@@ -311,6 +342,9 @@ private struct EmptyHint: View {
 
 private struct ClientCard: View {
     let client: ClientSummary
+    /// 多台设备时可点击切换
+    var selectable = false
+    var onSelect: () -> Void = {}
 
     private var symbol: String {
         switch client.platform {
@@ -351,11 +385,17 @@ private struct ClientCard: View {
                         .background(Capsule().fill(tint.opacity(0.14)))
                         .foregroundColor(tint)
                 }
-                Text(client.bundleID)
+                Text(deviceLine)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if !client.isOnline {
+                    Text("App 已退出，重新运行后自动接上并补推改动")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let issue = client.compatibilityIssue {
                     // 版本不一致：完整显示原因并提示重新编译，可换行
                     Label("\(issue)。请重新编译并运行 App", systemImage: "exclamationmark.triangle.fill")
@@ -366,16 +406,59 @@ private struct ClientCard: View {
                 }
             }
             Spacer(minLength: 0)
-            Circle()
-                .fill(client.compatibilityIssue == nil ? Theme.success : Theme.warning)
-                .frame(width: 7, height: 7)
-                .help(client.compatibilityIssue == nil ? "已连接，客户端 \(client.clientVersion ?? "未知版本")" : "版本不一致，需要重新编译 App")
+            VStack(alignment: .trailing, spacing: 6) {
+                if client.isActive {
+                    Text("当前")
+                        .font(.system(size: 10, weight: .bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.accent))
+                        .foregroundColor(.white)
+                }
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 7, height: 7)
+                    .help(statusHelp)
+            }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor)))
+            .fill(client.isActive ? Theme.accent.opacity(0.10) : Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.12)))
+            .strokeBorder(client.isActive ? Theme.accent.opacity(0.6) : Color.secondary.opacity(0.12),
+                          lineWidth: client.isActive ? 1.5 : 1))
+        .opacity(client.isOnline ? 1 : 0.7)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if selectable {
+                onSelect()
+            }
+        }
+        .help(selectable && !client.isActive ? "设为当前设备：之后的热重载推送到这台设备" : client.bundleID)
+    }
+
+    /// 设备名 · 系统版本 · bundleID
+    private var deviceLine: String {
+        var parts = [client.deviceName]
+        if !client.systemVersion.isEmpty {
+            parts.append(client.systemVersion)
+        }
+        parts.append(client.bundleID)
+        return parts.joined(separator: " · ")
+    }
+
+    private var statusColor: Color {
+        if !client.isOnline {
+            return .secondary
+        }
+        return client.compatibilityIssue == nil ? Theme.success : Theme.warning
+    }
+
+    private var statusHelp: String {
+        if !client.isOnline {
+            return "离线"
+        }
+        return client.compatibilityIssue == nil ? "已连接，客户端 \(client.clientVersion ?? "未知版本")" : "版本不一致，需要重新编译 App"
     }
 }
 
@@ -458,7 +541,7 @@ private struct RecordRow: View {
     }
 
     private var subtitle: String {
-        var parts = ["\(record.clientName) · \(record.platformTitle)"]
+        var parts = [record.deviceName.isEmpty ? "\(record.clientName) · \(record.platformTitle)" : "\(record.clientName) @ \(record.deviceName)"]
         if record.duration > 0 {
             parts.append(String(format: "%.2fs", record.duration))
         }
@@ -480,7 +563,7 @@ private extension InjectionRecord {
     var summaryText: String {
         var lines = ["\(success ? "成功" : "失败")  \(file)",
                      "时间：\(Diagnostics.shared.timestamp(date))",
-                     "目标：\(clientName)（\(platformTitle)）"]
+                     "目标：\(clientName) @ \(deviceName)（\(platformTitle)）"]
         if duration > 0 {
             lines.append(String(format: "耗时：%.2fs", duration))
         }
@@ -725,7 +808,7 @@ private struct RecordDetailView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 field("时间", Diagnostics.shared.timestamp(record.date))
-                field("目标", "\(record.clientName)（\(record.platformTitle)）")
+                field("目标", "\(record.clientName) @ \(record.deviceName)（\(record.platformTitle)）")
                 if record.duration > 0 {
                     field("耗时", String(format: "%.2fs", record.duration))
                 }
@@ -803,9 +886,26 @@ private enum LogFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// 按来源筛选日志
+private enum LogSource: String, CaseIterable, Identifiable {
+    case all = "全部来源"
+    case engine = "NoCompile"
+    case app = "App 日志"
+    var id: String { rawValue }
+
+    func accepts(_ category: LogCategory) -> Bool {
+        switch self {
+        case .all: return true
+        case .engine: return category != .app
+        case .app: return category == .app
+        }
+    }
+}
+
 private struct LogConsole: View {
     @ObservedObject var model: AppModel
     @State private var filter: LogFilter = .all
+    @State private var source: LogSource = .all
     @State private var search = ""
     @State private var followTail = true
     /// 日志字号，⌘+ / ⌘- 缩放并记住
@@ -816,11 +916,14 @@ private struct LogConsole: View {
     private static let maxFontSize: Double = 32
 
     private func filteredLogs() -> [LogLine] {
-        if filter == .all && search.isEmpty {
+        if filter == .all && source == .all && search.isEmpty {
             return model.logs
         }
         return model.logs.filter { line in
-            filter.accepts(line.level) && (search.isEmpty || line.text.localizedCaseInsensitiveContains(search))
+            filter.accepts(line.level) && source.accepts(line.category)
+                && (search.isEmpty || line.text.localizedCaseInsensitiveContains(search)
+                    || line.category.title.localizedCaseInsensitiveContains(search)
+                    || (line.source?.localizedCaseInsensitiveContains(search) ?? false))
         }
     }
 
@@ -837,6 +940,15 @@ private struct LogConsole: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 250)
+
+                Picker("", selection: $source) {
+                    ForEach(LogSource.allCases) { item in
+                        Text(item.rawValue).tag(item)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .help("只看 NoCompile 自身的日志，或只看 App 端转发的日志")
 
                 HStack(spacing: 4) {
                     Image(systemName: "magnifyingglass")
@@ -1077,64 +1189,88 @@ private struct LogTextView: NSViewRepresentable {
         }
     }
 
-    /// 把日志行排成富文本
+    /// 把日志行排成富文本：时间 · 分类 emoji 与彩色标签 · [来源] · 正文（按级别着色）。
+    /// 多行正文的续行与正文首行对齐
     private struct Builder {
         let font: NSFont
+        let tagFont: NSFont
         let timeString: (Date) -> String
-        let hangingIndent: CGFloat
-        /// 时间 + 空格 + 图标 + 空格 的字符数，续行用同样数量的空格对齐
-        private static let prefixCount = 11
 
         init(fontSize: CGFloat, timeString: @escaping (Date) -> String) {
             font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            tagFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
             self.timeString = timeString
-            hangingIndent = font.maximumAdvancement.width * CGFloat(Builder.prefixCount)
         }
 
         func build(_ lines: ArraySlice<LogLine>) -> (text: NSAttributedString, lengths: [Int]) {
             let result = NSMutableAttributedString()
             var lengths: [Int] = []
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.headIndent = hangingIndent
-            paragraph.lineBreakMode = .byWordWrapping
-            let continuation = "\n" + String(repeating: " ", count: Builder.prefixCount)
-
             for line in lines {
-                let textColor: NSColor
-                switch line.level {
-                case 3: textColor = NSColor(Theme.failure)
-                case 2: textColor = NSColor(Theme.warning)
-                default: textColor = .labelColor
-                }
-                var base: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
-                if line.level >= 3 {
-                    base[.backgroundColor] = NSColor(Theme.failure).withAlphaComponent(0.06)
-                }
-
-                let piece = NSMutableAttributedString()
-                var timeAttrs = base
-                timeAttrs[.foregroundColor] = NSColor.secondaryLabelColor
-                piece.append(NSAttributedString(string: timeString(line.date) + " ", attributes: timeAttrs))
-                var symbolAttrs = base
-                symbolAttrs[.foregroundColor] = line.level == 0 ? NSColor.secondaryLabelColor : NSColor(Theme.color(forLevel: line.level))
-                piece.append(NSAttributedString(string: Builder.symbol(forLevel: line.level) + " ", attributes: symbolAttrs))
-                var textAttrs = base
-                textAttrs[.foregroundColor] = textColor
-                let body = line.text.replacingOccurrences(of: "\n", with: continuation)
-                piece.append(NSAttributedString(string: body + "\n", attributes: textAttrs))
+                let piece = render(line)
                 lengths.append(piece.length)
                 result.append(piece)
             }
             return (result, lengths)
         }
 
-        private static func symbol(forLevel level: Int) -> String {
-            switch level {
-            case 1: return "✓"
-            case 2: return "▲"
-            case 3: return "✕"
-            default: return "•"
+        private func render(_ line: LogLine) -> NSAttributedString {
+            let textColor: NSColor
+            switch line.level {
+            case 3: textColor = NSColor(Theme.failure)
+            case 2: textColor = NSColor(Theme.warning)
+            case 1: textColor = NSColor(Theme.success)
+            default: textColor = line.category == .app ? .secondaryLabelColor : .labelColor
             }
+            var background: NSColor?
+            if line.level >= 3 {
+                background = NSColor(Theme.failure).withAlphaComponent(0.07)
+            } else if line.level == 2 {
+                background = NSColor(Theme.warning).withAlphaComponent(0.05)
+            }
+
+            // 前缀：时间、分类 emoji、分类标签（标签补齐到相同宽度，正文列对齐）
+            let prefix = NSMutableAttributedString()
+            prefix.append(NSAttributedString(string: timeString(line.date) + " ",
+                                             attributes: [.font: font, .foregroundColor: NSColor.tertiaryLabelColor]))
+            prefix.append(NSAttributedString(string: line.category.emoji + " ", attributes: [.font: font]))
+            let tag = line.category.title
+            let padding = String(repeating: " ", count: max(0, 4 - Builder.displayWidth(tag)))
+            prefix.append(NSAttributedString(string: tag + padding + " ",
+                                             attributes: [.font: tagFont, .foregroundColor: Theme.color(for: line.category)]))
+            let indent = prefix.size().width
+
+            let first = NSMutableParagraphStyle()
+            first.headIndent = indent
+            first.lineBreakMode = .byWordWrapping
+            // 正文里的换行另起段落，整段缩进到正文列
+            let rest = NSMutableParagraphStyle()
+            rest.firstLineHeadIndent = indent
+            rest.headIndent = indent
+            rest.lineBreakMode = .byWordWrapping
+
+            let piece = NSMutableAttributedString(attributedString: prefix)
+            if let source = line.source, !source.isEmpty {
+                piece.append(NSAttributedString(string: "[\(source)] ",
+                                                attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+            }
+            let bodyLines = line.text.components(separatedBy: "\n")
+            var bodyAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+            piece.append(NSAttributedString(string: bodyLines[0], attributes: bodyAttributes))
+            piece.addAttribute(.paragraphStyle, value: first, range: NSRange(location: 0, length: piece.length))
+            bodyAttributes[.paragraphStyle] = rest
+            for extra in bodyLines.dropFirst() {
+                piece.append(NSAttributedString(string: "\n" + extra, attributes: bodyAttributes))
+            }
+            piece.append(NSAttributedString(string: "\n", attributes: bodyAttributes))
+            if let background {
+                piece.addAttribute(.backgroundColor, value: background, range: NSRange(location: 0, length: piece.length))
+            }
+            return piece
+        }
+
+        /// 等宽字体下的显示宽度：中文按 2 列计
+        private static func displayWidth(_ text: String) -> Int {
+            return text.unicodeScalars.reduce(0) { $0 + ($1.value > 0x2E80 ? 2 : 1) }
         }
     }
 }

@@ -1,14 +1,17 @@
 //
 //  FileWatcher.swift
-//  基于 FSEvents 监听源码目录，源文件与界面 / 图片资源保存后触发回调。
-//  Xcode 保存文件是原子 rename，这里关注 rename / modified / created 事件（created 覆盖新增文件）。
+//  监听源码目录，源文件与界面 / 图片资源内容变化后触发回调。
 //
-//  git pull / merge / 切分支会在极短时间内改动一批文件（还伴随 .git 下成千上万个对象文件），
-//  因此：
-//  1. 事件先攒批：最后一个事件之后安静一小段时间（或累计等待达到上限）再统一回调，
-//     让一次 git 操作只触发一次注入；
-//  2. 事件过多时 FSEvents 会丢弃单个文件事件，只给出"需重新扫描某目录"的标记，
-//     此时按修改时间重新扫描该目录，补回被合并掉的改动。
+//  两路来源，统一按「文件指纹」判定是否真的改了：
+//  1. FSEvents：Xcode 原子保存、git 操作等都会产生事件，但事件标志并不可靠——
+//     一次保存可能同时带 Renamed / Cloned / Modified，克隆、改扩展属性也会产生事件。
+//     因此不再按标志位猜测，收到事件后重新 stat 文件，修改时间、大小、inode 任一变化才算改动，
+//     并比较内容摘要，内容没变（touch、克隆、原样重写）的不触发。
+//  2. 扫描：启动时遍历一次监听目录建立指纹基线；之后只在用户手动「检查改动」或 FSEvents 报告丢弃了事件时
+//     重新遍历，与基线比较，补回 FSEvents 漏掉的改动（目录权限、网络盘、事件被合并丢弃等情况）。不做定时轮询。
+//
+//  git pull / merge / 切分支会在极短时间内改动一批文件，事件先攒批：最后一个事件之后安静一小段时间
+//  （或累计等待达到上限）再统一回调，让一次 git 操作只触发一次注入。
 //
 
 import Foundation
@@ -34,11 +37,7 @@ public final class FileWatcher {
         if sourceExtensions.contains(ext) || resourceExtensions.contains(ext) {
             return true
         }
-        if projectStructureFiles.contains((path as NSString).lastPathComponent) {
-            return true
-        }
-        // 图片集 / 颜色集的描述文件变化（如修改 scale、渲染模式、颜色分量）也需要重新下发
-        return ext == "json" && (path.contains(".imageset/") || path.contains(".colorset/"))
+        return projectStructureFiles.contains((path as NSString).lastPathComponent)
     }
 
     /// 是否为工程结构文件
@@ -63,15 +62,58 @@ public final class FileWatcher {
         return false
     }
 
-    /// 重新扫描时跳过的目录名
-    private static let skippedDirectoryNames: Set<String> = [".git", "DerivedData", "build", ".build", "node_modules", ".svn"]
+    /// 主动扫描时跳过的目录名（隐藏目录一律跳过）
+    private static let skippedDirectoryNames: Set<String> = ["DerivedData", "build", "node_modules", "xcuserdata", "Carthage"]
+    /// 主动扫描时跳过的目录扩展名：构建产物与工程包，不含源文件
+    private static let skippedDirectoryExtensions: Set<String> = [
+        "xcodeproj", "xcworkspace", "app", "appex", "framework", "xcframework", "dSYM",
+        "xcarchive", "storyboardc", "nib", "momd", "xcresult", "playground",
+    ]
+    /// 计算内容摘要的文件大小上限，更大的文件只比较指纹
+    private static let maxDigestSize: Int64 = 8 * 1024 * 1024
 
-    private var stream: FSEventStreamRef?
+    /// 文件指纹：修改时间（纳秒精度）、大小与 inode
+    struct Stamp: Equatable {
+        let seconds: Int
+        let nanoseconds: Int
+        let size: Int64
+        let inode: UInt64
+
+        init(_ st: stat) {
+            seconds = Int(st.st_mtimespec.tv_sec)
+            nanoseconds = Int(st.st_mtimespec.tv_nsec)
+            size = Int64(st.st_size)
+            inode = UInt64(st.st_ino)
+        }
+
+        var modificationDate: Date {
+            return Date(timeIntervalSince1970: TimeInterval(seconds) + TimeInterval(nanoseconds) / 1_000_000_000)
+        }
+    }
+
+    /// 已知文件的最新状态。digest 为内容摘要，只在文件变化后计算（首次扫描只记录指纹，避免读全部文件）
+    private struct Entry {
+        var stamp: Stamp
+        var digest: UInt64?
+    }
+
     public let directories: [String]
     private let onChange: ([String]) -> Void
-    private let callbackQueue = DispatchQueue(label: "com.nocompile.filewatcher")
-    private var lastFire: [String: Date] = [:]
-    private let debounce: TimeInterval
+    /// 所有状态都只在 queue 上访问；FSEvents 回调也投递到这里
+    private let queue = DispatchQueue(label: "com.nocompile.filewatcher")
+    /// 目录遍历在单独的队列上执行，不阻塞事件处理
+    private let scanQueue = DispatchQueue(label: "com.nocompile.filewatcher.scan", qos: .utility)
+    private var stream: FSEventStreamRef?
+    private var running = false
+    private var entries: [String: Entry] = [:]
+    /// 首次全量扫描完成后才能把「不认识的文件」判定为新增文件
+    private var baselineReady = false
+    private var scanInFlight = false
+    /// 扫描进行中又收到了扫描请求（如手动检查、FSEvents 要求重新扫描），本次结束后立即再扫一次
+    private var rescanRequested = false
+    /// 手动检查的回调：下一次扫描合并完成后调用，参数为找到的改动数
+    private var manualCompletions: [(Int) -> Void] = []
+
     /// 攒批：最后一个事件后安静这么久再回调
     private let quietInterval: TimeInterval
     /// 攒批：从第一个事件起最多等待这么久
@@ -80,151 +122,288 @@ public final class FileWatcher {
     private var batchSet = Set<String>()
     private var batchStart: Date?
     private var flushWork: DispatchWorkItem?
-    /// 上一次处理事件的时间，重新扫描时以此为界找出新改动的文件
-    private var lastEventDate = Date()
 
-    public init(directories: [String], debounce: TimeInterval = 0.3,
-                quietInterval: TimeInterval = 0.4, maxBatchDelay: TimeInterval = 3,
+    public init(directories: [String], quietInterval: TimeInterval = 0.35, maxBatchDelay: TimeInterval = 3,
                 onChange: @escaping ([String]) -> Void) {
-        self.directories = directories
+        // FSEvents 报告的是解析过符号链接的真实路径（如 /tmp → /private/tmp），扫描也必须用真实路径，
+        // 否则同一个文件会以两种路径各记一份指纹，被当成两个文件重复触发
+        self.directories = directories.map { directory in
+            guard let resolved = realpath(directory, nil) else {
+                return directory
+            }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
         self.onChange = onChange
-        self.debounce = debounce
         self.quietInterval = quietInterval
         self.maxBatchDelay = maxBatchDelay
     }
 
-    @discardableResult
-    public func start() -> Bool {
-        var context = FSEventStreamContext(version: 0,
-                                           info: Unmanaged.passUnretained(self).toOpaque(),
-                                           retain: nil, release: nil, copyDescription: nil)
-        let paths = directories as CFArray
-        let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
-        guard let stream = FSEventStreamCreate(kCFAllocatorDefault,
-                                               { _, info, count, paths, flags, _ in
-            guard let info else { return }
-            let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
-            let pathsPtr = unsafeBitCast(paths, to: NSArray.self)
-            var changed: [String] = []
-            var rescan: [String] = []
-            let rescanFlags = UInt32(kFSEventStreamEventFlagMustScanSubDirs)
-                | UInt32(kFSEventStreamEventFlagUserDropped)
-                | UInt32(kFSEventStreamEventFlagKernelDropped)
-            for i in 0 ..< count {
-                guard let path = pathsPtr[i] as? String else { continue }
-                let flag = flags[i]
-                if (flag & rescanFlags) != 0 {
-                    rescan.append(path)
-                    continue
-                }
-                // 文件被克隆（APFS clonefile，拷贝资源到暂存目录时就会发生）时，源文件也会收到带 Renamed 位的
-                // Cloned 事件，但内容并没有变化。若把它当成改动，会形成"下发资源 → 克隆源文件 → 再下发"的死循环
-                let cloned = (flag & UInt32(kFSEventStreamEventFlagItemCloned)) != 0
-                let interesting = ((flag & UInt32(kFSEventStreamEventFlagItemRenamed)) != 0 && !cloned)
-                    || (flag & UInt32(kFSEventStreamEventFlagItemModified)) != 0
-                    || (flag & UInt32(kFSEventStreamEventFlagItemCreated)) != 0
-                if interesting {
-                    changed.append(path)
-                }
-            }
-            if !rescan.isEmpty {
-                watcher.rescan(rescan)
-            }
-            if !changed.isEmpty {
-                watcher.handle(changed)
-            }
-        }, &context, paths, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, flags) else {
-            Diagnostics.shared.log("监听", "FSEventStreamCreate 失败：\(directories)", level: .error)
-            return false
-        }
-        self.stream = stream
-        FSEventStreamSetDispatchQueue(stream, callbackQueue)
-        guard FSEventStreamStart(stream) else {
-            Diagnostics.shared.log("监听", "FSEventStreamStart 失败：\(directories)", level: .error)
+    deinit {
+        if let stream {
+            FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
-            self.stream = nil
-            return false
+        }
+    }
+
+    /// 开始监听，返回值表示 FSEvents 是否可用（不可用时仍可手动检查改动）
+    @discardableResult
+    public func start() -> Bool {
+        let eventsOK = startEventStream()
+        // 基线扫描：记录所有文件的指纹，之后的事件与手动检查都与它比较
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.running = true
+            self.requestScan()
         }
         Diagnostics.shared.log("监听", "开始监听：\(directories.joined(separator: "、"))")
-        return true
+        return eventsOK
     }
 
     public func stop() {
-        guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-        self.stream = nil
-        callbackQueue.sync {
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
+        queue.sync {
+            running = false
             flushWork?.cancel()
             flushWork = nil
             batch.removeAll()
             batchSet.removeAll()
+            let completions = manualCompletions
+            manualCompletions.removeAll()
+            completions.forEach { $0(0) }
         }
     }
 
-    // MARK: - 事件处理（均在 callbackQueue 上）
+    /// 立即扫描一次监听目录，找出 FSEvents 漏掉的改动。completion 在内部队列回调，参数为找到的改动数
+    public func checkNow(completion: @escaping (Int) -> Void) {
+        queue.async { [weak self] in
+            guard let self, self.running else {
+                completion(0)
+                return
+            }
+            self.manualCompletions.append(completion)
+            self.requestScan()
+        }
+    }
 
-    private func handle(_ paths: [String]) {
-        let now = Date()
-        lastEventDate = now
+    // MARK: - FSEvents
+
+    private func startEventStream() -> Bool {
+        var context = FSEventStreamContext(version: 0,
+                                           info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+        guard let stream = FSEventStreamCreate(kCFAllocatorDefault, { _, info, count, paths, flags, _ in
+            guard let info else { return }
+            let watcher = Unmanaged<FileWatcher>.fromOpaque(info).takeUnretainedValue()
+            let pathsArray = unsafeBitCast(paths, to: NSArray.self)
+            var changed: [String] = []
+            var needsScan = false
+            let rescanFlags = UInt32(kFSEventStreamEventFlagMustScanSubDirs)
+                | UInt32(kFSEventStreamEventFlagUserDropped)
+                | UInt32(kFSEventStreamEventFlagKernelDropped)
+            for i in 0 ..< count {
+                guard let path = pathsArray[i] as? String else { continue }
+                if (flags[i] & rescanFlags) != 0 {
+                    needsScan = true
+                    continue
+                }
+                // 只关心文件本身的事件，目录事件交给扫描
+                if (flags[i] & UInt32(kFSEventStreamEventFlagItemIsDir)) != 0 {
+                    continue
+                }
+                changed.append(path)
+            }
+            // 回调本身就在 queue 上（见 FSEventStreamSetDispatchQueue）
+            if needsScan {
+                Diagnostics.shared.log("监听", "FSEvents 合并或丢弃了事件，重新扫描监听目录", level: .warning)
+                watcher.requestScan()
+            }
+            if !changed.isEmpty {
+                watcher.consider(changed)
+            }
+        }, &context, directories as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, flags) else {
+            Diagnostics.shared.log("监听", "FSEventStreamCreate 失败：\(directories)", level: .error)
+            return false
+        }
+        FSEventStreamSetDispatchQueue(stream, queue)
+        guard FSEventStreamStart(stream) else {
+            Diagnostics.shared.log("监听", "FSEventStreamStart 失败：\(directories)", level: .error)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            return false
+        }
+        self.stream = stream
+        return true
+    }
+
+    // MARK: - 变化判定（均在 queue 上）
+
+    /// 逐个检查候选路径，内容确实变化的加入批次
+    private func consider(_ paths: [String]) {
+        guard running else {
+            return
+        }
+        let recentLimit = Date().addingTimeInterval(-600)
         var accepted: [String] = []
-        for path in paths {
-            guard Self.isWatched(path), !Self.isIgnored(path) else {
+        for path in paths where Self.isWatched(path) && !Self.isIgnored(path) {
+            var st = stat()
+            guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else {
+                // 已删除或不是普通文件（原子保存时旧路径会先被移走）
+                entries[path] = nil
                 continue
             }
-            // 只处理当前确实存在的文件（原子保存时旧路径会先被移走）
-            if !FileManager.default.fileExists(atPath: path) {
+            let stamp = Stamp(st)
+            let previous = entries[path]
+            if previous?.stamp == stamp {
+                // 指纹没变：克隆、改扩展属性、重复事件
                 continue
             }
-            if let last = lastFire[path], now.timeIntervalSince(last) < debounce {
-                continue
+            let digest = stamp.size <= Self.maxDigestSize ? Self.digest(ofFile: path) : nil
+            entries[path] = Entry(stamp: stamp, digest: digest)
+            if let previous {
+                // 指纹变了但内容相同（touch、原样重写），不算改动
+                if let digest, let old = previous.digest, digest == old {
+                    continue
+                }
+                accepted.append(path)
+            } else if baselineReady || stamp.modificationDate >= recentLimit {
+                // 基线里没有的文件：基线已建立说明是新增文件；基线还没建好时只接受最近修改过的
+                accepted.append(path)
             }
-            lastFire[path] = now
-            accepted.append(path)
         }
         enqueue(accepted)
     }
 
-    /// FSEvents 丢弃了单个文件事件：扫描目录，找出上次事件之后修改过的文件
-    private func rescan(_ directories: [String]) {
-        let since = lastEventDate.addingTimeInterval(-2)
-        lastEventDate = Date()
-        var found: [String] = []
-        let fm = FileManager.default
-        var visited = 0
-        for directory in Set(directories) {
-            let url = URL(fileURLWithPath: directory, isDirectory: true)
-            guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-                                                 options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+    /// 文件内容摘要（FNV-1a 64），读取失败返回 nil
+    private static func digest(ofFile path: String) -> UInt64? {
+        guard let data = FileManager.default.contents(atPath: path) else {
+            return nil
+        }
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        data.withUnsafeBytes { raw in
+            for byte in raw.bindMemory(to: UInt8.self) {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+        }
+        return hash
+    }
+
+    // MARK: - 扫描
+
+    /// 请求尽快扫描一次（在 queue 上调用）
+    private func requestScan() {
+        guard running else {
+            return
+        }
+        if scanInFlight {
+            rescanRequested = true
+            return
+        }
+        runScan()
+    }
+
+    private func runScan() {
+        scanInFlight = true
+        let roots = directories
+        scanQueue.async { [weak self] in
+            let start = Date()
+            let scanned = Self.scan(roots: roots)
+            let duration = Date().timeIntervalSince(start)
+            self?.queue.async {
+                self?.finishScan(scanned, duration: duration)
+            }
+        }
+    }
+
+    private func finishScan(_ scanned: [String: Stamp], duration: TimeInterval) {
+        scanInFlight = false
+        guard running else {
+            return
+        }
+        var found = 0
+        if !baselineReady {
+            // 基线：只记录指纹。扫描期间事件已登记过的文件保留事件里的最新状态
+            for (path, stamp) in scanned where entries[path] == nil {
+                entries[path] = Entry(stamp: stamp, digest: nil)
+            }
+            baselineReady = true
+            Diagnostics.shared.log("监听", "建立文件基线：\(scanned.count) 个文件，耗时 \(String(format: "%.2f", duration))s")
+            // 基线建好前就请求了手动检查：基线本身不产生改动，再扫一次才能比较
+            if !manualCompletions.isEmpty {
+                rescanRequested = true
+            }
+        } else {
+            var candidates: [String] = []
+            for (path, stamp) in scanned where entries[path]?.stamp != stamp {
+                candidates.append(path)
+            }
+            // 扫描里消失的文件：再确认一次确实不存在后移除
+            for path in entries.keys where scanned[path] == nil && access(path, F_OK) != 0 {
+                entries[path] = nil
+            }
+            let before = batch.count
+            consider(candidates)
+            found = batch.count - before
+            if found > 0 {
+                Diagnostics.shared.log("监听", "扫描发现 \(found) 个 FSEvents 未报告的改动", level: .warning)
+            }
+            let completions = manualCompletions
+            manualCompletions.removeAll()
+            completions.forEach { $0(found) }
+        }
+        if rescanRequested {
+            rescanRequested = false
+            runScan()
+        }
+    }
+
+    /// 遍历监听目录，返回所有关注文件的指纹
+    private static func scan(roots: [String]) -> [String: Stamp] {
+        var result: [String: Stamp] = [:]
+        for root in roots {
+            var argv: [UnsafeMutablePointer<CChar>?] = [strdup(root), nil]
+            defer { free(argv[0]) }
+            guard let fts = fts_open(&argv, FTS_PHYSICAL | FTS_NOCHDIR, nil) else {
                 continue
             }
-            while let item = enumerator.nextObject() as? URL {
-                visited += 1
-                // 防御：超大目录只扫描有限数量的条目
-                if visited > 300_000 {
-                    break
-                }
-                let values = try? item.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
-                if values?.isDirectory == true {
-                    if Self.skippedDirectoryNames.contains(item.lastPathComponent) {
-                        enumerator.skipDescendants()
+            while let entry = fts_read(fts) {
+                let info = Int32(entry.pointee.fts_info)
+                let path = String(cString: entry.pointee.fts_path)
+                if info == FTS_D {
+                    // 根目录本身不跳过
+                    if entry.pointee.fts_level > 0 && shouldSkipDirectory(path) {
+                        fts_set(fts, entry, FTS_SKIP)
                     }
                     continue
                 }
-                let path = item.path
-                guard Self.isWatched(path), !Self.isIgnored(path),
-                      let modified = values?.contentModificationDate, modified >= since else {
+                guard info == FTS_F, let statPointer = entry.pointee.fts_statp,
+                      isWatched(path), !isIgnored(path) else {
                     continue
                 }
-                found.append(path)
+                result[path] = Stamp(statPointer.pointee)
             }
+            fts_close(fts)
         }
-        Diagnostics.shared.log("监听", "FSEvents 合并了事件，重新扫描 \(directories.count) 个目录（\(visited) 项），找回 \(found.count) 个改动",
-                               level: .warning)
-        enqueue(found)
+        return result
     }
+
+    private static func shouldSkipDirectory(_ path: String) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        if name.hasPrefix(".") || skippedDirectoryNames.contains(name) {
+            return true
+        }
+        return skippedDirectoryExtensions.contains((name as NSString).pathExtension)
+    }
+
+    // MARK: - 攒批
 
     private func enqueue(_ paths: [String]) {
         guard !paths.isEmpty else {
@@ -245,7 +424,7 @@ public final class FileWatcher {
             self?.flush()
         }
         flushWork = work
-        callbackQueue.asyncAfter(deadline: .now() + delay, execute: work)
+        queue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func flush() {
@@ -254,12 +433,7 @@ public final class FileWatcher {
         batchSet.removeAll()
         batchStart = nil
         flushWork = nil
-        // 清理过期的防抖记录，避免长时间运行后无限增长
-        if lastFire.count > 5000 {
-            let cutoff = Date().addingTimeInterval(-60)
-            lastFire = lastFire.filter { $0.value > cutoff }
-        }
-        guard !paths.isEmpty else {
+        guard running, !paths.isEmpty else {
             return
         }
         if paths.count > 1 {

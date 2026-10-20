@@ -59,7 +59,25 @@ public final class Recompiler {
     public init(outputDirectory: String) {
         self.outputDirectory = outputDirectory
         try? FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
-        self.sessionID = String(Int(Date().timeIntervalSince1970) % 1_000_000)
+        // 随机标识：同一秒内重启引擎也不会生成同名 dylib（dlopen 对同路径直接返回已加载的旧镜像）
+        self.sessionID = String(UUID().uuidString.prefix(8))
+        Self.removeStaleOutputs(in: outputDirectory)
+    }
+
+    /// 清理一天以前的中间产物（.o / .dylib / 文件列表），避免临时目录无限增长。
+    /// 只删文件、不进子目录（Resources 由资源编译器管理）；还在被 App 使用的 dylib 已映射进进程，删除不影响
+    private static func removeStaleOutputs(in directory: String) {
+        let fileManager = FileManager.default
+        let cutoff = Date().addingTimeInterval(-24 * 3600)
+        for name in (try? fileManager.contentsOfDirectory(atPath: directory)) ?? [] where name.hasPrefix("nc_") {
+            let path = (directory as NSString).appendingPathComponent(name)
+            guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date, modified < cutoff else {
+                continue
+            }
+            try? fileManager.removeItem(atPath: path)
+        }
     }
 
     /// 重编单个源文件，返回签名完毕的 dylib 路径
@@ -85,10 +103,10 @@ public final class Recompiler {
             if command == nil,
                let template = commands.clangTemplate(for: sourceFile, platform: platform.name, arch: platform.arch) {
                 // 新增文件：借用目录最接近的已有文件的编译命令
-                command = clangCommand(from: template.command, templateSource: template.source, newSource: sourceFile)
+                command = clangCommand(from: template.command, templateSource: template.source, newSource: sourceFile, commands: commands)
                 isNewFile = true
             }
-            compiled = compileClang(sourceFile: sourceFile, command: command, objectPath: objectPath)
+            compiled = compileClang(sourceFile: sourceFile, command: command, objectPath: objectPath, sdkPath: platform.sdkPath)
         }
         if let error = compiled.error {
             return RecompileResult(dylibPath: nil, log: compiled.log, error: error)
@@ -225,6 +243,8 @@ public final class Recompiler {
             "-emit-module", "-emit-dependencies", "-emit-objc-header", "-emit-const-values",
             "-emit-localized-strings", "-save-temps", "-whole-module-optimization", "-wmo",
             "-validate-clang-modules-once", "-serialize-diagnostics",
+            // 显式模块构建：-### 规划阶段就会做完整的依赖扫描，大模块要多花数秒；frontend 层本来也会改回隐式模块
+            "-explicit-module-build",
         ]
         let dropFlagsWithValue: Set<String> = [
             "-output-file-map", "-emit-module-path", "-emit-objc-header-path",
@@ -342,29 +362,57 @@ public final class Recompiler {
 
     // MARK: - ObjC / C / C++
 
-    /// 由模板文件的 clang 命令生成新文件的命令：替换 -c 后的源文件，语言不同时改写 -x 并去掉语言标准参数
-    private func clangCommand(from template: RawCompileCommand, templateSource: String, newSource: String) -> RawCompileCommand {
-        let languageChanged = ParsedCommands.clangLanguage(forPath: templateSource) != ParsedCommands.clangLanguage(forPath: newSource)
+    /// 由模板文件的 clang 命令生成新文件的命令：替换 -c 后的源文件，去掉模板文件自己的文件级参数（如 -fno-objc-arc）。
+    /// 语言不同（如在只有 .m 的目录里新建 .mm）时，-std、-fobjc-arc 等写在按语言区分的 resp 里，
+    /// 换成同一 target 目标语言的 resp；找不到时在末尾补上该语言的默认参数（clang 以最后出现的为准）
+    private func clangCommand(from template: RawCompileCommand, templateSource: String, newSource: String,
+                              commands: ParsedCommands) -> RawCompileCommand {
+        let oldLanguage = ParsedCommands.clangLanguage(forPath: templateSource)
+        let newLanguage = ParsedCommands.clangLanguage(forPath: newSource)
+        var replacementResp: String?
+        if oldLanguage != newLanguage, let templateResp = ClangCommandEditing.respPath(in: template.tokens) {
+            let respDirectory = (templateResp as NSString).deletingLastPathComponent
+            replacementResp = commands.allClangCommands.lazy.compactMap { candidate -> String? in
+                guard candidate.platform == template.platform, candidate.arch == template.arch,
+                      ClangCommandEditing.value(after: "-x", in: candidate.tokens) == newLanguage,
+                      let resp = ClangCommandEditing.respPath(in: candidate.tokens),
+                      (resp as NSString).deletingLastPathComponent == respDirectory else {
+                    return nil
+                }
+                return resp
+            }.first
+        }
         var tokens: [String] = []
         var i = 0
-        while i < template.tokens.count {
-            let token = template.tokens[i]
-            if token == "-c", i + 1 < template.tokens.count {
+        let source = ClangCommandEditing.removingFileLevelFlags(template.tokens)
+        while i < source.count {
+            let token = source[i]
+            if token == "-c", i + 1 < source.count {
                 tokens.append(contentsOf: ["-c", newSource])
                 i += 2
                 continue
             }
-            if token == "-x", i + 1 < template.tokens.count {
-                tokens.append(contentsOf: ["-x", ParsedCommands.clangLanguage(forPath: newSource)])
+            if token == "-x", i + 1 < source.count {
+                tokens.append(contentsOf: ["-x", newLanguage])
                 i += 2
                 continue
             }
-            if languageChanged, token.hasPrefix("-std=") {
+            if let replacementResp, token.hasPrefix("@"), token.hasSuffix(".resp") {
+                tokens.append("@" + replacementResp)
                 i += 1
                 continue
             }
             tokens.append(token)
             i += 1
+        }
+        if oldLanguage != newLanguage, replacementResp == nil {
+            let isCPlusPlus = { (language: String) in language.hasSuffix("++") }
+            if isCPlusPlus(newLanguage) != isCPlusPlus(oldLanguage) {
+                tokens.append(isCPlusPlus(newLanguage) ? "-std=gnu++17" : "-std=gnu11")
+            }
+            if newLanguage.hasPrefix("objective-c"), !oldLanguage.hasPrefix("objective-c") {
+                tokens.append("-fobjc-arc")
+            }
         }
         return RawCompileCommand(kind: .clangFile, tokens: tokens, workingDirectory: template.workingDirectory,
                                  moduleName: template.moduleName, platform: template.platform, target: template.target)
@@ -372,7 +420,8 @@ public final class Recompiler {
 
     private func compileClang(sourceFile: String,
                               command: RawCompileCommand?,
-                              objectPath: String) -> (error: String?, log: String, target: String?) {
+                              objectPath: String,
+                              sdkPath: String) -> (error: String?, log: String, target: String?) {
         guard let command else {
             let message = "未在构建日志中找到该文件的 clang 命令（请先为该平台完整构建一次）"
             Diagnostics.shared.failure(stage: "查找命令", file: sourceFile, summary: message)
@@ -406,6 +455,12 @@ public final class Recompiler {
             // 指向会被清理的构建会话文件，去掉以免找不到
             if token.hasPrefix("-fbuild-session-file=") {
                 i += 1
+                continue
+            }
+            // 缓存的命令来自升级前的 Xcode：带版本号的 SDK 目录已不存在，换成当前 SDK
+            if token == "-isysroot", i + 1 < command.tokens.count, !FileManager.default.fileExists(atPath: command.tokens[i + 1]) {
+                tokens.append(contentsOf: ["-isysroot", sdkPath])
+                i += 2
                 continue
             }
             tokens.append(token)
@@ -469,8 +524,9 @@ public final class Recompiler {
 
     /// 非 ARC 源码被按 ARC 编译时的典型报错
     static func isARCForbiddenFailure(_ output: String) -> Bool {
+        // 只认 ARC 下才会出现的两类报错；泛泛匹配 "automatic reference counting" 会把用户在 ARC 文件里
+        // 误写的 [x release] 之类当成 MRC 文件静默编过去
         return output.contains("ARC forbids") || output.contains("not available in automatic reference counting mode")
-            || output.contains("automatic reference counting")
     }
 
     /// 自建 PCH 重建后更新 `-include-pch` 的路径

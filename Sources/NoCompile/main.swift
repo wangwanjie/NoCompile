@@ -25,10 +25,29 @@ final class CLIDelegate: EngineDelegate {
         }
     }
 
-    func engine(_ engine: Engine, didLog message: String, level: Int) {
+    private let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
-        print("[\(formatter.string(from: Date()))] \(message)")
+        return formatter
+    }()
+    /// 输出到终端时按级别着色（重定向到文件时不加颜色控制符）
+    private let usesColor = isatty(STDOUT_FILENO) != 0
+
+    func engine(_ engine: Engine, didLog entry: EngineLog) {
+        let line = "[\(formatter.string(from: Date()))] \(entry.plainText)"
+        guard usesColor else {
+            print(line)
+            return
+        }
+        // 成功绿、警告黄、错误红、App 日志青，普通信息不着色
+        let color: String
+        switch entry.level {
+        case 1: color = "\u{1B}[32m"
+        case 2: color = "\u{1B}[33m"
+        case 3: color = "\u{1B}[31m"
+        default: color = entry.category == .app ? "\u{1B}[36m" : ""
+        }
+        print(color.isEmpty ? line : color + line + "\u{1B}[0m")
     }
 
     func engine(_ engine: Engine, didUpdateClientCount count: Int) {
