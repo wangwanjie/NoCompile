@@ -43,6 +43,13 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
                           sourceFiles:(nullable NSArray<NSString *> *)sourceFiles
                             isNewFile:(BOOL)isNewFile;
 
+/// 同上。symbolShimPath 为 Mac 端生成的符号桥接 dylib：把 App 未导出（被隐藏）的符号按运行时地址导出，
+/// 先以 RTLD_GLOBAL 加载它，注入 dylib 中对这些符号的引用才能由 dyld 解析
++ (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
+                          sourceFiles:(nullable NSArray<NSString *> *)sourceFiles
+                            isNewFile:(BOOL)isNewFile
+                       symbolShimPath:(nullable NSString *)symbolShimPath;
+
 @end
 
 NS_ASSUME_NONNULL_END

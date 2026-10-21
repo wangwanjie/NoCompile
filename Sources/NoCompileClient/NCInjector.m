@@ -716,22 +716,45 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
 + (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
                           sourceFiles:(NSArray<NSString *> *)sourceFiles
                             isNewFile:(BOOL)isNewFile {
+    return [self injectDylibAtPath:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:nil];
+}
+
++ (NCInjectResult *)injectDylibAtPath:(NSString *)dylibPath
+                          sourceFiles:(NSArray<NSString *> *)sourceFiles
+                            isNewFile:(BOOL)isNewFile
+                       symbolShimPath:(NSString *)symbolShimPath {
     __block NCInjectResult *result = nil;
     // 串行化多次注入；实际替换在主线程执行，避免与 UI 代码并发
     dispatch_sync([self injectionQueue], ^{
         if (NSThread.isMainThread) {
-            result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
+            result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:symbolShimPath];
         } else {
             dispatch_sync(dispatch_get_main_queue(), ^{
-                result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
+                result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:symbolShimPath];
             });
         }
     });
     return result;
 }
 
-+ (NCInjectResult *)performInject:(NSString *)dylibPath sourceFiles:(NSArray<NSString *> *)sourceFiles isNewFile:(BOOL)isNewFile {
++ (NCInjectResult *)performInject:(NSString *)dylibPath
+                      sourceFiles:(NSArray<NSString *> *)sourceFiles
+                        isNewFile:(BOOL)isNewFile
+                   symbolShimPath:(NSString *)symbolShimPath {
     NCInjectResult *result = [NCInjectResult new];
+
+    // 0. 符号桥接：工程只导出少数符号时（EXPORTED_SYMBOLS_FILE、-fvisibility=hidden），App 里的类、函数、常量都不在导出表中，
+    //    注入 dylib 按扁平命名空间查找会失败。桥接 dylib 把它们按运行时地址导出为绝对符号，必须全局可见（RTLD_GLOBAL）
+    //    才会参与扁平查找。加载后不再卸载：它只含指向 App 原对象的导出，之后的 dlsym 查到的也是 App 里的原对象
+    if (symbolShimPath.length > 0) {
+        void *shim = dlopen(symbolShimPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
+        if (!shim) {
+            const char *err = dlerror();
+            result.status = NCInjectStatusLoadFailed;
+            result.message = [NSString stringWithFormat:@"加载符号桥接 dylib 失败：%@", err ? @(err) : @"dlopen 失败"];
+            return result;
+        }
+    }
 
     // dlopen 会执行新镜像的 +load；加载期间拦截其中的 swizzling，避免 hook 链自我指向
     BOOL guard = NoCompile.suppressSwizzlingDuringLoad;
@@ -1114,7 +1137,8 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
 /// 把 dlopen 的底层错误翻译成可读的中文提示
 + (NSString *)explainLoadError:(NSString *)raw {
     if ([raw containsString:@"symbol not found"] || [raw containsString:@"Symbol not found"]) {
-        return [NSString stringWithFormat:@"加载失败：存在未解析符号（常见于 private/fileprivate 符号或默认参数）。\n%@", raw];
+        return [NSString stringWithFormat:@"加载失败：存在未解析符号（常见于 private/fileprivate 符号、默认参数，"
+                @"或工程设置了 EXPORTED_SYMBOLS_FILE / -fvisibility=hidden 而 Mac 端未能桥接这些符号）。\n%@", raw];
     }
     if ([raw containsString:@"code signature"] || [raw containsString:@"not valid for use in process"]) {
         return [NSString stringWithFormat:@"加载失败：签名无效。真机需与 App 使用同一开发团队的身份签名。\n%@", raw];
