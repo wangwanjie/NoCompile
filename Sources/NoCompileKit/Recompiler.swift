@@ -80,11 +80,21 @@ public final class Recompiler {
         }
     }
 
-    /// 重编单个源文件，返回签名完毕的 dylib 路径
+    /// 重编单个源文件，返回签名完毕的 dylib 路径。
+    /// sourceRoots 为各目标的源码根目录，调用方已算好时传入以免重复计算；为 nil 时按 commands 现算
     public func recompile(sourceFile: String,
                           commands: ParsedCommands,
                           platform: Platform,
-                          codesignIdentity: String?) -> RecompileResult {
+                          codesignIdentity: String?,
+                          sourceRoots: TargetSourceRoots? = nil) -> RecompileResult {
+        let roots = sourceRoots ?? TargetSourceRoots(commands: commands)
+        // 构建日志里没有、也不在任何目标源码目录内的文件（如本地 Pod 根目录下未被 podspec 收录的源码）
+        // 不属于 App，不能当作新增文件借用其他模块的命令编译
+        guard roots.belongsToTarget(sourceFile) else {
+            let message = "该文件不在任何目标的编译命令或源码目录中，不属于 App，已跳过"
+            Diagnostics.shared.log("查找命令", "\(sourceFile)：\(message)", level: .debug)
+            return RecompileResult(dylibPath: nil, log: "", error: message)
+        }
         counter += 1
         let stem = "nc_\(sessionID)_\(counter)"
         let objectPath = "\(outputDirectory)/\(stem).o"
@@ -95,12 +105,13 @@ public final class Recompiler {
         if sourceFile.hasSuffix(".swift") {
             compiled = compileSwift(sourceFile: sourceFile,
                                     modules: commands.swiftModules(for: platform.name, arch: platform.arch),
+                                    roots: roots,
                                     objectPath: objectPath,
                                     stem: stem,
                                     isNewFile: &isNewFile)
         } else {
             var command = commands.clangCommand(for: sourceFile, platform: platform.name, arch: platform.arch)
-            if command == nil,
+            if command == nil, !roots.isKnown(sourceFile),
                let template = commands.clangTemplate(for: sourceFile, platform: platform.name, arch: platform.arch) {
                 // 新增文件：借用目录最接近的已有文件的编译命令
                 command = clangCommand(from: template.command, templateSource: template.source, newSource: sourceFile, commands: commands)
@@ -131,10 +142,11 @@ public final class Recompiler {
 
     private func compileSwift(sourceFile: String,
                               modules: [RawCompileCommand],
+                              roots: TargetSourceRoots,
                               objectPath: String,
                               stem: String,
                               isNewFile: inout Bool) -> (error: String?, log: String, target: String?) {
-        guard let match = swiftModule(for: sourceFile, in: modules) else {
+        guard let match = swiftModule(for: sourceFile, in: modules, roots: roots) else {
             let message = "未在构建日志中找到包含该文件的 Swift 模块命令（请先为该平台完整构建一次）"
             Diagnostics.shared.failure(stage: "查找命令", file: sourceFile,
                                        summary: "\(message)；当前平台可用的 Swift 模块：\(modules.compactMap { $0.moduleName }.joined(separator: ", "))")
@@ -194,9 +206,12 @@ public final class Recompiler {
     }
 
     /// 找到包含该源文件的模块命令。
-    /// 新增文件不在任何模块的文件列表中：选源文件目录与它最接近的模块，isMember 为 false
+    /// 新增文件不在任何模块的文件列表中：优先选源码根目录包含它的模块（根目录最深的优先），
+    /// 都不包含时退回源文件目录与它最接近的模块，isMember 为 false。
+    /// 是否属于某个目标已由调用方用 TargetSourceRoots 判定过
     private func swiftModule(for sourceFile: String,
-                             in modules: [RawCompileCommand]) -> (module: RawCompileCommand, sources: Set<String>, isMember: Bool)? {
+                             in modules: [RawCompileCommand],
+                             roots: TargetSourceRoots) -> (module: RawCompileCommand, sources: Set<String>, isMember: Bool)? {
         let canonicalSource = ParsedCommands.canonicalPath(sourceFile)
         var best: (module: RawCompileCommand, sources: Set<String>, depth: Int)? = nil
         for module in modules {
@@ -204,7 +219,15 @@ public final class Recompiler {
             if sources.contains(sourceFile) || sources.contains(where: { ParsedCommands.canonicalPath($0) == canonicalSource }) {
                 return (module, sources, true)
             }
-            let depth = sources.map { ParsedCommands.commonDirectoryDepth(ParsedCommands.canonicalPath($0), canonicalSource) }.max() ?? 0
+            let nearest = sources.map { ParsedCommands.commonDirectoryDepth(ParsedCommands.canonicalPath($0), canonicalSource) }.max() ?? 0
+            let depth: Int
+            if let rootDepth = roots.rootDepth(of: canonicalSource, inSwiftModule: module) {
+                // 位于模块的源码根目录内：根目录层级为主、最近文件的共同层级为辅（层级不会超过 1000 级）
+                depth = 1_000_000 + rootDepth * 1000 + nearest
+            } else {
+                // 不在该模块的根目录内（如混编目标里放进 ObjC 目录的新 Swift 文件）：只按最近文件的共同层级排在后面
+                depth = nearest
+            }
             if best == nil || depth > best!.depth {
                 best = (module, sources, depth)
             }

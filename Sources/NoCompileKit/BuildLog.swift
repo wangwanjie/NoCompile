@@ -334,6 +334,119 @@ public struct ParsedCommands: Codable {
     }
 }
 
+/// 各目标的源码根目录：用来判断构建日志里没有命令的文件是否属于某个 App 目标。
+/// 监听目录往往比目标的源码范围大（如以 :path => '../..' 引用的本地 Pod 会监听整个仓库），
+/// 根目录之外、日志里也没有的文件（如 podspec 没收录的源码）不能当作新增文件去借别的模块的命令编译
+public struct TargetSourceRoots {
+    /// 构建日志里出现过的源文件（规范化路径）
+    public private(set) var knownSources = Set<String>()
+    /// 所有目标的源码根目录（规范化路径）
+    public private(set) var roots: [String] = []
+    /// Swift 模块的源码根目录，键为 "模块名|平台"
+    private var swiftModuleRoots: [String: [String]] = [:]
+
+    public init(commands: ParsedCommands) {
+        // 1. Swift：同一模块在各架构的命令合并为一组
+        var swiftGroups: [String: [String]] = [:]
+        for module in commands.swiftModules {
+            let key = Self.swiftModuleKey(module)
+            let sources = ParsedCommands.swiftSources(of: module).map { ParsedCommands.canonicalPath($0) }
+            knownSources.formUnion(sources)
+            swiftGroups[key, default: []].append(contentsOf: sources)
+        }
+        for (key, files) in swiftGroups {
+            let moduleRoots = Self.roots(of: files)
+            swiftModuleRoots[key] = moduleRoots
+            roots.append(contentsOf: moduleRoots)
+        }
+        // 2. clang：按中间产物所在的 "<目标>.build" 目录分组，同一目标的文件算一组
+        var clangGroups: [String: [String]] = [:]
+        for (key, commandsOfFile) in commands.clangFiles {
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else {
+                continue
+            }
+            let source = parts[1]
+            knownSources.insert(source)
+            let groupKey = commandsOfFile.lazy.compactMap { Self.targetBuildDirectory(of: $0) }.first
+                ?? "dir|" + (source as NSString).deletingLastPathComponent
+            clangGroups[groupKey, default: []].append(source)
+        }
+        for files in clangGroups.values {
+            roots.append(contentsOf: Self.roots(of: files))
+        }
+        roots = Array(Set(roots)).sorted()
+    }
+
+    /// 构建日志里有该文件的编译命令（任意平台）
+    public func isKnown(_ path: String) -> Bool {
+        return knownSources.contains(ParsedCommands.canonicalPath(path))
+    }
+
+    /// 文件属于某个目标：日志里有它的命令，或位于某个目标的源码根目录内（新增文件）
+    public func belongsToTarget(_ path: String) -> Bool {
+        let canonical = ParsedCommands.canonicalPath(path)
+        if knownSources.contains(canonical) {
+            return true
+        }
+        return roots.contains { ProjectInfo.isPath(canonical, inside: $0) }
+    }
+
+    /// 包含该文件的、指定 Swift 模块的最深源码根目录层级；不在该模块任何根目录内时返回 nil
+    public func rootDepth(of path: String, inSwiftModule module: RawCompileCommand) -> Int? {
+        let canonical = ParsedCommands.canonicalPath(path)
+        let depths = (swiftModuleRoots[Self.swiftModuleKey(module)] ?? [])
+            .filter { ProjectInfo.isPath(canonical, inside: $0) }
+            .map { $0.split(separator: "/").count }
+        return depths.max()
+    }
+
+    static func swiftModuleKey(_ module: RawCompileCommand) -> String {
+        return "\(module.moduleName ?? "?")|\(module.platform)"
+    }
+
+    /// 由 clang 命令的 -o 推断目标的中间产物目录：".../Foo.build/Objects-normal/arm64/X.o" → ".../Foo.build"
+    private static func targetBuildDirectory(of command: RawCompileCommand) -> String? {
+        guard let index = command.tokens.firstIndex(of: "-o"), index + 1 < command.tokens.count else {
+            return nil
+        }
+        let output = command.tokens[index + 1]
+        guard let range = output.range(of: "/Objects-normal/") else {
+            return nil
+        }
+        return String(output[..<range.lowerBound])
+    }
+
+    /// 生成的或辅助性质的源文件（DerivedSources、CocoaPods 的 dummy 文件等），不代表目标的源码位置
+    private static func isGeneratedSource(_ path: String) -> Bool {
+        return path.contains("/DerivedData/")
+            || path.contains("/Intermediates.noindex/")
+            || path.contains("/Target Support Files/")
+    }
+
+    /// 一组源文件的根目录：取所在目录的共同祖先；
+    /// 共同祖先过浅（如根目录、家目录，多半是文件分散在几处）时退回为各文件所在的目录，避免把无关目录都算进来
+    private static func roots(of files: [String]) -> [String] {
+        let directories = Set(files.filter { !isGeneratedSource($0) }.map { ($0 as NSString).deletingLastPathComponent })
+        guard var common = directories.first?.split(separator: "/").map(String.init) else {
+            return []
+        }
+        for directory in directories {
+            let components = directory.split(separator: "/")
+            var depth = 0
+            while depth < common.count, depth < components.count, common[depth] == components[depth] {
+                depth += 1
+            }
+            common = Array(common.prefix(depth))
+        }
+        let ancestor = "/" + common.joined(separator: "/")
+        if common.count < 3 || ancestor == ParsedCommands.canonicalPath(NSHomeDirectory()) {
+            return directories.sorted()
+        }
+        return [ancestor]
+    }
+}
+
 public struct BuildLog {
 
     public let derivedDataPath: String

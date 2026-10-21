@@ -108,7 +108,22 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     }
 
     private var buildLog: BuildLog?
-    private var commands = ParsedCommands()
+    private var commands = ParsedCommands() {
+        didSet {
+            // 命令变了，各目标的源码根目录要重新计算
+            cachedSourceRoots = nil
+        }
+    }
+    /// 各目标的源码根目录（由 commands 计算，用时才算）
+    private var cachedSourceRoots: TargetSourceRoots?
+    private var sourceRoots: TargetSourceRoots {
+        if let cachedSourceRoots {
+            return cachedSourceRoots
+        }
+        let roots = TargetSourceRoots(commands: commands)
+        cachedSourceRoots = roots
+        return roots
+    }
     /// 已解析过的日志及其修改时间，只解析新出现 / 有变化的日志
     private var parsedLogs: [String: Date] = [:]
     /// 已读取的构建清单（manifest.json）→ 指纹（修改时间 + 大小）。只在内存里记录：
@@ -495,6 +510,16 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 log("没有构建日志，无法重编：\(Self.summarize(codeFiles))", level: 2, category: .compile)
             } else {
                 sources = expandSources(codeFiles).sorted()
+                // 监听目录比 App 目标的源码范围大（如 :path => '../..' 的本地 Pod 会监听整个仓库）：
+                // 构建日志里没有、也不在任何目标源码目录内的文件不属于 App，忽略，不能当作新增文件去编译
+                let roots = sourceRoots
+                let ignored = sources.filter { !roots.belongsToTarget($0) }
+                if !ignored.isEmpty {
+                    let ignoredSet = Set(ignored)
+                    sources.removeAll { ignoredSet.contains($0) }
+                    log("忽略 \(ignored.count) 个不属于任何 App 目标的文件（不在编译命令或目标源码目录中）：\(Self.summarize(ignored))",
+                        level: 0, category: .watch)
+                }
             }
         }
         guard !sources.isEmpty || !resources.isEmpty else {
@@ -581,7 +606,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             notifyStatus("编译中\(progress)：\(name)", state: 1, to: connection)
             let start = Date()
             let result = recompiler.recompile(sourceFile: source, commands: commands,
-                                              platform: platform, codesignIdentity: commands.signingIdentity)
+                                              platform: platform, codesignIdentity: commands.signingIdentity,
+                                              sourceRoots: sourceRoots)
             let elapsed = Date().timeIntervalSince(start)
             if result.succeeded, let dylibPath = result.dylibPath {
                 succeeded += 1
