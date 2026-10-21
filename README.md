@@ -86,16 +86,39 @@ Scripts/build-app.sh --open
 
 **b. 接入客户端**，任选一种：
 
-| 方式 | 写法 |
-|---|---|
-| Swift Package Manager | 添加包 `https://github.com/wangwanjie/NoCompile`，把 `NoCompile` 库加到 App target |
-| CocoaPods | `pod 'NoCompile', :configurations => ['Debug']` |
-| Carthage | `github "wangwanjie/NoCompile"`，Release 配置用 `EXCLUDED_SOURCE_FILE_NAMES` 排除 |
-| 加载 bundle（零依赖，模拟器 / macOS） | `Bundle(path: "/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle")?.load()` |
-| 拷贝 bundle（零依赖，支持真机） | Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle` |
-| `DYLD_INSERT_LIBRARIES`（零代码） | 在 scheme 环境变量里指向 bundle 内的可执行文件 |
+| 方式 | 写法 | 真机 |
+|---|---|---|
+| Swift Package Manager | 添加包 `https://github.com/wangwanjie/NoCompile`，把 `NoCompile` 库加到 App target | ✅ |
+| CocoaPods | `pod 'NoCompile', :configurations => ['Debug']` | ✅ |
+| Carthage | `github "wangwanjie/NoCompile"`，Release 配置用 `EXCLUDED_SOURCE_FILE_NAMES` 排除 | ✅ |
+| 拷贝 bundle（零依赖，**推荐**） | Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle` | ✅ |
+| 从 NoCompile.app 加载 bundle | `Bundle(path: "/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle")?.load()` | ❌ 仅模拟器 / macOS |
+| `DYLD_INSERT_LIBRARIES`（零代码） | 在 scheme 环境变量里指向 bundle 内的可执行文件 | ❌ 仅模拟器 / macOS |
 
-链接方式在镜像加载时自动启动，bundle 方式在 `load()` 时启动，都无需再写启动代码。各方式的完整步骤与注意事项见 [接入指南](Docs/Integration.md)。
+> [!IMPORTANT]
+> **要在真机上热重载，不能从 `/Applications/NoCompile.app` 加载客户端。** 这个路径只存在于 Mac 上：模拟器进程共享 Mac 的文件系统所以能加载，真机上 `bundleWithPath:` 返回 nil，`load` 静默失败，表现为模拟器正常、真机一直连不上。真机请用前四种方式之一；不想引入依赖就用「拷贝 bundle」，它在模拟器和真机上都能用：
+>
+> 1. App target 的 Build Phases 末尾加 Run Script：`"/Applications/NoCompile.app/Contents/Resources/nocompile_copy_bundle.sh"`
+> 2. 加载 App 内的 bundle：
+>
+> ```objc
+> #if DEBUG
+> NSString *path = [[NSBundle mainBundle] pathForResource:@"NoCompile" ofType:@"bundle"];
+> if (path) {
+>     [[NSBundle bundleWithPath:path] load];
+> }
+> #endif
+> ```
+>
+> ```swift
+> #if DEBUG
+> if let path = Bundle.main.path(forResource: "NoCompile", ofType: "bundle") {
+>     Bundle(path: path)?.load()
+> }
+> #endif
+> ```
+
+链接方式在镜像加载时自动启动，bundle 方式在 `load()` 时启动，都无需再写启动代码。各方式的完整步骤与注意事项见 [接入指南](Docs/Integration.md)，真机连不上时见 [真机排查](Docs/Integration.md#真机连不上)。
 
 ### 3. 选择工程
 

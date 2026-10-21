@@ -25,10 +25,13 @@
 | [A. Swift Package Manager](#方式-aswift-package-manager) | 加包依赖 | ✅ | 新工程、纯 SPM 工程 |
 | [B. CocoaPods](#方式-bcocoapods) | Podfile 一行 | ✅ | 已用 CocoaPods 的工程 |
 | [C. Carthage](#方式-ccarthage) | Cartfile + 一项排除设置 | ✅ | 已用 Carthage 的工程 |
-| [D. 运行时加载 bundle](#方式-d运行时加载-bundle零依赖) | 一行加载代码 | 模拟器 / macOS | 不想动依赖管理，InjectionIII 用户 |
-| [E. 拷贝 bundle 进 App](#方式-e拷贝-bundle-进-app零依赖支持真机) | Run Script + 一行加载代码 | ✅ | 零依赖且要支持真机 |
-| [F. DYLD_INSERT_LIBRARIES](#方式-fdyld_insert_libraries零代码) | 只改 scheme 环境变量 | 模拟器 / macOS | 完全不改工程与代码 |
+| [D. 运行时加载 bundle](#方式-d运行时加载-bundle零依赖仅模拟器--macos) | 一行加载代码 | ❌ 仅模拟器 / macOS | 只用模拟器，InjectionIII 用户 |
+| [E. 拷贝 bundle 进 App](#方式-e拷贝-bundle-进-app零依赖支持真机) | Run Script + 一行加载代码 | ✅ | 零依赖且要支持真机（**推荐**） |
+| [F. DYLD_INSERT_LIBRARIES](#方式-fdyld_insert_libraries零代码仅模拟器--macos) | 只改 scheme 环境变量 | ❌ 仅模拟器 / macOS | 完全不改工程与代码 |
 | [G. 手动链接](#方式-g手动链接) | 子工程 | ✅ | 想自己掌控构建 |
+
+> [!IMPORTANT]
+> D、F 从 Mac 上的 `/Applications/NoCompile.app` 加载客户端，这个路径在真机上不存在：真机上 bundle 加载静默失败，表现为模拟器正常、真机一直连不上。要在真机上热重载，请用 A / B / C / E / G。零依赖的工程用 E，它在模拟器和真机上写法相同。
 
 A/B/C/G 在镜像加载时自动启动；D/E 在 `load()` 时启动；F 在进程启动时启动，都不需要再调用 `NoCompile.start()`。同一进程里误接了多份客户端时，只有第一份生效，控制台会打印 `检测到重复加载的客户端`；此时 ObjC 运行时也会报 `Class NCxxx is implemented in both` 警告，去掉多余的那份即可。
 
@@ -83,9 +86,9 @@ Carthage 默认以 Release 配置构建，因此 NoCompile 的 Carthage 产物�
 
 模块名为 `NoCompile`。动态 framework 加载即自动启动，不需要 `-ObjC`。
 
-### 方式 D：运行时加载 bundle（零依赖）
+### 方式 D：运行时加载 bundle（零依赖，仅模拟器 / macOS）
 
-与 InjectionIII 的 `iOSInjection.bundle` 用法一致。NoCompile.app 内置了各平台的客户端 bundle：
+与 InjectionIII 的 `iOSInjection.bundle` 用法一致。**只适用于模拟器和 macOS App，真机请用方式 E。**NoCompile.app 内置了各平台的客户端 bundle：
 
 | bundle | 平台 |
 |---|---|
@@ -112,13 +115,19 @@ Objective-C：
 
 ```objc
 #if DEBUG
+#if TARGET_OS_OSX
+[[NSBundle bundleWithPath:@"/Applications/NoCompile.app/Contents/Resources/macOSNoCompile.bundle"] load];
+#elif TARGET_OS_TV && TARGET_OS_SIMULATOR
+[[NSBundle bundleWithPath:@"/Applications/NoCompile.app/Contents/Resources/tvOSNoCompile.bundle"] load];
+#elif TARGET_OS_SIMULATOR
 [[NSBundle bundleWithPath:@"/Applications/NoCompile.app/Contents/Resources/iOSNoCompile.bundle"] load];
+#endif
 #endif
 ```
 
 - NoCompile.app 不在 `/Applications` 时改成实际路径。从源码构建的 App 在 `build/DerivedData/Build/Products/Release/NoCompile.app`，也可以直接用 `Scripts/build-client-bundles.sh` 单独构建出 `build/ClientBundles/`。
 - macOS App 若开启了 Hardened Runtime，需在 Debug 的 entitlements 里加 `com.apple.security.cs.disable-library-validation`，否则系统会拒绝加载其他团队签名的 bundle；或者改用方式 E，由脚本用 App 自己的身份重签。
-- 模拟器进程能直接访问 Mac 的文件系统，所以可以从 NoCompile.app 里加载；真机做不到，请用方式 E。
+- 模拟器进程能直接访问 Mac 的文件系统，所以可以从 NoCompile.app 里加载。真机上没有这个路径，`bundleWithPath:` 返回 nil，不会有任何报错，Mac 端也不会出现「已连接」，请用方式 E。
 
 ### 方式 E：拷贝 bundle 进 App（零依赖，支持真机）
 
@@ -140,6 +149,19 @@ Objective-C：
    #endif
    ```
 
+   Objective-C：
+
+   ```objc
+   #if DEBUG
+   NSString *path = [[NSBundle mainBundle] pathForResource:@"NoCompile" ofType:@"bundle"];
+   if (path) {
+       [[NSBundle bundleWithPath:path] load];
+   }
+   #endif
+   ```
+
+   从方式 D 迁移过来时，删掉原来从 `/Applications/NoCompile.app` 加载的代码，只保留上面这段，模拟器和真机都会生效。
+
 脚本支持的环境变量：
 
 | 变量 | 作用 |
@@ -148,9 +170,9 @@ Objective-C：
 | `NOCOMPILE_COPY_CONFIGURATIONS` | 允许拷贝的配置名，逗号分隔，例如 `Debug,Dev` |
 | `NOCOMPILE_DISABLE_COPY=1` | 临时关闭拷贝 |
 
-### 方式 F：DYLD_INSERT_LIBRARIES（零代码）
+### 方式 F：DYLD_INSERT_LIBRARIES（零代码，仅模拟器 / macOS）
 
-bundle 的可执行文件是动态库，可以在 scheme 里直接注入，工程和代码都不用改。Edit Scheme → Run → Arguments → Environment Variables 添加：
+只适用于模拟器和 macOS App，真机请用方式 E。bundle 的可执行文件是动态库，可以在 scheme 里直接注入，工程和代码都不用改。Edit Scheme → Run → Arguments → Environment Variables 添加：
 
 | 平台 | `DYLD_INSERT_LIBRARIES` |
 |---|---|
@@ -195,6 +217,7 @@ nocompile --project /path/to/YourApp.xcworkspace
 
 ## 真机
 
+0. 客户端必须打进 App 包里：用方式 A / B / C / E / G。方式 D、F 从 Mac 路径加载，真机上无效。
 1. 用数据线连接设备（USB 为主通道，走 usbmuxd）。
 2. 真机注入需要 iOS 13+。
 3. dylib 要用与 App 一致的开发者身份签名。NoCompile 会从构建日志自动提取签名身份，所以需要先在 Xcode 成功跑过一次真机构建。
@@ -260,11 +283,23 @@ NoCompile 注入后会发出 `INJECTION_BUNDLE_NOTIFICATION`，与这些包兼�
 | `NOCOMPILE_DISABLE=1` | 本次运行禁用客户端 |
 | `NOCOMPILE_ENABLE_IN_TESTS=1` | 允许在单元测试环境下启用 |
 
+## 真机连不上
+
+模拟器正常、真机一直没有「已连接」时，按下面的顺序排查：
+
+1. **接入方式**：最常见的原因是用了方式 D（`bundleWithPath:@"/Applications/NoCompile.app/..."`）或 F。它们只适用于模拟器，真机请改用方式 E 或 CocoaPods / SPM。Mac 端检测到 USB 真机上持续没有客户端时，控制台会给出提示。
+2. **客户端是否在设备上运行**：真机运行 App 后，Xcode 控制台应出现 `[NoCompile] 正在监听 127.0.0.1:21891`。没有这一行说明客户端没被加载：检查是否是 Debug 构建、方式 E 的 Run Script 是否在当前配置生效（配置名不含 `Debug` 时设置 `NOCOMPILE_COPY_CONFIGURATIONS`）。
+3. **运行诊断脚本**：设备用数据线连好、App 在前台运行时执行 `bash Scripts/diagnose_device.sh`，结果保存在桌面的 `NoCompile-device-diagnose.txt`。看第 3 节：
+   - 62078 成功、21891 返回 3：USB 通道正常，设备上没有客户端在监听，回到第 1、2 步。
+   - 21891 返回 0 但仍未连接：在第 6 节日志里找「忽略」「搁置」，通常是 App 被判定为其他工程构建的。
+   - 只有 Network 条目或 62078 也失败：设备没有通过 USB 连到 usbmuxd，换数据线 / 直连 Mac 的接口后重试。
+   - 无法使用 usbmuxd：重启 Mac。
+
 ## 常见问题
 
 **提示"未替换任何实现"**：多半是没加 `-Xlinker -interposable`，或加到了 Release 而非 Debug。
 
-**App 启动后 Mac 端一直没有"已连接"**：确认客户端确实被加载了。SPM / 静态库方式检查是否加了 `-ObjC`；bundle 方式检查 `load()` 的返回值和路径；`DYLD_INSERT_LIBRARIES` 方式检查 macOS App 是否开启了 Hardened Runtime。
+**App 启动后 Mac 端一直没有"已连接"**：确认客户端确实被加载了。SPM / 静态库方式检查是否加了 `-ObjC`；bundle 方式检查 `load()` 的返回值和路径（真机不能用方式 D / F，见[真机连不上](#真机连不上)）；`DYLD_INSERT_LIBRARIES` 方式检查 macOS App 是否开启了 Hardened Runtime。
 
 **提示"未找到构建日志"**：先在 Xcode 完整构建一次；若用了自定义 DerivedData，用 `-d` 指定。
 
