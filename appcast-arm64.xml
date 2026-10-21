@@ -3,6 +3,25 @@
     <channel>
         <title>NoCompile</title>
         <item>
+            <title>0.2.7</title>
+            <pubDate>Wed, 21 Oct 2026 15:03:57 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.7</link>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.7/NoCompile_v0.2.7_arm64.dmg" length="4049060" type="application/octet-stream" sparkle:edSignature="7fBJpSud2IcvdWAaMh6acMZtz5cUhGdTvia+2o68cDwxj51/j9LNnPqZ4fiORdFoCfFO5qGXeA8afRI/IJ6+AQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.7&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机显示设备名称&lt;/strong&gt;：设备列表、日志与注入记录中的真机改为显示 Xcode 中的设备名称（如「张三的 iPhone 16 Pro」），多台真机可以区分。iOS 16 起 App 内只能拿到「iPhone」，现由 Mac 端直接从设备读取&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机连不上时给出提示&lt;/strong&gt;：USB 连接的真机上持续没有 NoCompile 客户端在运行时，控制台会提示一次；若当前工程从 `/Applications/NoCompile.app` 加载客户端，会说明真机需要改用「拷贝 bundle」方式接入&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机诊断脚本&lt;/strong&gt;：新增 `Scripts/diagnose_device.sh`，一键收集 usbmuxd、设备端口与 NoCompile 日志，判断真机卡在哪一步&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;usbmuxd 请求增加超时，避免一次无响应的请求让真机轮询永久停住&lt;/li&gt;&lt;li&gt;同一台设备同时以 USB 与网络方式出现时优先走 USB，不再被网络连接拖慢&lt;/li&gt;&lt;li&gt;本地 Pod 根目录下不属于 App 的源文件不再被当作新增文件重编&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;明确「从 NoCompile.app 加载 bundle」（`bundleWithPath:@"/Applications/NoCompile.app/..."`）与 `DYLD_INSERT_LIBRARIES` &lt;strong&gt;只适用于模拟器 / macOS&lt;/strong&gt;，真机上会静默失败。要在真机热重载，请改用「拷贝 bundle」（Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle`）或 CocoaPods / SPM&lt;/li&gt;&lt;li&gt;接入指南新增「真机连不上」排查章节&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;客户端没有不兼容变化，已编译的 App 无需重新编译。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.2.6</title>
             <pubDate>Tue, 20 Oct 2026 11:50:42 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.6</link>
@@ -16,7 +35,7 @@
 &lt;ul&gt;&lt;li&gt;&lt;strong&gt;多设备切换与补推&lt;/strong&gt;：每台设备接入一个 App，只向当前选中的设备推送热重载；切换设备或 App 重新运行后，自动补推缺少的改动&lt;/li&gt;&lt;li&gt;&lt;strong&gt;控制台日志分类着色&lt;/strong&gt;：日志按类别加 emoji 与彩色标签，重复日志合并显示；最近工程下显示所在目录&lt;/li&gt;&lt;li&gt;&lt;strong&gt;检查改动&lt;/strong&gt;：顶栏新增「检查改动」按钮，并支持全局快捷键（默认 ⌃⌥⌘R）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;主界面去掉「保存即注入」开关&lt;/strong&gt;：改动检测统一由 Mac 端处理&lt;/li&gt;&lt;li&gt;&lt;strong&gt;其他工程的 App 不再接入&lt;/strong&gt;：同名工程副本或其他工程运行的 App 不会再被接入，也不再每 2 秒重连刷屏&lt;/li&gt;&lt;/ul&gt;
 &lt;h3&gt;修复&lt;/h3&gt;
 &lt;ul&gt;&lt;li&gt;文件监听改为按文件指纹判定改动，修复 Xcode 保存后偶发漏检&lt;/li&gt;&lt;li&gt;从构建清单补全编译命令：Xcode 清理旧构建日志后，大部分 ObjC 文件仍可热重载（大型工程此前只能解析到极少数编译命令）；编译命令缓存随 Xcode 版本失效&lt;/li&gt;&lt;li&gt;修复热重载频繁崩溃：类的内存布局变化（增删、重排属性或 ivar）时不再替换该类实现，避免越界访问；vtable 按函数名核对后再覆写；+load 中 swizzle 的分类重新注入不再无限递归&lt;/li&gt;&lt;li&gt;连接层线程安全，真机监听出错后自动重建&lt;/li&gt;&lt;li&gt;修复 SwiftUI `some View` 类型变化、资源 hook 安装竞态、C++ 函数内静态对象迁移等问题&lt;/li&gt;&lt;/ul&gt;
-&lt;p&gt;&amp;gt; 客户端有以上修复，需要更新依赖并重新编译 App 才能生效；未重新编译的客户端仍可正常热重载，不会被要求重新编译。&lt;/p&gt;
+&lt;p&gt;客户端有以上修复，需要更新依赖并重新编译 App 才能生效；未重新编译的客户端仍可正常热重载，不会被要求重新编译。&lt;/p&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
         </item>
         <item>
@@ -35,7 +54,7 @@
 &lt;ul&gt;&lt;li&gt;iOS 与 macOS App 同时连接时，只属于其他平台的源文件不再被借用别的模块的编译命令重编（此前会报找不到 AppKit），资源也按平台分别下发，不再报找不到所属 bundle&lt;/li&gt;&lt;li&gt;CocoaPods `resource_bundles` 中的 xcassets 能正确判定所属 bundle 并热重载&lt;/li&gt;&lt;li&gt;编译命令持久化缓存，Xcode 清理旧构建日志后仍能找到命令；Xcode 显式模块 PCH 不兼容时自建 PCH&lt;/li&gt;&lt;li&gt;以 `$sSo` 开头的 Swift 扩展符号不再被误判为标准库符号&lt;/li&gt;&lt;li&gt;C / ObjC `static` 变量状态随注入迁移；swizzle 按函数体配对；弱符号正确重绑&lt;/li&gt;&lt;li&gt;ObjC ivar 布局变化时跳过方法替换，避免越界访问&lt;/li&gt;&lt;li&gt;新增符号提升为全局，后注入的 dylib 绑定到最新实现&lt;/li&gt;&lt;li&gt;framework 头文件副本同步、显式模块头文件依赖，以及按改动的标识符筛选依赖文件&lt;/li&gt;&lt;li&gt;framework 内资源、strings、json、颜色集支持热重载，修复克隆文件事件导致的循环触发&lt;/li&gt;&lt;/ul&gt;
 &lt;h3&gt;示例&lt;/h3&gt;
 &lt;ul&gt;&lt;li&gt;示例工程扩展为多模块 workspace（动态 framework、静态库、本地 SPM）并新增 CocoaPods 版本，附约 120 个场景的端到端自测&lt;/li&gt;&lt;/ul&gt;
-&lt;p&gt;&amp;gt; 升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
+&lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
         </item>
         <link>https://github.com/wangwanjie/NoCompile</link>
