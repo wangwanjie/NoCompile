@@ -60,6 +60,9 @@ public final class ServerConnection {
     public let connectedAt = Date()
     /// usbmuxd 中的设备序列号（UDID）。仅真机 USB 连接有值，由 DeviceBridge 在 start() 之前设置
     public var usbSerial: String?
+    /// 经 usbmuxd 从设备 lockdownd 读到的设备名（即 Xcode 中显示的名称）。由 DeviceBridge 在 start() 之前设置。
+    /// iOS 16 起 App 内 UIDevice.name 只返回「iPhone」，多台真机无法区分，以它为准
+    public var usbDeviceName: String?
 
     /// 平台的中文名
     public var platformTitle: String {
@@ -111,8 +114,11 @@ public final class ServerConnection {
         return "\(deviceKey)|\(id)"
     }
 
-    /// 设备名：新版客户端上报；旧客户端的模拟器从 CoreSimulator 的 device.plist 读取
+    /// 设备名：真机优先用 usbmuxd 读到的名称；其余用新版客户端上报的；旧客户端的模拟器从 CoreSimulator 的 device.plist 读取
     public var deviceName: String {
+        if platformName == "device", let usbDeviceName, !usbDeviceName.isEmpty {
+            return usbDeviceName
+        }
         let info = clientInfo
         if let name = info["deviceName"] as? String, !name.isEmpty {
             return name

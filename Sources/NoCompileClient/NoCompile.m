@@ -132,6 +132,7 @@ static NSUInteger gInjectionCount = 0;
 - (void)startDeviceListener {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         BOOL reportedBindFailure = NO;
+        BOOL reportedListening = NO;
         while (self.started) {
             int fd = [self openDeviceListenSocket];
             if (fd < 0) {
@@ -145,6 +146,11 @@ static NSUInteger gInjectionCount = 0;
                 continue;
             }
             reportedBindFailure = NO;
+            // 只在首次监听成功时提示，便于排查「真机连不上」时确认客户端已在设备上工作
+            if (!reportedListening) {
+                reportedListening = YES;
+                NSLog(@"[NoCompile] 正在监听 127.0.0.1:%d，等待 Mac 端经 USB（usbmuxd）连入", NC_DEVICE_PORT);
+            }
             [self acceptDeviceConnectionsOn:fd];
             close(fd);
             // 监听 socket 失效（如 App 在后台被挂起后）：稍后重建

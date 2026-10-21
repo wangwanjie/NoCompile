@@ -135,6 +135,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private let resourceCompiler: ResourceCompiler
     private var server: Server?
     private var deviceBridge: DeviceBridge?
+    /// 当前工程的 App 是否从 Mac 上的 NoCompile.app 加载客户端（Bundle.load / DYLD_INSERT_LIBRARIES），仅在 workQueue 上访问
+    private var loadsClientFromMac = false
     private var watcher: FileWatcher?
     private var watchRoots: [String] = []
 
@@ -407,8 +409,31 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         let bridge = DeviceBridge { [weak self] connection in
             self?.accept(connection)
         }
+        bridge.onDeviceWithoutClient = { [weak self] serial, name in
+            self?.workQueue.async { [weak self] in
+                guard let self, !self.isStopped else { return }
+                self.reportDeviceWithoutClient(serial: serial, name: name)
+            }
+        }
         bridge.start()
         self.deviceBridge = bridge
+    }
+
+    /// USB 真机上持续没有客户端在监听（在 workQueue 上调用）。
+    /// 控制台原本对此没有任何提示，用户只看到「真机连不上」；从 Mac 路径加载 bundle 的接入方式只适用于模拟器，是最常见的原因
+    private func reportDeviceWithoutClient(serial: String, name: String?) {
+        let device = name ?? serial
+        if loadsClientFromMac {
+            log("检测到真机 \(device)，设备上没有 NoCompile 客户端在运行。当前工程从 Mac 上的 NoCompile.app 加载客户端"
+                + "（Bundle.load 或 DYLD_INSERT_LIBRARIES），这种方式只适用于模拟器 / macOS，真机上没有该路径。"
+                + "若要在真机热重载，请在 Build Phases 末尾加 Run Script 调用 /Applications/NoCompile.app/Contents/Resources/nocompile_copy_bundle.sh，"
+                + "并改为加载 App 内的 NoCompile.bundle，或改用 CocoaPods / SPM 链入客户端（见接入指南方式 E）",
+                level: 2, category: .device)
+        } else {
+            log("检测到真机 \(device)，设备上没有接入 NoCompile 的 App 在运行。若已在真机运行 App，请确认它是 Debug 构建并已接入客户端"
+                + "（CocoaPods / SPM / Carthage，或用 nocompile_copy_bundle.sh 把 bundle 拷进 App）",
+                level: 2, category: .device)
+        }
     }
 
     /// 在 workQueue 上调用：计算监听目录（工程目录 + 工程外的本地 Pod / 子工程）并（重新）开始监听
@@ -968,6 +993,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             return
         case .member(let matched):
             product = matched
+        }
+        // 模拟器 / macOS 上的客户端直接从 Mac 上的 NoCompile.app 加载：真机无法用这种方式接入，真机连不上时据此给出提示
+        let clientImage = info["clientImage"] as? String ?? ""
+        if connection.isLocalFileSystem, clientImage.contains("NoCompile.app/Contents/Resources/") {
+            loadsClientFromMac = true
         }
         let key = connection.deviceKey
         if let existing = members[key], existing !== connection {
