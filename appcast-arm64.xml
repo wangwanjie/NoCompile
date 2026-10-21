@@ -3,6 +3,24 @@
     <channel>
         <title>NoCompile</title>
         <item>
+            <title>0.2.8</title>
+            <pubDate>Wed, 21 Oct 2026 17:22:50 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.8</link>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.8/NoCompile_v0.2.8_arm64.dmg" length="4112966" type="application/octet-stream" sparkle:edSignature="cvLGWDhJ6XXiTgcC29PWmyFEzJLwpxpWyDv/Dbl+PtF2x8EGKOR8YcwAFqePuh2kbj8XXqsUGygeu7Tu/ipaDw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.8&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机注入报「存在未解析符号」（symbol not found in flat namespace）&lt;/strong&gt;：工程在 Debug 下也设置了 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main`）或 `-fvisibility=hidden` 时，App 里的类、函数、常量都不在导出表中，注入的 dylib 加载失败。现在 Mac 端会从 DerivedData 中与 App 相同 UUID 的二进制里找到这些符号，按 App 运行时的地址生成一个小的「符号桥接」dylib，先于注入 dylib 加载，日志中显示「桥接 N 个 App 未导出的符号」&lt;/li&gt;&lt;li&gt;&lt;strong&gt;App 启动后很久才显示「已连接」&lt;/strong&gt;：解析构建日志与构建清单改在后台进行，头文件依赖索引在后台重建、重建期间沿用旧索引，大型工程刚构建完时 App 也能立即完成握手&lt;/li&gt;&lt;li&gt;同一个 App 进程重新连接（网络抖动、重新插拔数据线）时不再把已推送过的改动再推一遍&lt;/li&gt;&lt;li&gt;同时运行两个 NoCompile 时，后启动的实例不再连接真机，避免两个实例互相顶掉设备上的连接&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;接入指南「常见问题」新增「存在未解析符号」的说明&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。符号桥接需要新版客户端在握手时上报镜像信息，App 未导出符号的工程请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`，把新 bundle 拷进了 App&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.2.7</title>
             <pubDate>Wed, 21 Oct 2026 15:03:57 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.7</link>
