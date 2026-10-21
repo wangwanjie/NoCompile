@@ -131,6 +131,14 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var parsedManifests: [String: String] = [:]
     private var headerIndex: HeaderDependencyIndex?
     private let headerAnalyzer = HeaderChangeAnalyzer()
+    /// 正在后台解析构建日志 / 清单（仅在 workQueue 上访问）
+    private var refreshing = false
+    /// 解析完成后依次执行的后续操作（仅在 workQueue 上访问）
+    private var afterRefresh: [() -> Void] = []
+    /// 解析构建日志、清单与写命令缓存的串行队列
+    private let parseQueue = DispatchQueue(label: "com.nocompile.engine.parse", qos: .userInitiated)
+    /// 头文件依赖索引第一次建立完成前收到的头文件改动，建好后再处理（仅在 workQueue 上访问）
+    private var deferredHeaders = Set<String>()
     private let recompiler: Recompiler
     private let resourceCompiler: ResourceCompiler
     private var server: Server?
@@ -174,6 +182,9 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private var applied: [String: [String: Int]] = [:]
     /// 各 App 进程的构建（链接）时间，早于它的改动已编进 App。nil 表示无法确定
     private var buildDates: [String: Date] = [:]
+    /// applied / buildDates 中进程标识的先后顺序（旧 → 新），用于只保留最近的若干个进程
+    private var processOrder: [String] = []
+    private static let maxProcessRecords = 16
 
     private var pendingFiles = Set<String>()
     /// 已推送、等待 App 回报结果的注入：键为 "连接标识|源文件"，值为（开始时间, 编译耗时）
@@ -211,9 +222,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         workQueue.async { [weak self] in
             guard let self else { return }
             self.startWatching()
-            self.refreshCommandsIfNeeded()
-            self.setState(.idle)
-            self.log("🎉 NoCompile 就绪，保存文件即可热重载", level: 1, category: .general)
+            self.refreshCommands { [weak self] in
+                guard let self else { return }
+                self.setState(.idle)
+                self.log("🎉 NoCompile 就绪，保存文件即可热重载", level: 1, category: .general)
+            }
         }
     }
 
@@ -258,8 +271,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             }
             self.notifyClients()
             if connection.compatibilityIssue == nil {
-                self.refreshCommandsIfNeeded()
-                self.replay(to: connection)
+                self.refreshCommands { [weak self] in
+                    // 解析期间 App 可能已断开或换了连接
+                    guard let self, self.members[deviceKey] === connection, self.activeDeviceKey == deviceKey else { return }
+                    self.replay(to: connection)
+                }
             }
         }
     }
@@ -311,12 +327,20 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
     }
 
-    /// 定位日志；只解析新出现或有变化的日志，并与已有结果合并（例如先跑真机、再跑模拟器）
-    private func refreshCommandsIfNeeded() {
+    /// 定位日志；有新出现或有变化的日志 / 构建清单时在后台解析，并与已有结果合并（例如先跑真机、再跑模拟器），
+    /// 合并完成后在 workQueue 上执行 then；不需要解析时立即执行。
+    /// 大型工程解析一次要几十秒到几分钟（刚构建完、Xcode 还在写文件时更慢），若在 workQueue 上同步解析，
+    /// 期间连上来的 App 要等解析结束才握手，控制台迟迟不显示「已连接」
+    private func refreshCommands(then: @escaping () -> Void) {
+        if refreshing {
+            afterRefresh.append(then)
+            return
+        }
         locateBuildLogIfNeeded()
         guard let buildLog else {
             log("尚未找到构建日志，请先在 Xcode 构建并运行一次", level: 2, category: .build)
             Diagnostics.shared.log("解析日志", "未找到构建日志：\(projectPath)，自定义 DerivedData：\(customDerivedData ?? "无")", level: .warning)
+            then()
             return
         }
         let logs = buildLog.logFiles()
@@ -328,54 +352,116 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         let manifests = BuildManifest.manifestFiles(derivedDataPath: buildLog.derivedDataPath)
         let changedManifests = manifests.filter { parsedManifests[$0] != BuildManifest.fingerprint(of: $0) }
         guard !changed.isEmpty || !changedManifests.isEmpty else {
+            then()
             return
         }
+        refreshing = true
+        afterRefresh.append(then)
         let start = Date()
+        let isIncremental = !parsedLogs.isEmpty || commands.clangFileCount > 0 || !commands.swiftModules.isEmpty
         if !changed.isEmpty {
-            let isIncremental = !parsedLogs.isEmpty || commands.clangFileCount > 0 || !commands.swiftModules.isEmpty
             log(isIncremental ? "解析新的构建日志（\(changed.count) 份）…" : "解析构建日志（\(changed.count) 份）…", level: 0, category: .build)
-            let fresh = BuildLog.parse(logs: changed)
-            commands = isIncremental ? fresh.merging(older: commands) : fresh
-            for path in changed {
-                parsedLogs[path] = BuildLog.modificationDate(of: path)
+        }
+        let base = commands
+        let workingDirectory = (projectPath as NSString).deletingLastPathComponent
+        parseQueue.async { [weak self] in
+            var merged = base
+            var logDates: [String: Date] = [:]
+            if !changed.isEmpty {
+                let fresh = BuildLog.parse(logs: changed)
+                merged = isIncremental ? fresh.merging(older: base) : fresh
+                for path in changed {
+                    logDates[path] = BuildLog.modificationDate(of: path)
+                }
             }
-            // 已不存在的日志不再登记；命令本身保留在缓存里
-            parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
+            var manifestResult: ManifestRefresh?
+            if !changedManifests.isEmpty {
+                let result = Self.readManifests(changedManifests, allManifests: manifests, filling: merged,
+                                                workingDirectory: workingDirectory)
+                merged = result.commands
+                manifestResult = result
+            }
+            let parsed = merged
+            self?.workQueue.async { [weak self] in
+                self?.finishRefresh(commands: parsed, logDates: logDates, manifests: manifestResult, started: start)
+            }
         }
-        if !changedManifests.isEmpty {
-            fillCommandsFromManifests(changedManifests, allManifests: manifests)
+    }
+
+    /// 后台解析结束（在 workQueue 上）：采用新命令、保存缓存、让头文件索引重建，再执行排队的后续操作
+    private func finishRefresh(commands parsed: ParsedCommands, logDates: [String: Date], manifests: ManifestRefresh?, started: Date) {
+        refreshing = false
+        let continuations = afterRefresh
+        afterRefresh.removeAll()
+        guard !isStopped else {
+            return
         }
-        CommandCache.save(derivedDataPath: buildLog.derivedDataPath, commands: commands.droppingSynthesized(), parsedLogs: parsedLogs)
-        // 重新构建过：.d 依赖文件随之更新，头文件索引失效，并在后台预先重建
+        let before = commands.clangFileCount
+        commands = parsed
+        parsedLogs.merge(logDates) { _, new in new }
+        // 已不存在的日志不再登记；命令本身保留在缓存里
+        parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
+        if let manifests {
+            parsedManifests.merge(manifests.fingerprints) { _, new in new }
+            // 已不存在的清单不再登记
+            parsedManifests = parsedManifests.filter { FileManager.default.fileExists(atPath: $0.key) }
+            log("读取构建清单（\(manifests.count) 份，\(String(format: "%.1f", manifests.elapsed))s）：补全 \(manifests.added) 个文件的编译命令，"
+                + "C/ObjC/C++ 文件 \(before) → \(commands.clangFileCount)", level: 0, category: .build)
+        }
+        if let buildLog {
+            let derivedDataPath = buildLog.derivedDataPath
+            let cached = commands.droppingSynthesized()
+            let logs = parsedLogs
+            // 写缓存（数万条命令的 JSON）也放到后台；parseQueue 串行，先后两次保存不会乱序
+            parseQueue.async {
+                CommandCache.save(derivedDataPath: derivedDataPath, commands: cached, parsedLogs: logs)
+            }
+        }
+        // 重新构建过：.d 依赖文件随之更新，头文件索引失效，并在后台预先重建（重建期间仍用旧索引，不阻塞）
         headerIndex?.invalidate()
         if watchesHeaders, let index = headerIndex {
             let analyzer = headerAnalyzer
             let threshold = maxHeaderDependents
             let scheduled = Date()
-            DispatchQueue.global(qos: .utility).async {
-                _ = index.sources(dependingOn: "")
-                // 为被大量文件引用的头文件建立内容基线，之后改动时才能知道改了哪些标识符
-                analyzer.prime(headers: index.widelyUsedHeaders(threshold: threshold), modifiedBefore: scheduled)
+            index.prepare()
+            index.whenReady {
+                DispatchQueue.global(qos: .utility).async {
+                    // 为被大量文件引用的头文件建立内容基线，之后改动时才能知道改了哪些标识符
+                    analyzer.prime(headers: index.widelyUsedHeaders(threshold: threshold), modifiedBefore: scheduled)
+                }
             }
         }
 
         let platforms = Set(commands.swiftModules.map { $0.platform } + commands.allClangCommands.map { $0.platform })
             .filter { $0 != "unknown" }.sorted()
-        let elapsed = String(format: "%.1f", Date().timeIntervalSince(start))
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(started))
         log("解析完成（\(elapsed)s）：\(commands.swiftModules.count) 条 Swift 模块命令，\(commands.clangFileCount) 个 C/ObjC/C++ 文件，平台：\(platforms.joined(separator: ", "))",
             level: 0, category: .build)
         if commands.signingIdentity == nil {
             Diagnostics.shared.log("解析日志", "未从构建日志中取得签名身份（真机注入需要）", level: .debug)
         }
+        for continuation in continuations {
+            continuation()
+        }
     }
 
-    /// 读取构建清单，给日志里没有命令的 C/ObjC/C++ 文件合成命令。
+    /// 读取构建清单的结果
+    private struct ManifestRefresh {
+        let commands: ParsedCommands
+        /// 完整读完的清单 → 指纹（读取期间被 Xcode 改写的不登记，下次再读）
+        let fingerprints: [String: String]
+        let added: Int
+        let count: Int
+        let elapsed: TimeInterval
+    }
+
+    /// 读取构建清单，给日志里没有命令的 C/ObjC/C++ 文件合成命令（在后台执行，不访问引擎状态）。
     /// 清单从新到旧依次处理，同一文件以较新的清单为准；日志里的真实命令始终优先
-    private func fillCommandsFromManifests(_ changedManifests: [String], allManifests: [String]) {
+    private static func readManifests(_ changedManifests: [String], allManifests: [String], filling commands: ParsedCommands,
+                                      workingDirectory: String) -> ManifestRefresh {
         let start = Date()
-        let before = commands.clangFileCount
-        let workingDirectory = (projectPath as NSString).deletingLastPathComponent
         var tasks: [BuildManifest.CompileTask] = []
+        var fingerprints: [String: String] = [:]
         for path in allManifests where changedManifests.contains(path) {
             let before = BuildManifest.fingerprint(of: path)
             let parsed = BuildManifest.parseCompileTasks(manifestPath: path)
@@ -385,16 +471,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             tasks.append(contentsOf: parsed.tasks)
             // 解析期间清单被 Xcode 改写（正在构建）：不登记，下次再读完整版本
             if before == after {
-                parsedManifests[path] = after
+                fingerprints[path] = after
             }
         }
         let filled = BuildManifest.fill(commands, with: tasks, fallbackWorkingDirectory: workingDirectory)
-        commands = filled.commands
-        // 已不存在的清单不再登记
-        parsedManifests = parsedManifests.filter { FileManager.default.fileExists(atPath: $0.key) }
-        let elapsed = String(format: "%.1f", Date().timeIntervalSince(start))
-        log("读取构建清单（\(changedManifests.count) 份，\(elapsed)s）：补全 \(filled.added) 个文件的编译命令，"
-            + "C/ObjC/C++ 文件 \(before) → \(commands.clangFileCount)", level: 0, category: .build)
+        return ManifestRefresh(commands: filled.commands, fingerprints: fingerprints, added: filled.added,
+                               count: changedManifests.count, elapsed: Date().timeIntervalSince(start))
     }
 
     private func startServer() {
@@ -403,7 +485,14 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         if server.start() {
             self.server = server
         } else {
-            log("TCP 端口 \(NCProtocol.macPort) 监听失败（errno \(errno)），可能已有另一个 NoCompile 在运行", level: 3, category: .connection)
+            let code = errno
+            if code == EADDRINUSE {
+                // 另一个 NoCompile 实例占着端口：两个实例同时经 usbmuxd 连真机上的 App 会互相顶掉连接、反复补推，本实例不再连接真机
+                log("TCP 端口 \(NCProtocol.macPort) 已被占用，另一个 NoCompile 正在运行。请先退出它；在此之前本实例不接入模拟器和真机上的 App",
+                    level: 3, category: .connection)
+                return
+            }
+            log("TCP 端口 \(NCProtocol.macPort) 监听失败（errno \(code)），可能已有另一个 NoCompile 在运行", level: 3, category: .connection)
         }
         // 真机 USB 桥接：经 usbmuxd 连接设备上的客户端
         let bridge = DeviceBridge { [weak self] connection in
@@ -521,7 +610,16 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         guard !isStopped else {
             return
         }
-        refreshCommandsIfNeeded()
+        // 先确保命令是最新的（刚构建过时在后台解析，期间不阻塞握手等其他消息）
+        refreshCommands { [weak self] in
+            self?.processWithCurrentCommands(files)
+        }
+    }
+
+    private func processWithCurrentCommands(_ files: [String]) {
+        guard !isStopped else {
+            return
+        }
         var resources: [String] = []
         if watchesResources {
             resources = files.filter { ResourceCompiler.isResource($0) }.sorted()
@@ -613,6 +711,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         var hadError = false
         var succeeded = 0
         var failed = 0
+        // 目标 App 的镜像：桥接 App 未导出的符号时要读它们的符号表
+        let images = appImages(for: connection)
         if sources.count > 1 {
             log("本批需重编 \(sources.count) 个文件：\(Self.summarize(sources))", level: 0, category: .compile)
         }
@@ -632,14 +732,17 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             let start = Date()
             let result = recompiler.recompile(sourceFile: source, commands: commands,
                                               platform: platform, codesignIdentity: commands.signingIdentity,
-                                              sourceRoots: sourceRoots)
+                                              sourceRoots: sourceRoots, appImages: images)
             let elapsed = Date().timeIntervalSince(start)
             if result.succeeded, let dylibPath = result.dylibPath {
                 succeeded += 1
                 inflight[inflightKey(connection, source)] = (Date(), elapsed)
-                sendInject(dylibPath: dylibPath, source: source, isNewFile: result.isNewFile, to: connection)
+                sendInject(dylibPath: dylibPath, shimPath: result.shimPath, source: source, isNewFile: result.isNewFile, to: connection)
                 markApplied(source, for: connection)
-                let newTag = result.isNewFile ? "（新增文件）" : ""
+                var newTag = result.isNewFile ? "（新增文件）" : ""
+                if result.shimSymbolCount > 0 {
+                    newTag += "（桥接 \(result.shimSymbolCount) 个 App 未导出的符号）"
+                }
                 log("\(name)\(newTag) 编译完成（\(String(format: "%.2f", elapsed))s），推送到 \(connection.deviceLabel)", level: 0, category: .compile)
             } else {
                 hadError = true
@@ -664,7 +767,28 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         guard let entry = history[file] else {
             return
         }
+        rememberProcess(connection.processKey)
         applied[connection.processKey, default: [:]][file] = entry.seq
+    }
+
+    /// 登记进程标识（已登记的不变），供 pruneProcessRecords 按先后顺序清理
+    private func rememberProcess(_ key: String) {
+        if !processOrder.contains(key) {
+            processOrder.append(key)
+        }
+    }
+
+    /// 只保留最近 maxProcessRecords 个进程的补推记录与构建时间（仍在线的进程不清理）
+    private func pruneProcessRecords() {
+        let online = Set(members.values.map { $0.processKey })
+        while processOrder.count > Self.maxProcessRecords {
+            guard let index = processOrder.firstIndex(where: { !online.contains($0) }) else {
+                break
+            }
+            let key = processOrder.remove(at: index)
+            applied[key] = nil
+            buildDates[key] = nil
+        }
     }
 
     /// 把连接还没有的改动补推过去：跳过已推送过的，以及早于 App 构建时间（已编进 App）的改动
@@ -710,6 +834,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
         guard watchesHeaders, let index = headerIndex else {
             Diagnostics.shared.log("头文件", "未开启头文件监听或没有依赖索引，忽略 \(headers.count) 个头文件", level: .debug)
+            return sources
+        }
+        // 依赖索引第一次建立可能要几分钟（数万个 .d 文件）：不在 workQueue 上等，否则期间连上来的 App 迟迟不能握手。
+        // 先处理本批的实现文件，头文件等索引建好后再处理
+        guard index.hasSnapshot else {
+            deferHeaders(headers, index: index)
             return sources
         }
         for header in headers {
@@ -772,6 +902,24 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         return sources
     }
 
+    /// 记下索引建好前收到的头文件改动，索引建好后作为一批改动重新处理
+    private func deferHeaders(_ headers: [String], index: HeaderDependencyIndex) {
+        let isFirst = deferredHeaders.isEmpty
+        deferredHeaders.formUnion(headers)
+        log("头文件依赖索引正在建立，\(headers.count) 个头文件改动将在索引建好后处理：\(Self.summarize(headers))", level: 0, category: .compile)
+        guard isFirst else {
+            return
+        }
+        index.whenReady { [weak self] in
+            self?.workQueue.async { [weak self] in
+                guard let self, !self.isStopped, !self.deferredHeaders.isEmpty else { return }
+                let files = self.deferredHeaders.sorted()
+                self.deferredHeaders.removeAll()
+                self.process(files)
+            }
+        }
+    }
+
     private static func summarize(_ files: [String], limit: Int = 5) -> String {
         let names = files.prefix(limit).map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
         return files.count > limit ? "\(names) 等 \(files.count) 个" : names
@@ -781,34 +929,83 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         return "\(connection.id)|\(source)"
     }
 
-    private func sendInject(dylibPath: String, source: String, isNewFile: Bool, to connection: ServerConnection) {
+    private func sendInject(dylibPath: String, shimPath: String?, source: String, isNewFile: Bool, to connection: ServerConnection) {
         let dylibName = (dylibPath as NSString).lastPathComponent
         var json: [String: Any] = [
             "dylibName": dylibName,
             "sourceFiles": [source],
             "newFile": isNewFile,
         ]
+        if let shimPath {
+            json["shimName"] = (shimPath as NSString).lastPathComponent
+        }
         var payload: Data? = nil
         if connection.isLocalFileSystem, let tmp = connection.clientInfo["tmp"] as? String, !tmp.isEmpty {
             // 模拟器 / macOS：与 Mac 共享文件系统，直接拷进 App 自己的 tmp 目录，避免沙盒读权限问题
-            let destination = (tmp as NSString).appendingPathComponent(dylibName)
-            try? FileManager.default.removeItem(atPath: destination)
             do {
-                try FileManager.default.copyItem(atPath: dylibPath, toPath: destination)
-                json["localPath"] = destination
+                json["localPath"] = try Self.copy(dylibPath, intoDirectory: tmp)
+                if let shimPath {
+                    json["shimLocalPath"] = try Self.copy(shimPath, intoDirectory: tmp)
+                }
             } catch {
                 Diagnostics.shared.log("发送", "拷贝 dylib 到 App 的 tmp 目录失败（\(error.localizedDescription)），改为随消息传输", level: .warning)
-                payload = try? Data(contentsOf: URL(fileURLWithPath: dylibPath))
+                json["localPath"] = nil
+                json["shimLocalPath"] = nil
             }
-        } else {
-            // 真机：随帧传输 dylib 字节，由客户端写入自己的 tmp 目录
+        }
+        if json["localPath"] == nil {
+            // 真机：随帧传输 dylib 字节，由客户端写入自己的 tmp 目录。有桥接 dylib 时放在前面，长度记在 shimLength
             payload = try? Data(contentsOf: URL(fileURLWithPath: dylibPath))
+            if let shimPath, payload != nil {
+                if let shimData = try? Data(contentsOf: URL(fileURLWithPath: shimPath)) {
+                    json["shimLength"] = shimData.count
+                    payload = shimData + payload!
+                } else {
+                    Diagnostics.shared.log("发送", "读取符号桥接 dylib 失败：\(shimPath)", level: .error)
+                    json["shimName"] = nil
+                }
+            }
         }
         if json["localPath"] == nil, payload == nil {
             Diagnostics.shared.log("发送", "读取 dylib 失败：\(dylibPath)", level: .error)
         }
         Diagnostics.shared.log("发送", "\((source as NSString).lastPathComponent) → \(connection.displayName)：\(json["localPath"] as? String ?? "随消息传输 \(payload?.count ?? 0) 字节")", level: .debug)
         connection.send(NCMessage(type: .inject, json: json, data: payload))
+    }
+
+    /// 把文件拷进目录（同名先删除），返回目标路径
+    private static func copy(_ path: String, intoDirectory directory: String) throws -> String {
+        let destination = (directory as NSString).appendingPathComponent((path as NSString).lastPathComponent)
+        try? FileManager.default.removeItem(atPath: destination)
+        try FileManager.default.copyItem(atPath: path, toPath: destination)
+        return destination
+    }
+
+    /// 连接上来的 App 的主程序 / .debug.dylib：DerivedData 中 UUID 一致的二进制，以及客户端上报的运行时 slide。
+    /// 用来桥接 App 未导出、但被新代码引用的符号（见 HiddenSymbols.swift）
+    private func appImages(for connection: ServerConnection) -> [AppImage] {
+        guard let derivedDataPath = buildLog?.derivedDataPath else {
+            return []
+        }
+        let uuids = connection.imageUUIDs
+        guard !uuids.isEmpty else {
+            return []
+        }
+        var slides: [String: Int64] = [:]
+        for (uuid, value) in connection.clientInfo["imageSlides"] as? [String: Any] ?? [:] {
+            if let number = value as? NSNumber {
+                slides[uuid.uppercased()] = number.int64Value
+            }
+        }
+        var images: [AppImage] = []
+        for product in AppProducts.products(derivedDataPath: derivedDataPath) where product.bundleID == connection.bundleID {
+            for (path, binaryUUIDs) in product.binaries.sorted(by: { $0.key > $1.key }) {
+                for uuid in binaryUUIDs.intersection(uuids) {
+                    images.append(AppImage(binaryPath: path, uuid: uuid, slide: slides[uuid]))
+                }
+            }
+        }
+        return images
     }
 
     // MARK: - 资源
@@ -1017,6 +1214,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
         members[key] = connection
         if let product {
+            rememberProcess(connection.processKey)
             buildDates[connection.processKey] = product.linkDate
         }
         connection.send(NCMessage(type: .helloAck,
@@ -1042,9 +1240,12 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             offlineHintShown = false
         }
         notifyClients()
-        refreshCommandsIfNeeded()
-        if activeDeviceKey == key, connection.compatibilityIssue == nil {
-            replay(to: connection)
+        refreshCommands { [weak self] in
+            // 解析期间 App 可能已断开或换了连接
+            guard let self, self.members[key] === connection else { return }
+            if self.activeDeviceKey == key, connection.compatibilityIssue == nil {
+                self.replay(to: connection)
+            }
         }
     }
 
@@ -1179,11 +1380,9 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 return
             }
             self.members[key] = nil
-            // 进程的其他连接都没了才清理它的补推记录
-            if !self.members.values.contains(where: { $0.processKey == connection.processKey }) {
-                self.applied[connection.processKey] = nil
-                self.buildDates[connection.processKey] = nil
-            }
+            // 补推记录不随断开清除：同一进程重连（网络抖动、USB 重新插拔）时已推过的改动不能再推一遍。
+            // 进程标识含 pid，重新运行 App 是新的标识；只保留最近若干个进程的记录，避免长期运行后无限增长
+            self.pruneProcessRecords()
             if !self.isStopped {
                 let isActive = self.activeDeviceKey == key
                 self.log("断开：\(connection.displayName)\(isActive ? "（当前设备，重新运行后会自动接上并补推改动）" : "")",

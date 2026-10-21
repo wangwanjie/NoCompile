@@ -161,14 +161,17 @@ public final class HeaderDependencyIndex {
         var moduleToSources: [String: [Int32]] = [:]
     }
 
-    /// condition 同时充当锁：保护 snapshot / generation / building
+    /// condition 同时充当锁：保护 snapshot / generation / building / readyCallbacks
     private let condition = NSCondition()
     private var snapshot: Snapshot?
-    /// 失效计数：invalidate() 只把它加一，正在进行的扫描结束时发现计数变了就丢弃结果
+    /// 失效计数：invalidate() 只把它加一，之后在后台重建；重建完成前查询仍使用旧索引
     private var generation = 0
     private var snapshotGeneration = -1
-    /// 正在扫描的代数；其他查询者等它完成，避免同时扫描两遍
-    private var buildingGeneration: Int?
+    /// 是否正在扫描。同一时间只扫描一遍：大型工程扫一遍要几分钟，并发扫描只会互相拖慢
+    private var building = false
+    /// 第一份索引建好后要执行的回调
+    private var readyCallbacks: [() -> Void] = []
+    private let buildQueue = DispatchQueue(label: "com.nocompile.header-index", qos: .utility)
 
     private static let implementationExtensions: Set<String> = ["m", "mm", "c", "cpp", "cc", "cxx", "swift"]
 
@@ -176,45 +179,75 @@ public final class HeaderDependencyIndex {
         self.intermediates = "\(derivedDataPath)/Build/Intermediates.noindex"
     }
 
-    /// 标记失效，下次查询时重建。不等待正在进行的扫描，不会阻塞调用方
+    /// 标记失效，之后在后台重建。不等待正在进行的扫描，不会阻塞调用方
     public func invalidate() {
         condition.lock()
         generation += 1
         condition.unlock()
     }
 
-    /// 取最新的索引：已是最新直接返回；同一代正在扫描就等它；否则在锁外扫描
-    private func currentSnapshot() -> Snapshot {
+    /// 是否已有可用的索引（可能是重新构建之前的旧索引）。没有时查询会一直等到第一次扫描结束
+    public var hasSnapshot: Bool {
         condition.lock()
-        while true {
-            if let snapshot, snapshotGeneration == generation {
-                condition.unlock()
-                return snapshot
-            }
-            if buildingGeneration == generation {
-                condition.wait()
-                continue
-            }
-            break
-        }
-        let target = generation
-        buildingGeneration = target
+        defer { condition.unlock() }
+        return snapshot != nil
+    }
+
+    /// 在后台把索引更新到最新；已是最新或正在扫描时什么也不做
+    public func prepare() {
+        condition.lock()
+        startBuildIfNeeded()
         condition.unlock()
+    }
 
-        let built = Self.build(intermediates: intermediates)
-
+    /// 有可用索引时立即在当前线程执行 block，否则在第一次扫描结束后于后台线程执行
+    public func whenReady(_ block: @escaping () -> Void) {
         condition.lock()
-        // 扫描期间又失效了（重新构建过）：结果仍可用于本次查询，但不缓存
-        if generation == target {
+        if snapshot != nil {
+            condition.unlock()
+            block()
+            return
+        }
+        readyCallbacks.append(block)
+        startBuildIfNeeded()
+        condition.unlock()
+    }
+
+    /// 需要时开始后台扫描（调用方须持有 condition）。扫描期间又失效了，结束后接着再扫一遍
+    private func startBuildIfNeeded() {
+        guard !building, snapshot == nil || snapshotGeneration != generation else {
+            return
+        }
+        building = true
+        let target = generation
+        buildQueue.async { [self] in
+            let built = Self.build(intermediates: intermediates)
+            condition.lock()
             snapshot = built
             snapshotGeneration = target
+            building = false
+            let callbacks = readyCallbacks
+            readyCallbacks.removeAll()
+            condition.broadcast()
+            startBuildIfNeeded()
+            condition.unlock()
+            for callback in callbacks {
+                callback()
+            }
         }
-        if buildingGeneration == target {
-            buildingGeneration = nil
+    }
+
+    /// 取可用的索引：有就直接用（已失效时顺带在后台重建，重建完成前仍用旧的——依赖关系很少因一次构建而变化），
+    /// 一份都没有时等第一次扫描结束
+    private func currentSnapshot() -> Snapshot {
+        condition.lock()
+        startBuildIfNeeded()
+        while snapshot == nil {
+            condition.wait()
         }
-        condition.broadcast()
+        let current = snapshot!
         condition.unlock()
-        return built
+        return current
     }
 
     /// 依赖该头文件、且仍存在的实现文件
@@ -248,7 +281,7 @@ public final class HeaderDependencyIndex {
         }.map { $0.key }
     }
 
-    /// 扫描全部 .d 文件建立索引（不持锁，可能耗时数秒）
+    /// 扫描全部 .d 文件建立索引（不持锁；大型工程可能要几分钟）
     private static func build(intermediates: String) -> Snapshot {
         let start = Date()
         var index = Snapshot()

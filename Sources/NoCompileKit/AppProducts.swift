@@ -18,6 +18,8 @@ public struct AppProduct {
     public let uuids: Set<String>
     /// 主程序 / .debug.dylib 中较新的修改时间，即最近一次链接时间
     public let linkDate: Date
+    /// 各二进制（主程序、.debug.dylib）的路径 → 其切片的 LC_UUID，用于按 UUID 找到 App 镜像对应的文件
+    public var binaries: [String: Set<String>] = [:]
 }
 
 public enum AppProducts {
@@ -53,16 +55,19 @@ public enum AppProducts {
             }
             let executable = plist["CFBundleExecutable"] as? String ?? ((appPath as NSString).lastPathComponent as NSString).deletingPathExtension
             var uuids = Set<String>()
+            var binaries: [String: Set<String>] = [:]
             var linkDate = Date.distantPast
             // Xcode 16 起 Debug 构建把代码放在 <可执行文件>.debug.dylib，主程序只是一个很小的启动壳
             for binary in [layout.binaries + "/" + executable, layout.binaries + "/" + executable + ".debug.dylib"] {
                 guard let date = modificationDate(of: binary) else {
                     continue
                 }
-                uuids.formUnion(cachedUUIDs(ofFile: binary, modified: date))
+                let binaryUUIDs = cachedUUIDs(ofFile: binary, modified: date)
+                uuids.formUnion(binaryUUIDs)
+                binaries[binary] = binaryUUIDs
                 linkDate = max(linkDate, date)
             }
-            return AppProduct(bundleID: bundleID, appPath: appPath, uuids: uuids, linkDate: linkDate)
+            return AppProduct(bundleID: bundleID, appPath: appPath, uuids: uuids, linkDate: linkDate, binaries: binaries)
         }
         return nil
     }

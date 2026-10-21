@@ -42,7 +42,10 @@ public final class Server {
             }
         }
         guard bindResult == 0, listen(fd, 8) == 0 else {
+            // 保留 bind / listen 的 errno（如 EADDRINUSE），调用方据此判断是否已有另一个实例在运行
+            let code = errno
             Darwin.close(fd)
+            errno = code
             return false
         }
         listenFD = fd

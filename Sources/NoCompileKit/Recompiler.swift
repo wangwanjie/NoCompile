@@ -15,6 +15,10 @@ public struct RecompileResult {
     public let error: String?
     /// 是否为构建日志里还没有的新增文件（客户端需全局导出其符号，供之后的注入引用）
     public var isNewFile: Bool = false
+    /// 桥接 App 未导出符号的 dylib（见 HiddenSymbols.swift），客户端须在注入 dylib 之前以 RTLD_GLOBAL 加载
+    public var shimPath: String? = nil
+    /// 桥接的符号个数
+    public var shimSymbolCount: Int = 0
     public var succeeded: Bool { dylibPath != nil }
 }
 
@@ -81,12 +85,14 @@ public final class Recompiler {
     }
 
     /// 重编单个源文件，返回签名完毕的 dylib 路径。
-    /// sourceRoots 为各目标的源码根目录，调用方已算好时传入以免重复计算；为 nil 时按 commands 现算
+    /// sourceRoots 为各目标的源码根目录，调用方已算好时传入以免重复计算；为 nil 时按 commands 现算。
+    /// appImages 为目标 App 的主程序 / .debug.dylib，用来桥接 App 未导出、但被新代码引用的符号
     public func recompile(sourceFile: String,
                           commands: ParsedCommands,
                           platform: Platform,
                           codesignIdentity: String?,
-                          sourceRoots: TargetSourceRoots? = nil) -> RecompileResult {
+                          sourceRoots: TargetSourceRoots? = nil,
+                          appImages: [AppImage] = []) -> RecompileResult {
         let roots = sourceRoots ?? TargetSourceRoots(commands: commands)
         // 构建日志里没有、也不在任何目标源码目录内的文件（如本地 Pod 根目录下未被 podspec 收录的源码）
         // 不属于 App，不能当作新增文件借用其他模块的命令编译
@@ -135,7 +141,39 @@ public final class Recompiler {
             Diagnostics.shared.failure(stage: "签名", file: sourceFile, summary: signError)
             return RecompileResult(dylibPath: nil, log: compiled.log, error: signError)
         }
-        return RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil, isNewFile: isNewFile)
+        var result = RecompileResult(dylibPath: dylibPath, log: compiled.log, error: nil, isNewFile: isNewFile)
+        // App 未导出的符号（工程设置了 EXPORTED_SYMBOLS_FILE、-fvisibility=hidden 等）：生成桥接 dylib，否则 dlopen 报未解析符号
+        if !appImages.isEmpty {
+            let plan = HiddenSymbols.plan(dylibPath: dylibPath, images: appImages)
+            if !plan.missingSlide.isEmpty {
+                let examples = plan.missingSlide.prefix(3).joined(separator: "、")
+                let message = "新代码引用了 \(plan.missingSlide.count) 个 App 未导出的符号（如 \(examples)），"
+                    + "通常是工程设置了 EXPORTED_SYMBOLS_FILE 或 GCC_SYMBOLS_PRIVATE_EXTERN（-fvisibility=hidden）。"
+                    + "App 内的 NoCompile 客户端版本较旧，无法桥接这些符号：请重新编译运行 App 以更新客户端"
+                    + "（用 nocompile_copy_bundle.sh 拷贝 bundle 的，确认这次构建执行了该脚本）"
+                Diagnostics.shared.log("符号桥接", "\(sourceFile)：客户端未上报 slide，无法桥接 \(plan.missingSlide.count) 个符号", level: .warning)
+                return RecompileResult(dylibPath: nil, log: compiled.log, error: message)
+            }
+            if !plan.addresses.isEmpty {
+                // 按内容命名：反复保存同一个文件时符号与地址都不变，直接复用已签名的桥接 dylib（客户端 dlopen 同一路径也只加载一次）
+                let source = HiddenSymbols.assemblySource(for: plan.addresses)
+                let key = "\(source)|\(compiled.target ?? platform.arch)|\(platform.name)|\(codesignIdentity ?? "")"
+                let shimStem = "nc_syms_\(Self.fnv1a(key))"
+                let shimPath = "\(outputDirectory)/\(shimStem).dylib"
+                if !FileManager.default.fileExists(atPath: shimPath),
+                   let shimError = buildSymbolShim(source: source, shimPath: shimPath, stem: shimStem, platform: platform,
+                                                   target: compiled.target, identity: codesignIdentity) {
+                    try? FileManager.default.removeItem(atPath: shimPath)
+                    Diagnostics.shared.failure(stage: "符号桥接", file: sourceFile, summary: shimError)
+                    return RecompileResult(dylibPath: nil, log: compiled.log, error: shimError)
+                }
+                result.shimPath = shimPath
+                result.shimSymbolCount = plan.addresses.count
+                Diagnostics.shared.log("符号桥接", "\((sourceFile as NSString).lastPathComponent)：桥接 \(plan.addresses.count) 个 App 未导出的符号："
+                    + plan.addresses.keys.sorted().prefix(20).joined(separator: ", "), level: .debug)
+            }
+        }
+        return result
     }
 
     // MARK: - Swift
@@ -621,6 +659,47 @@ public final class Recompiler {
         args.append("-lc++")
         args.append(contentsOf: [objectPath, "-o", dylibPath])
         return (Shell.run("\(toolchainBin)/clang", args, workingDirectory: outputDirectory), args)
+    }
+
+    /// 生成并签名桥接 dylib：每个符号导出为指向 App 内运行时地址的绝对符号
+    private func buildSymbolShim(source: String, shimPath: String, stem: String,
+                                 platform: Platform, target: String?, identity: String?) -> String? {
+        let sourcePath = "\(outputDirectory)/\(stem).s"
+        do {
+            try source.write(toFile: sourcePath, atomically: true, encoding: .utf8)
+        } catch {
+            return "写入符号桥接源码失败：\(error.localizedDescription)"
+        }
+        var args: [String] = []
+        if let target {
+            args.append(contentsOf: ["-target", target])
+        } else {
+            args.append(contentsOf: ["-arch", platform.arch])
+        }
+        args.append(contentsOf: [
+            "-isysroot", platform.sdkPath,
+            "-dynamiclib",
+            "-install_name", "@rpath/\((shimPath as NSString).lastPathComponent)",
+            sourcePath, "-o", shimPath,
+        ])
+        let result = Shell.run("\(toolchainBin)/clang", args, workingDirectory: outputDirectory)
+        guard result.succeeded else {
+            Diagnostics.shared.failure(stage: "符号桥接", file: sourcePath, summary: "链接桥接 dylib 失败",
+                                       command: ["\(toolchainBin)/clang"] + args,
+                                       workingDirectory: outputDirectory, output: result.stdout + result.stderr)
+            return "生成符号桥接 dylib 失败：\(result.stderr)"
+        }
+        return codesign(dylibPath: shimPath, platform: platform, identity: identity)
+    }
+
+    /// 64 位 FNV-1a 摘要（十六进制），用于按内容命名桥接 dylib
+    static func fnv1a(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(format: "%016llx", hash)
     }
 
     private func needsProfileRuntime(objectPath: String) -> Bool {

@@ -301,6 +301,8 @@ NoCompile 注入后会发出 `INJECTION_BUNDLE_NOTIFICATION`，与这些包兼�
 
 **App 启动后 Mac 端一直没有"已连接"**：确认客户端确实被加载了。SPM / 静态库方式检查是否加了 `-ObjC`；bundle 方式检查 `load()` 的返回值和路径（真机不能用方式 D / F，见[真机连不上](#真机连不上)）；`DYLD_INSERT_LIBRARIES` 方式检查 macOS App 是否开启了 Hardened Runtime。
 
+**注入失败：存在未解析符号（symbol not found in flat namespace '_OBJC_CLASS_$_Foo'）**：注入的 dylib 引用的 App 符号没有被 App 导出。最常见的是工程在 Debug 下也设置了 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main`）或 `GCC_SYMBOLS_PRIVATE_EXTERN = YES`（`-fvisibility=hidden`），App 里的类、函数、常量在符号表里都变成了 `non-external (was a private external)`。NoCompile 会从 DerivedData 中与 App 相同 UUID 的二进制里找到这些符号，按 App 运行时的地址生成一个小的「符号桥接」dylib，先于注入 dylib 加载，日志里会显示「桥接 N 个 App 未导出的符号」。这需要 App 内的客户端在握手时上报镜像的 slide，App 里还是旧客户端时会提示重新编译运行 App；用方式 E 接入的，升级 NoCompile 后要重新构建一次，让 Run Script 把新 bundle 拷进 App（握手日志里的「客户端 x.y.z」应与 Mac 端一致）。Swift 的 `private` / `fileprivate` 符号不在桥接范围内，引用了其他文件私有符号的改动仍需重新运行 App。
+
 **提示"未找到构建日志"**：先在 Xcode 完整构建一次；若用了自定义 DerivedData，用 `-d` 指定。
 
 **真机提示签名失败**：先在 Xcode 成功跑一次真机构建，让构建日志里带上签名身份。

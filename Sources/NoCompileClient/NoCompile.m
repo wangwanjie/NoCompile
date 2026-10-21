@@ -278,16 +278,17 @@ static NSString *NCImageUUID(const struct mach_header *header) {
     *outUUID = NCImageUUID((const struct mach_header *)info.dli_fbase) ?: @"";
 }
 
-/// App 主程序与 <可执行文件>.debug.dylib（Xcode 16 起 Debug 构建的代码所在）的 LC_UUID，
-/// Mac 端与 DerivedData 中的构建产物比对，判断 App 是否由当前工程构建、构建于何时
-- (NSArray<NSString *> *)appImageUUIDs {
+/// App 主程序与 <可执行文件>.debug.dylib（Xcode 16 起 Debug 构建的代码所在）：LC_UUID → 运行时 slide。
+/// Mac 端用 UUID 与 DerivedData 中的构建产物比对，判断 App 是否由当前工程构建、构建于何时；
+/// slide 用来把产物符号表里的地址换算成进程内地址，桥接 App 未导出的符号
+- (NSDictionary<NSString *, NSNumber *> *)appImageSlides {
     NSString *executable = NSBundle.mainBundle.executablePath.lastPathComponent;
     NSString *bundleName = NSBundle.mainBundle.bundlePath.lastPathComponent;
     if (executable.length == 0) {
-        return @[];
+        return @{};
     }
     NSString *debugDylib = [executable stringByAppendingString:@".debug.dylib"];
-    NSMutableArray<NSString *> *uuids = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSNumber *> *slides = [NSMutableDictionary dictionary];
     uint32_t count = _dyld_image_count();
     for (uint32_t i = 0; i < count; i++) {
         const char *name = _dyld_get_image_name(i);
@@ -301,10 +302,10 @@ static NSString *NCImageUUID(const struct mach_header *header) {
         }
         NSString *uuid = NCImageUUID(_dyld_get_image_header(i));
         if (uuid) {
-            [uuids addObject:uuid];
+            slides[uuid] = @((long long)_dyld_get_image_vmaddr_slide(i));
         }
     }
-    return uuids;
+    return slides;
 }
 
 /// 设备标识、名称与系统版本（在主线程调用）
@@ -355,8 +356,10 @@ static NSString *NCImageUUID(const struct mach_header *header) {
         @"home": NSHomeDirectory(),
         @"tmp": NSTemporaryDirectory(),
         @"pid": @(getpid()),
-        @"imageUUIDs": [self appImageUUIDs],
     } mutableCopy];
+    NSDictionary<NSString *, NSNumber *> *slides = [self appImageSlides];
+    hello[@"imageUUIDs"] = slides.allKeys;
+    hello[@"imageSlides"] = slides;
     [hello addEntriesFromDictionary:self.deviceInfo ?: @{}];
     [connection sendType:NCMessageTypeHello json:hello data:nil];
 }
@@ -411,15 +414,29 @@ static id NCTyped(NSDictionary *json, NSString *key, Class cls) {
     }
     NSString *localPath = NCTyped(json, @"localPath", NSString.class);
     BOOL isNewFile = [NCTyped(json, @"newFile", NSNumber.class) boolValue];
+    // 符号桥接 dylib（可选）：模拟器 / macOS 给路径；真机随帧传输，位于数据开头，长度为 shimLength
+    NSString *shimName = [NCTyped(json, @"shimName", NSString.class) lastPathComponent];
+    NSString *shimLocalPath = NCTyped(json, @"shimLocalPath", NSString.class);
+    NSUInteger shimLength = [NCTyped(json, @"shimLength", NSNumber.class) unsignedIntegerValue];
+    NSString *shimPath = nil;
 
     NSString *dylibPath;
     if (localPath.length > 0 && [NSFileManager.defaultManager fileExistsAtPath:localPath]) {
         // 模拟器 / macOS：Mac 端已把 dylib 写到共享文件系统，直接使用路径
         dylibPath = localPath;
-    } else if (data.length > 0) {
+        if (shimLocalPath.length > 0 && [NSFileManager.defaultManager fileExistsAtPath:shimLocalPath]) {
+            shimPath = shimLocalPath;
+        }
+    } else if (data.length > shimLength) {
         // 真机：dylib 随帧传输，落盘到可执行目录
+        NSData *dylibData = data;
+        if (shimLength > 0 && shimName.length > 0) {
+            shimPath = [NSTemporaryDirectory() stringByAppendingPathComponent:shimName];
+            [[data subdataWithRange:NSMakeRange(0, shimLength)] writeToFile:shimPath atomically:YES];
+            dylibData = [data subdataWithRange:NSMakeRange(shimLength, data.length - shimLength)];
+        }
         dylibPath = [NSTemporaryDirectory() stringByAppendingPathComponent:dylibName];
-        [data writeToFile:dylibPath atomically:YES];
+        [dylibData writeToFile:dylibPath atomically:YES];
     } else {
         [self sendInjectResult:NO message:@"注入请求缺少 dylib" source:sourceFiles summary:nil refreshed:nil pending:nil on:connection];
         return;
@@ -429,7 +446,10 @@ static id NCTyped(NSDictionary *json, NSString *key, Class cls) {
         [NCHUD showStatus:@"注入中…" state:1];
     }
 
-    NCInjectResult *result = [NCInjector injectDylibAtPath:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile];
+    NCInjectResult *result = [NCInjector injectDylibAtPath:dylibPath
+                                               sourceFiles:sourceFiles
+                                                 isNewFile:isNewFile
+                                            symbolShimPath:shimPath];
     BOOL ok = result.status == NCInjectStatusSuccess;
     NSString *fileName = sourceFiles.firstObject.lastPathComponent ?: dylibName;
     NSString *hud;
