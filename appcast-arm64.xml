@@ -2,6 +2,32 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>NoCompile</title>
+        <link>https://github.com/wangwanjie/NoCompile</link>
+        <description>NoCompile release feed.</description>
+        <language>en</language>
+        <item>
+            <title>0.2.9</title>
+            <pubDate>Thu, 22 Oct 2026 14:39:26 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.9</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.9/NoCompile_v0.2.9_arm64.dmg" length="3694086" type="application/octet-stream" sparkle:edSignature="0koZRLfisFBuqHgOzFMaRu5UM4LY4YJPMa15KM9UVZVZvKUh5bFIttQMK+3ytbcFe9Q3+BYmLlCQaCA392X+Aw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.9&lt;/h2&gt;
+&lt;p&gt;本版本是一次全面的代码审查与加固：修复了连接、日志解析、资源热重载、注入中的多处缺陷，补齐了单元测试，并改进了按芯片分发的安装包。&lt;/p&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;私有类的改动不生效&lt;/strong&gt;：`private` / `fileprivate` 的 Swift 类，以及开启 `-fvisibility=hidden` 或 `EXPORTED_SYMBOLS_FILE` 的工程里的 ObjC 类，改了方法体后注入报「未替换任何实现」。现在改用符号表中的地址定位这些类&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机上修改颜色集（.colorset）必定失败&lt;/strong&gt;，提示「资源包缺少文件」&lt;/li&gt;&lt;li&gt;名称带设备后缀的资源（如 `icon@2x~ipad.png`、`Main~iphone.xib`）保存后不触发热重载&lt;/li&gt;&lt;li&gt;颜色集以 0–255 整数填写分量时颜色错误&lt;/li&gt;&lt;li&gt;`swiftc -###` 输出中单引号包裹的参数（如 `-Xcc '-DM=a\b'`）里的反斜杠被吞掉，宏值被改写&lt;/li&gt;&lt;li&gt;推送途中连接断开时，改动被误记为「已应用」，同一进程重连后不再补推。现在收到 App 回报后才登记&lt;/li&gt;&lt;li&gt;Wi-Fi 连接在 Mac 休眠或设备断网后变成半开连接，两端都不会重连。两端已开启 TCP 保活，约 1 分钟内判定断开并自动重连&lt;/li&gt;&lt;li&gt;模拟器 App 刚连上就崩溃等情况下，Mac 端停止接受所有新连接，之后的 App 都连不上&lt;/li&gt;&lt;li&gt;切换工程的瞬间连上的连接不会被关闭、一直占着设备&lt;/li&gt;&lt;li&gt;构建日志解析中途失败（超时、Xcode 正在写入）后被记为已解析，之后一直提示「请先完整构建」&lt;/li&gt;&lt;li&gt;偏好设置在主线程修改、在引擎线程读取的数据竞争，可能导致崩溃&lt;/li&gt;&lt;li&gt;tvOS 真机的编译命令被归为未知平台，无法热重载&lt;/li&gt;&lt;li&gt;自定义了带连字符配置名（如 `Debug-Staging`）的 macOS 工程，资源找不到所属的 bundle&lt;/li&gt;&lt;li&gt;消息中含无法序列化为 JSON 的内容时 App 或 Mac 端崩溃&lt;/li&gt;&lt;li&gt;在主线程发起注入时可能死锁；`+load` 中用 `method_setImplementation` / `class_replaceMethod` 写的 hook 在注入时被重复安装&lt;/li&gt;&lt;li&gt;方法实现的符号被剥离时，新实现可能被写到无关的方法上&lt;/li&gt;&lt;li&gt;真机写入 dylib 失败（存储空间不足）时给出误导性的错误&lt;/li&gt;&lt;li&gt;打开已被移动或删除的最近工程时没有任何提示；恢复默认设置后 DerivedData、排除规则不生效；「登录时自动启动」开关会重复注册 / 注销；系统睡眠唤醒后被误判为主线程卡顿&lt;/li&gt;&lt;li&gt;命令行工具静默忽略拼错的参数，现在报错退出；支持 `nocompile &amp;lt;工程路径&amp;gt;`、`--version`，Ctrl+C 时先停止引擎再退出&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;注入记录右键「在 Xcode 中打开」，编译失败时直接定位到第一条错误所在的行&lt;/li&gt;&lt;li&gt;Mac Catalyst App（实验性）：与 macOS App 一样连接本机 NoCompile&lt;/li&gt;&lt;li&gt;在 Apple 芯片的 Mac 上运行 Intel 版时给出提示，检查更新时自动换成 arm64 版本&lt;/li&gt;&lt;li&gt;最近工程菜单标出已不存在的工程，并可一键清空&lt;/li&gt;&lt;li&gt;偏好设置显示当前安装包的架构&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;分发&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;每个 Release 额外提供不带版本号的 `NoCompile_arm64.dmg` / `NoCompile_x86_64.dmg`，README 中的下载链接始终指向最新版，并附 `SHA256SUMS.txt`&lt;/li&gt;&lt;li&gt;arm64 包中的 Sparkle 等依赖也精简为单一架构，打包时逐个校验所有二进制的架构、客户端 bundle 的完整性与版本&lt;/li&gt;&lt;li&gt;Sparkle feed 保留全部历史版本，发布后自动校验下载地址&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;测试&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;新增单元测试（`swift test`）：构建日志解析、命令分词、协议帧编解码、构建清单、头文件改动分析、版本号一致性，以及客户端的帧收发、ObjC 方法替换、布局变化保护等&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。要用上客户端侧的修复（私有类、颜色集、Wi-Fi 保活等），请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
         <item>
             <title>0.2.8</title>
             <pubDate>Wed, 21 Oct 2026 17:22:50 +0800</pubDate>
@@ -75,8 +101,5 @@
 &lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
 &lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
         </item>
-        <link>https://github.com/wangwanjie/NoCompile</link>
-        <description>NoCompile release feed.</description>
-        <language>en</language>
     </channel>
 </rss>
