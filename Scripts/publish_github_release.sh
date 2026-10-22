@@ -4,6 +4,15 @@
 # 默认上传 build/dmg/ 下当前版本的各架构 DMG（NoCompile_vX.Y.Z_arm64.dmg / _x86_64.dmg），
 # 并分别更新 appcast-arm64.xml、appcast-x86_64.xml 以及兼容旧通用版的 appcast.xml。
 #
+# 除带版本号的 DMG 外，还会上传：
+#   NoCompile_arm64.dmg / NoCompile_x86_64.dmg  不带版本号的副本，README 用
+#       https://github.com/<repo>/releases/latest/download/NoCompile_<arch>.dmg 作为固定的"最新版"下载地址
+#   SHA256SUMS.txt                              所有 DMG 的校验和
+# 发布说明末尾自动追加「下载」表格（按芯片区分的文件、大小与 SHA-256）。
+#
+# Release 的 tag 打在本地 HEAD 上（--target），要求 HEAD 已推送到远端，保证 tag 与 podspec 指向的代码一致。
+# --draft / --prerelease 不更新正式 feed：草稿的下载地址对外是 404，预发布版不应推送给所有用户。
+#
 
 set -euo pipefail
 
@@ -22,19 +31,22 @@ NOTES_FILE=""
 GENERATE_NOTES=false
 DRAFT=false
 PRERELEASE=false
+ALLOW_SINGLE_ARCH=false
 
 usage() {
     cat <<'EOF'
 用法:
   ./Scripts/publish_github_release.sh [--dmg PATH]... [--repo OWNER/REPO] [--tag TAG]
                                      [--title TITLE] [--notes TEXT | --notes-file FILE | --generate-notes]
-                                     [--draft] [--prerelease]
+                                     [--draft] [--prerelease] [--allow-single-arch]
 
 前置:
   1. gh auth login 已完成，或 GITHUB_TOKEN 已配置
   2. build_dmg.sh 已生成 DMG
 
 --dmg 可重复传入；不传时取 build/dmg 下当前 MARKETING_VERSION 的各架构 DMG。
+默认要求 arm64 与 x86_64 两个 DMG 齐全（只发一个架构，另一架构的用户就收不到更新）；
+确实只发布单个架构时传 --allow-single-arch。
 EOF
 }
 
@@ -144,6 +156,7 @@ while [[ $# -gt 0 ]]; do
         --generate-notes) GENERATE_NOTES=true; shift ;;
         --draft) DRAFT=true; shift ;;
         --prerelease) PRERELEASE=true; shift ;;
+        --allow-single-arch) ALLOW_SINGLE_ARCH=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "未知参数: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -205,26 +218,78 @@ for dmg in "${DMG_PATHS[@]}"; do
     fi
 done
 
+# 两个架构齐全才发布（--allow-single-arch 除外）
+ARCHS_FOUND=()
+for dmg in "${DMG_PATHS[@]}"; do
+    arch="$(infer_arch_from_dmg "$dmg")"
+    [[ -n "$arch" ]] && ARCHS_FOUND+=("$arch")
+done
+if [[ "$ALLOW_SINGLE_ARCH" != true ]]; then
+    for required in arm64 x86_64; do
+        if [[ " ${ARCHS_FOUND[*]:-} " != *" $required "* ]]; then
+            echo "错误: 缺少 $required 的 DMG（只发布单个架构请传 --allow-single-arch）" >&2
+            exit 1
+        fi
+    done
+fi
+
 [[ -z "$TAG" ]] && TAG="v$VERSION"
 [[ -z "$TITLE" ]] && TITLE="NoCompile v$VERSION"
+
+# tag 打在本地 HEAD 上，HEAD 必须已推送：否则 gh 会在远端默认分支的 HEAD 上建 tag，与本次构建的代码不一致
+TARGET_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+git -C "$PROJECT_DIR" fetch --quiet origin 2>/dev/null || echo "警告: git fetch 失败，按本地记录的远端分支检查" >&2
+if [[ -z "$(git -C "$PROJECT_DIR" branch -r --contains "$TARGET_COMMIT" 2>/dev/null)" ]]; then
+    echo "错误: HEAD ($TARGET_COMMIT) 尚未推送到远端，请先 git push 再发布" >&2
+    exit 1
+fi
+
+# 不带版本号的副本与校验和，放在临时目录里一起上传
+ASSET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nocompile-release.XXXXXX")"
+trap 'rm -rf "$ASSET_DIR"' EXIT
+UPLOAD_PATHS=("${DMG_PATHS[@]}")
+DOWNLOAD_TABLE=$'\n\n## 下载\n\n| 芯片 | 文件 | 大小 | SHA-256 |\n|---|---|---|---|\n'
+for dmg in "${DMG_PATHS[@]}"; do
+    arch="$(infer_arch_from_dmg "$dmg")"
+    name="$(basename "$dmg")"
+    sum="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+    size="$(du -h "$dmg" | awk '{print $1}')"
+    printf '%s  %s\n' "$sum" "$name" >> "$ASSET_DIR/SHA256SUMS.txt"
+    if [[ -n "$arch" ]]; then
+        cp "$dmg" "$ASSET_DIR/NoCompile_$arch.dmg"
+        UPLOAD_PATHS+=("$ASSET_DIR/NoCompile_$arch.dmg")
+        chip="Apple 芯片（M 系列）"
+        [[ "$arch" == "x86_64" ]] && chip="Intel"
+        DOWNLOAD_TABLE+="| $chip | [$name](https://github.com/$REPO/releases/download/$TAG/$name) | $size | \`$sum\` |"$'\n'
+    fi
+done
+UPLOAD_PATHS+=("$ASSET_DIR/SHA256SUMS.txt")
+DOWNLOAD_TABLE+=$'\n不确定芯片类型：点击屏幕左上角的苹果菜单 → 关于本机，「芯片」一栏显示 Apple M 系列即选 arm64，显示 Intel 即选 x86_64。\n'
 
 echo "仓库: $REPO"
 echo "Tag:  $TAG"
 echo "标题: $TITLE"
 printf 'DMG:  %s\n' "${DMG_PATHS[@]}"
+echo "提交: $TARGET_COMMIT"
 
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
     echo "Release 已存在，上传并覆盖同名资源..."
-    gh release upload "$TAG" "${DMG_PATHS[@]}" -R "$REPO" --clobber
+    gh release upload "$TAG" "${UPLOAD_PATHS[@]}" -R "$REPO" --clobber
 else
     echo "创建 Release..."
-    create_args=(release create "$TAG" "${DMG_PATHS[@]}" -R "$REPO" --title "$TITLE")
+    create_args=(release create "$TAG" "${UPLOAD_PATHS[@]}" -R "$REPO" --title "$TITLE" --target "$TARGET_COMMIT")
     if [[ "$GENERATE_NOTES" == true ]]; then
         create_args+=(--generate-notes)
-    elif [[ -n "$NOTES_FILE" ]]; then
-        create_args+=(--notes-file "$NOTES_FILE")
     else
-        create_args+=(--notes "${NOTES:-Release $TAG}")
+        # 发布说明末尾追加下载表格
+        BODY_FILE="$ASSET_DIR/notes.md"
+        if [[ -n "$NOTES_FILE" ]]; then
+            cat "$NOTES_FILE" > "$BODY_FILE"
+        else
+            printf '%s\n' "${NOTES:-Release $TAG}" > "$BODY_FILE"
+        fi
+        printf '%s' "$DOWNLOAD_TABLE" >> "$BODY_FILE"
+        create_args+=(--notes-file "$BODY_FILE")
     fi
     [[ "$DRAFT" == true ]] && create_args+=(--draft)
     [[ "$PRERELEASE" == true ]] && create_args+=(--prerelease)
@@ -233,7 +298,19 @@ fi
 
 echo "完成: https://github.com/$REPO/releases/tag/$TAG"
 
-APPCAST_NOTES="$(gh release view "$TAG" -R "$REPO" --json body --jq '.body // ""' 2>/dev/null || true)"
+if [[ "$DRAFT" == true || "$PRERELEASE" == true ]]; then
+    echo "草稿 / 预发布版本不更新 appcast（草稿的下载地址对外不可访问，预发布版不推送给所有用户）。"
+    exit 0
+fi
+
+# 更新窗口里展示的发布说明：用原始说明，不带下载表格（Sparkle 已按架构选好安装包）
+if [[ -n "$NOTES_FILE" ]]; then
+    APPCAST_NOTES="$(cat "$NOTES_FILE")"
+elif [[ -n "$NOTES" ]]; then
+    APPCAST_NOTES="$NOTES"
+else
+    APPCAST_NOTES="$(gh release view "$TAG" -R "$REPO" --json body --jq '.body // ""' 2>/dev/null || true)"
+fi
 
 # 每个 DMG 更新所属架构的 appcast；按架构生成时 generate_appcast.sh 会同步重建 appcast.xml
 for dmg in "${DMG_PATHS[@]}"; do
@@ -247,5 +324,29 @@ for dmg in "${DMG_PATHS[@]}"; do
     fi
     "$PROJECT_DIR/Scripts/generate_appcast.sh" "${APPCAST_ARGS[@]}"
 done
+
+# 自检：新条目的下载地址可以访问、长度与文件一致，否则用户点更新会失败
+echo "校验 appcast 中本次发布的下载地址..."
+VERIFY_FAILED=false
+for dmg in "${DMG_PATHS[@]}"; do
+    name="$(basename "$dmg")"
+    url="https://github.com/$REPO/releases/download/$TAG/$name"
+    expected="$(stat -f '%z' "$dmg")"
+    status="$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || true)"
+    if [[ "$status" != "200" ]]; then
+        echo "警告: $url 返回 $status" >&2
+        VERIFY_FAILED=true
+    fi
+    for feed in "$PROJECT_DIR"/appcast*.xml; do
+        if grep -q "$name" "$feed" && ! grep -q "length=\"$expected\"" "$feed"; then
+            echo "警告: $(basename "$feed") 中 $name 的 length 与文件大小 $expected 不一致" >&2
+            VERIFY_FAILED=true
+        fi
+    done
+done
+if [[ "$VERIFY_FAILED" == true ]]; then
+    echo "appcast 自检未通过，请检查后再提交 appcast 文件。" >&2
+    exit 1
+fi
 
 echo "appcast 已更新（appcast.xml / appcast-<arch>.xml），请提交并推送到默认分支。"

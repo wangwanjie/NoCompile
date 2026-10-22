@@ -234,7 +234,13 @@ TMP_APPCAST="$TMP_DIR/appcast.xml"
     -o "$TMP_APPCAST" \
     "$TMP_DIR"
 
-/usr/bin/python3 - "$TMP_APPCAST" "$OUTPUT_PATH" "$REPO" "$TMP_DIR" "$ARCH" <<'PY'
+CURRENT_ARCHIVE_NAME=""
+if [[ -n "$ARCHIVE_PATH" ]]; then
+    CURRENT_ARCHIVE_NAME="$(basename "$ARCHIVE_PATH")"
+fi
+
+/usr/bin/python3 - "$TMP_APPCAST" "$OUTPUT_PATH" "$REPO" "$TMP_DIR" "$ARCH" "$CURRENT_ARCHIVE_NAME" <<'PY'
+import copy
 import html
 import pathlib
 import re
@@ -242,7 +248,7 @@ import sys
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-input_path, output_path, repo, archives_dir, arch = sys.argv[1:6]
+input_path, output_path, repo, archives_dir, arch, current_archive = sys.argv[1:7]
 sparkle_ns = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 dc_ns = "http://purl.org/dc/elements/1.1/"
 ET.register_namespace("sparkle", sparkle_ns)
@@ -303,6 +309,15 @@ def markdown_to_html(md):
             code.append(line); continue
         if not stripped:
             flush_para(); flush_list(); continue
+        # Markdown 引用块（> 提示）：去掉前缀按普通段落输出，否则 "> " 会被转义成 &gt; 原样显示在更新窗口里
+        quote = re.match(r"^>\s?(.*)$", stripped)
+        if quote:
+            stripped = quote.group(1).strip()
+            line = stripped
+            if not stripped:
+                flush_para(); flush_list(); continue
+            if re.match(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$", stripped, re.I):
+                continue
         h = re.match(r"^(#{1,6})\s+(.*)$", stripped)
         if h:
             flush_para(); flush_list()
@@ -370,6 +385,34 @@ for item in channel.findall("item"):
     # arm64 包声明硬件要求，Intel 机器上的 Sparkle 会忽略该条目
     if arch == "arm64":
         find_or_create(item, f"{{{sparkle_ns}}}hardwareRequirements").text = "arm64"
+
+def enclosure_filename(item):
+    enclosure = item.find("enclosure")
+    if enclosure is None:
+        return ""
+    url = enclosure.attrib.get("url", "")
+    return pathlib.PurePosixPath(urllib.parse.urlparse(url).path).name
+
+def build_number(item):
+    node = item.find(f"{{{sparkle_ns}}}version")
+    text = (node.text or "").strip() if node is not None else ""
+    return tuple(int(x) for x in re.findall(r"\d+", text)) or (0,)
+
+# 与已发布的 feed 合并：generate_appcast 会按归档文件的修改时间改写旧条目的 pubDate、只保留最近几个版本，
+# 归档目录缺了某个旧 DMG 时该版本还会从 feed 里消失。所以只采用本次 DMG 的新条目，其余条目按已提交的 feed 原样保留
+existing_path = pathlib.Path(output_path)
+if current_archive and existing_path.exists():
+    existing_channel = ET.parse(existing_path).getroot().find("channel")
+    old_items = existing_channel.findall("item") if existing_channel is not None else []
+    new_items = [item for item in channel.findall("item") if enclosure_filename(item) == current_archive]
+    if not new_items:
+        raise SystemExit(f"生成的 appcast 中没有 {current_archive} 的条目")
+    for item in channel.findall("item"):
+        channel.remove(item)
+    kept = [copy.deepcopy(item) for item in old_items if enclosure_filename(item) != current_archive]
+    for item in sorted(new_items + kept, key=build_number, reverse=True):
+        channel.append(item)
+    print(f"合并已发布的 feed：新增 / 替换 {len(new_items)} 个条目，原样保留 {len(kept)} 个旧条目")
 
 ET.indent(tree, space="    ")
 tree.write(output_path, encoding="utf-8", xml_declaration=True)

@@ -15,6 +15,10 @@
 #   Scripts/build-client-bundles.sh                     # 构建全部（未安装的 SDK 自动跳过）
 #   Scripts/build-client-bundles.sh --output DIR        # 指定输出目录
 #   Scripts/build-client-bundles.sh --only iOSNoCompile,macOSNoCompile   # 只构建指定 bundle
+#   Scripts/build-client-bundles.sh --require-all       # 缺少任一 SDK 即失败（发布打包使用）
+#
+# 输出目录里只保留本次构建的 bundle：用 --only 时，未列出的 bundle 会被删除，
+# 防止 App 的 Embed Client Bundles 阶段把上次遗留的旧版客户端一起打包。
 #
 
 set -euo pipefail
@@ -24,6 +28,7 @@ PROJECT="$ROOT/Client/NoCompileClient.xcodeproj"
 OUTPUT="$ROOT/build/ClientBundles"
 WORK="$ROOT/build/ClientBundlesBuild"
 ONLY=""
+REQUIRE_ALL=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -34,6 +39,9 @@ while [ $# -gt 0 ]; do
         --only)
             shift
             ONLY="${1:?缺少 bundle 名}"
+            ;;
+        --require-all)
+            REQUIRE_ALL=1
             ;;
         -h|--help)
             grep '^#' "$0" | head -20
@@ -53,6 +61,16 @@ if [ ! -d "$PROJECT" ]; then
 fi
 
 mkdir -p "$OUTPUT"
+# 清掉不在本次构建范围内的旧产物（见文件头说明）
+if [ -n "$ONLY" ]; then
+    for EXISTING in "$OUTPUT"/*.bundle; do
+        [ -e "$EXISTING" ] || continue
+        EXISTING_NAME="$(basename "$EXISTING" .bundle)"
+        if [[ ",$ONLY," != *",$EXISTING_NAME,"* ]]; then
+            rm -rf "$EXISTING"
+        fi
+    done
+fi
 
 # 每行：bundle 名  target  SDK
 VARIANTS="
@@ -73,6 +91,12 @@ while read -r NAME TARGET SDK; do
     fi
     # 没装对应平台（例如 tvOS）时跳过，不影响其他产物
     if ! xcrun --sdk "$SDK" --show-sdk-path >/dev/null 2>&1; then
+        if [ "$REQUIRE_ALL" -eq 1 ]; then
+            echo "❌ 未安装 $SDK SDK，无法构建 $NAME（发布包必须包含全部客户端 bundle）"
+            exit 1
+        fi
+        # 删掉上次留下的同名产物，避免把旧版客户端打进 App
+        rm -rf "$OUTPUT/$NAME.bundle"
         echo "⏭  未安装 $SDK SDK，跳过 $NAME"
         continue
     fi

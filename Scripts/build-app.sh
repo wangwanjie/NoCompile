@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
             ;;
         --project)
             shift
-            PROJECT="${1:-}"
+            PROJECT="${1:?缺少工程路径}"
             ;;
         *)
             echo "未知参数：$1"
@@ -41,6 +41,15 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# App 由 open 启动，工作目录是 /，相对路径必须先转成绝对路径
+if [ -n "$PROJECT" ]; then
+    if [ ! -e "$PROJECT" ]; then
+        echo "错误：工程不存在：$PROJECT"
+        exit 1
+    fi
+    PROJECT="$(cd "$(dirname "$PROJECT")" && pwd)/$(basename "$PROJECT")"
+fi
 
 command -v xcodegen >/dev/null 2>&1 || { echo "错误：未找到 xcodegen（brew install xcodegen）"; exit 1; }
 
@@ -51,15 +60,23 @@ echo "⚙️  生成 Xcode 工程…"
 "$ROOT/Scripts/build-client-bundles.sh"
 
 echo "⚙️  构建 NoCompile（Release）…"
+# 先删掉上次的产物：否则这次构建失败时，旧的 App 仍在原处，会被误当成本次的构建结果
+rm -rf "$APP"
+BUILD_LOG="$ROOT/build/build-app.log"
+mkdir -p "$ROOT/build"
+set +e
 xcodebuild -project "$ROOT/App/NoCompile.xcodeproj" \
     -scheme NoCompile \
     -configuration Release \
     -derivedDataPath "$DERIVED_DATA" \
     -destination "generic/platform=macOS" \
-    build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" || true
+    build >"$BUILD_LOG" 2>&1
+BUILD_STATUS=$?
+set -e
+grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" "$BUILD_LOG" || true
 
-if [ ! -d "$APP" ]; then
-    echo "❌ 构建失败，未找到 $APP"
+if [ "$BUILD_STATUS" -ne 0 ] || [ ! -d "$APP" ]; then
+    echo "❌ 构建失败（xcodebuild 退出码 $BUILD_STATUS），完整日志：$BUILD_LOG"
     exit 1
 fi
 echo "✅ 已生成：$APP"

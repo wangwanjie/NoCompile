@@ -106,8 +106,13 @@ PYEOF
     echo
 
     echo "## 6. NoCompile 诊断日志（真机 / 连接相关的最近 60 行）"
-    grep -a -E "\[(真机|连接)\]" "$HOME/Library/Logs/NoCompile/Diagnostics.log" 2>/dev/null | tail -60 | cut -c1-300 \
-        || echo "（没有找到 ~/Library/Logs/NoCompile/Diagnostics.log）"
+    # 管道的退出码取自最后的 cut，不能用 || 判断日志是否存在，先单独检查文件
+    DIAG_LOG="$HOME/Library/Logs/NoCompile/Diagnostics.log"
+    if [ -f "$DIAG_LOG" ]; then
+        grep -a -E "\[(真机|连接)\]" "$DIAG_LOG" | tail -60 | cut -c1-300
+    else
+        echo "（没有找到 ~/Library/Logs/NoCompile/Diagnostics.log）"
+    fi
 } 2>&1 | tee "$OUTPUT"
 
 echo
