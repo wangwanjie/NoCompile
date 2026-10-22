@@ -54,9 +54,10 @@ public final class FileWatcher {
         if path.contains(".app/") || path.contains(".xcarchive/") || path.contains(".storyboardc/") || path.contains(".nib/") {
             return true
         }
-        // 编辑器保存时产生的临时 / 备份文件：如 Xcode 的 "Foo~.m"、隐藏文件、".sb-xxxx" 安全保存文件
+        // 编辑器保存时产生的临时 / 备份文件：如 Xcode 的 "Foo~.m"、Vim 的 "Foo.m~"、隐藏文件、".sb-xxxx" 安全保存文件。
+        // 注意 "icon@2x~ipad.png"、"Main~iphone.xib" 这类设备后缀是合法资源名，不能因为含 "~" 就忽略
         let name = (path as NSString).lastPathComponent
-        if name.hasPrefix(".") || name.contains("~") || name.contains(".sb-") {
+        if name.hasPrefix(".") || name.hasSuffix("~") || name.contains("~.") || name.contains(".sb-") {
             return true
         }
         return false

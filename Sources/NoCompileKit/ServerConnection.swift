@@ -42,7 +42,7 @@ public final class ServerConnection {
     public var isLocalFileSystem: Bool {
         // 模拟器与本机 Mac 共享文件系统，可直接用路径
         let p = platformName
-        return p == "simulator" || p == "macosx"
+        return p == "simulator" || p == "macosx" || p == "maccatalyst"
     }
     /// 关闭时的额外回调（供 DeviceBridge 释放设备占用）
     public var onClose: (() -> Void)?
@@ -70,6 +70,7 @@ public final class ServerConnection {
         case "simulator": return "模拟器"
         case "device": return "真机"
         case "macosx": return "macOS"
+        case "maccatalyst": return "Mac Catalyst"
         default: return platformName
         }
     }
@@ -100,6 +101,8 @@ public final class ServerConnection {
             }
         case "macosx":
             return "macosx:local"
+        case "maccatalyst":
+            return "maccatalyst:local"
         default:
             break
         }
@@ -129,7 +132,7 @@ public final class ServerConnection {
                let device = SimulatorDevice.info(udid: udid) {
                 return device.name
             }
-        case "macosx":
+        case "macosx", "maccatalyst":
             return SimulatorDevice.hostName
         default:
             break
@@ -174,12 +177,18 @@ public final class ServerConnection {
     private let queue: DispatchQueue        // 读循环（长期阻塞）
     private let writeQueue: DispatchQueue   // 写（独立队列，避免被读循环饿死）
     private var buffer = Data()
-    /// 读循环、写队列、引擎队列都会访问，用 stateLock 保护
-    private var _running = false
+    /// 连接生命周期状态，读循环、写队列、引擎队列都会访问，用 stateLock 保护：
+    /// - _started：start() 已调用，读循环负责最终关闭描述符；
+    /// - _closed：close() 已调用（可能早于 start，例如引擎已停止时刚连上的连接）；
+    /// - _fdClosed：描述符已关闭。shutdown 与 close(fd) 都在锁内执行并检查它，
+    ///   避免在描述符关闭、编号被复用后再对它 shutdown / 读写，串到别的连接上
+    private var _started = false
+    private var _closed = false
+    private var _fdClosed = false
     private var running: Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return _running
+        return _started && !_closed
     }
 
     public init(fd: Int32) {
@@ -190,34 +199,67 @@ public final class ServerConnection {
 
     public func start() {
         stateLock.lock()
-        _running = true
+        if _closed {
+            // 启动前就被关闭了：close() 已经关掉描述符并通知过代理
+            stateLock.unlock()
+            return
+        }
+        _started = true
         stateLock.unlock()
         // 写阻塞（对端暂停在调试器、不再读取）时最多等 10 秒，避免写队列永久卡住
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // TCP 保活：真机 Wi-Fi 连接时设备锁屏、断网不会发来 FIN，半开连接会一直占着设备位，推送也看似成功。
+        // 空闲 30 秒后探测，每 10 秒一次，3 次无应答即断开。usbmuxd 隧道是 Unix 套接字，设置失败无影响
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var idle: Int32 = 30
+        var interval: Int32 = 10
+        var count: Int32 = 3
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, socklen_t(MemoryLayout<Int32>.size))
         queue.async { [weak self] in
             self?.readLoop()
         }
     }
 
     public func close() {
-        // 读循环、引擎可能同时调用，只允许关闭一次
+        // 读循环、写队列、引擎可能同时调用，只允许关闭一次
         stateLock.lock()
-        guard _running else {
+        guard !_closed else {
             stateLock.unlock()
             return
         }
-        _running = false
+        _closed = true
         let callback = onClose
         onClose = nil
+        if _started {
+            // 读循环在跑：只 shutdown 唤醒阻塞的读写，描述符由读循环退出后关闭
+            if !_fdClosed {
+                shutdown(fd, SHUT_RDWR)
+            }
+        } else if !_fdClosed {
+            // 还没启动：没有读循环，直接关闭
+            _fdClosed = true
+            Darwin.close(fd)
+        }
         stateLock.unlock()
-        // shutdown 先唤醒阻塞在 read 上的读循环，再关闭描述符
-        shutdown(fd, SHUT_RDWR)
-        Darwin.close(fd)
         delegate?.connectionDidClose(self)
         callback?()
+    }
+
+    /// 读循环退出后在写队列上关闭描述符：排在前面的写入会因 shutdown 立即失败，之后不会再有人用到它
+    private func closeDescriptor() {
+        writeQueue.async { [self] in
+            stateLock.lock()
+            if !_fdClosed {
+                _fdClosed = true
+                Darwin.close(fd)
+            }
+            stateLock.unlock()
+        }
     }
 
     func updateClientInfo(_ info: [String: Any]) {
@@ -237,6 +279,7 @@ public final class ServerConnection {
             drainBuffer()
         }
         close()
+        closeDescriptor()
     }
 
     private func drainBuffer() {
@@ -263,8 +306,11 @@ public final class ServerConnection {
             frame.withUnsafeBytes { raw in
                 var sent = 0
                 let base = raw.bindMemory(to: UInt8.self).baseAddress!
-                while sent < frame.count {
+                while sent < frame.count, self.running {
                     let n = write(self.fd, base + sent, frame.count - sent)
+                    if n < 0, errno == EINTR {
+                        continue
+                    }
                     if n <= 0 {
                         // 写超时或对端已断开：关闭连接，避免后续消息继续堆积
                         Diagnostics.shared.log("连接", "向 \(self.displayName) 发送消息失败（errno \(errno)），断开连接", level: .error)

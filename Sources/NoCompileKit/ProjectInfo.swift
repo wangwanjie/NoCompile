@@ -116,7 +116,15 @@ public enum ProjectInfo {
     }
 
     static func isPath(_ path: String, inside directory: String) -> Bool {
-        return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
+        // 目录带不带末尾的 "/" 都按同一个目录处理
+        var directory = directory
+        while directory.count > 1, directory.hasSuffix("/") {
+            directory.removeLast()
+        }
+        if path == directory {
+            return true
+        }
+        return path.hasPrefix(directory == "/" ? "/" : directory + "/")
     }
 
     private static var sdkPathCache: [String: String] = [:]

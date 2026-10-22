@@ -273,13 +273,10 @@ public final class ResourceCompiler {
             return .skipped("颜色集 \(name) 没有可热重载的通用颜色（外观变体需重新运行 App）")
         }
         func component(_ key: String) -> Double? {
-            if let text = components[key] as? String {
-                if text.lowercased().hasPrefix("0x"), let value = UInt64(text.dropFirst(2), radix: 16) {
-                    return Double(value) / 255
-                }
-                return Double(text)
+            guard let value = components[key] else {
+                return nil
             }
-            return components[key] as? Double
+            return Self.colorComponent(value, isAlpha: key == "alpha")
         }
         var values: [String: Double] = [:]
         if let white = component("white") {
@@ -294,6 +291,28 @@ public final class ResourceCompiler {
         values["p3"] = (color["color-space"] as? String) == "display-p3" ? 1 : 0
         return .ready(ResourcePackage(kind: .colorset, source: file, name: name, rootDirectory: root,
                                       items: [], files: [], images: [], isTemplate: false, color: values))
+    }
+
+    /// 解析颜色集的一个分量，统一成 0~1。Xcode 的几种输入方式写入 Contents.json 的格式不同：
+    /// 浮点（"0.500"）、8 位十六进制（"0x80"）、8 位十进制整数（"128"，不带小数点且大于 1）
+    static func colorComponent(_ value: Any, isAlpha: Bool = false) -> Double? {
+        if let text = value as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("0x") {
+                return UInt64(trimmed.dropFirst(2), radix: 16).map { Double($0) / 255 }
+            }
+            guard let number = Double(trimmed) else {
+                return nil
+            }
+            if !isAlpha, !trimmed.contains("."), number > 1 {
+                return number / 255
+            }
+            return number
+        }
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        return nil
     }
 
     // MARK: - storyboard / xib

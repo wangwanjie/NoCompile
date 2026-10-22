@@ -204,10 +204,6 @@ static NSString *NCOverridePathForFile(NSString *bundleKey, NSString *fileName, 
     return nil;
 }
 
-static BOOL NCIsMainOrMirror(NSBundle *bundle) {
-    return bundle == nil || bundle == NSBundle.mainBundle || [NCResources isMirrorBundle:bundle];
-}
-
 /// 加载 name.ext 时应使用的 bundle：资源已更新则返回镜像 bundle，否则原样返回
 static NSBundle *NCRedirectBundle(NSBundle *bundle, NSString *name, NSString *ext) {
     NSString *key = NCBundleKeyForBundle(bundle);
@@ -819,16 +815,23 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
 /// 把资源包落到本地目录：模拟器 / macOS 已由 Mac 端拷好，真机按文件列表从 data 中切出
 + (NSString *)materialize:(NSDictionary *)json data:(NSData *)data error:(NSString **)error {
     NSString *localRoot = json[@"localRoot"];
-    if (localRoot.length > 0 && [NSFileManager.defaultManager fileExistsAtPath:localRoot]) {
+    if ([localRoot isKindOfClass:NSString.class] && localRoot.length > 0
+        && [NSFileManager.defaultManager fileExistsAtPath:localRoot]) {
         return localRoot;
     }
     NSArray<NSDictionary *> *files = json[@"files"];
-    if (![files isKindOfClass:NSArray.class] || files.count == 0) {
+    // 颜色集的数据全在 json 的 color 字段里，没有任何文件，空列表是合法的
+    BOOL allowsNoFiles = [json[@"kind"] isEqual:@"colorset"];
+    if (![files isKindOfClass:NSArray.class] || (files.count == 0 && !allowsNoFiles)) {
         *error = @"资源包缺少文件";
         return nil;
     }
     NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:
                       [NSString stringWithFormat:@"NoCompileIncoming/%@", NSUUID.UUID.UUIDString]];
+    if (files.count == 0) {
+        [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
+        return root;
+    }
     NSUInteger offset = 0;
     for (NSDictionary *file in files) {
         if (![file isKindOfClass:NSDictionary.class]) {
@@ -836,7 +839,12 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
             return nil;
         }
         NSString *relative = file[@"path"];
-        NSUInteger length = [file[@"length"] unsignedIntegerValue];
+        id lengthValue = file[@"length"];
+        if (![lengthValue isKindOfClass:NSNumber.class]) {
+            *error = @"资源包格式错误";
+            return nil;
+        }
+        NSUInteger length = [lengthValue unsignedIntegerValue];
         // 先比较 length 与剩余长度，避免 offset + length 溢出后绕过检查
         if (![relative isKindOfClass:NSString.class] || relative.length == 0 || [relative containsString:@".."]
             || offset > data.length || length > data.length - offset) {

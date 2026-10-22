@@ -128,7 +128,8 @@ enum PrecompiledHeader {
             return false
         }
         for dep in HeaderDependencyIndex.dependencies(in: data) {
-            if let date = (try? fm.attributesOfItem(atPath: dep))?[.modificationDate] as? Date, date > built {
+            // 依赖被删除或改名（取不到修改时间）同样算过期
+            guard let date = (try? fm.attributesOfItem(atPath: dep))?[.modificationDate] as? Date, date <= built else {
                 return false
             }
         }

@@ -234,7 +234,10 @@ static BOOL NCInstanceLayoutChanged(Class oldClass, Class newClass) {
 /// 方法实现所在函数的符号名（如 `-[Foo bar]`）。Debug 产物保留了局部符号，取不到时返回 nil
 static NSString *NCFunctionNameForIMP(IMP imp) {
     Dl_info info;
-    if (imp && dladdr((const void *)imp, &info) && info.dli_sname && info.dli_sname[0] != '\0') {
+    // dladdr 返回的是"地址之前最近的符号"：符号被剥离或 IMP 是 block 蹦床时，多个方法会被归到同一个错误的名字下，
+    // 进而把新实现写到不相干的选择子上。只接受符号起始地址恰好等于 IMP 的结果
+    if (imp && dladdr((const void *)imp, &info) && info.dli_sname && info.dli_sname[0] != '\0'
+        && info.dli_saddr == (void *)imp) {
         return @(info.dli_sname);
     }
     return nil;
@@ -723,16 +726,17 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
                           sourceFiles:(NSArray<NSString *> *)sourceFiles
                             isNewFile:(BOOL)isNewFile
                        symbolShimPath:(NSString *)symbolShimPath {
+    // 实际替换都在主线程执行，避免与 UI 代码并发；主线程本身就是串行的，直接执行即可。
+    // 不能在主线程上先 dispatch_sync 到 injectionQueue：若后台线程正持有该队列并等待主线程，两者会互相等待而死锁
+    if (NSThread.isMainThread) {
+        return [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:symbolShimPath];
+    }
     __block NCInjectResult *result = nil;
-    // 串行化多次注入；实际替换在主线程执行，避免与 UI 代码并发
+    // 后台线程发起的多次注入先在 injectionQueue 上排队，再逐个切到主线程执行
     dispatch_sync([self injectionQueue], ^{
-        if (NSThread.isMainThread) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
             result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:symbolShimPath];
-        } else {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                result = [self performInject:dylibPath sourceFiles:sourceFiles isNewFile:isNewFile symbolShimPath:symbolShimPath];
-            });
-        }
+        });
     });
     return result;
 }
@@ -792,6 +796,8 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
     NSMutableArray<NSString *> *undefinedNames = [NSMutableArray array];
     // 新镜像里的不透明类型描述符（some View 等）：符号名 → 地址
     NSMutableDictionary<NSString *, NSValue *> *opaqueDescriptors = [NSMutableDictionary dictionary];
+    // 新镜像里类符号与 Swift 元数据访问器的地址（含局部符号）：符号名 → 地址
+    NSMutableDictionary<NSString *, NSValue *> *localSymbolAddresses = [NSMutableDictionary dictionary];
 
     NCEnumerateSymbolsWithDesc(newImage, ^(const char *name, uintptr_t address, uint8_t type, uint16_t desc,
                                            const struct section_64 *section, BOOL *stop) {
@@ -807,14 +813,22 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
             opaqueDescriptors[@(name)] = [NSValue valueWithPointer:(const void *)address];
             return;
         }
+        // 类符号同时记下地址：private / fileprivate 的 Swift 类、-fvisibility=hidden 或 EXPORTED_SYMBOLS_FILE 下的 ObjC 类
+        // 都是局部符号，dlsym 查不到，只能用符号表里的地址
         if (strncmp(name, "_OBJC_CLASS_$_", 14) == 0) {
             [classSymbols addObject:@(name)];
+            localSymbolAddresses[@(name)] = [NSValue valueWithPointer:(const void *)address];
             return;
         }
         // Swift 类元数据（ObjC 兼容类在 __objc_classlist 中也会出现，这里用 CN 统一取）
         if (strncmp(name, "_$s", 3) == 0 && NCHasSuffix(name, len, "CN")) {
             [classSymbols addObject:@(name)];
+            localSymbolAddresses[@(name)] = [NSValue valueWithPointer:(const void *)address];
             return;
+        }
+        // Swift 类的元数据访问器（...CMa），取类对象时调用它完成运行时初始化
+        if (strncmp(name, "_$s", 3) == 0 && NCHasSuffix(name, len, "CMa")) {
+            localSymbolAddresses[@(name)] = [NSValue valueWithPointer:(const void *)address];
         }
         // 外部只读数据（`NSString *const kTitle`、`const int kLimit`、const 数组 / 结构体）：
         // 其他镜像里的引用要指向新值，否则旧文件读到的仍是旧常量
@@ -852,11 +866,14 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
     NSMutableSet<NSString *> *unsafeMemberPrefixes = [NSMutableSet set];
 
     NCClassSnapshot *classSnapshot = classSymbols.count > 0 ? [NCClassSnapshot new] : nil;
+    // 继承 NSObject 的 Swift 类同时有 _OBJC_CLASS_$_ 与 $s...CN 两个符号，指向同一个类，只处理一次
+    NSMutableSet<NSValue *> *handledClasses = [NSMutableSet set];
     for (NSString *symbol in classSymbols) {
-        void *ptr = [self classPointerForSymbol:symbol handle:handle];
-        if (!ptr) {
+        void *ptr = [self classPointerForSymbol:symbol handle:handle localAddresses:localSymbolAddresses];
+        if (!ptr || [handledClasses containsObject:[NSValue valueWithPointer:ptr]]) {
             continue;
         }
+        [handledClasses addObject:[NSValue valueWithPointer:ptr]];
         Class newClass = (__bridge Class)ptr;
         const char *className = class_getName(newClass);
         NSArray<Class> *oldClasses = [classSnapshot classesNamed:className excluding:newClass];
@@ -1093,13 +1110,18 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
     return result;
 }
 
-/// 取类对象。Swift 类优先调用元数据访问器（...CMa），确保需要运行时初始化的元数据已初始化
-+ (void *)classPointerForSymbol:(NSString *)symbol handle:(void *)handle {
+/// 取类对象。Swift 类优先调用元数据访问器（...CMa），确保需要运行时初始化的元数据已初始化。
+/// 先按导出符号 dlsym，查不到（局部符号）再用符号表里记下的地址
++ (void *)classPointerForSymbol:(NSString *)symbol handle:(void *)handle
+                 localAddresses:(NSDictionary<NSString *, NSValue *> *)localAddresses {
     // dlsym 需要去掉前导下划线
     NSString *name = [symbol substringFromIndex:1];
     if ([name hasPrefix:@"$s"] && [name hasSuffix:@"CN"]) {
         NSString *accessorName = [[name substringToIndex:name.length - 2] stringByAppendingString:@"CMa"];
         void *accessor = dlsym(handle, accessorName.UTF8String);
+        if (!accessor) {
+            accessor = [localAddresses[[@"_" stringByAppendingString:accessorName]] pointerValue];
+        }
         if (accessor) {
             // MetadataResponse accessor(MetadataRequest)：请求 0 表示完整元数据，返回值首字段即元数据指针
             typedef void *(*NCMetadataAccessor)(size_t request);
@@ -1109,7 +1131,11 @@ static BOOL NCOpaqueResultTypeUnchanged(NSString *descriptorName, const void *ne
             }
         }
     }
-    return dlsym(handle, name.UTF8String);
+    void *exported = dlsym(handle, name.UTF8String);
+    if (exported) {
+        return exported;
+    }
+    return [localAddresses[symbol] pointerValue];
 }
 
 /// 把新镜像中的静态变量寻址器重绑回旧实现，保留原有状态

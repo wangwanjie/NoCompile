@@ -40,6 +40,19 @@ public struct RawCompileCommand: Codable {
         return String(first)
     }
 
+    /// 把 Xcode 的平台目录名归一成引擎内部使用的平台名：tvOS 客户端与 iOS 客户端上报的平台相同，
+    /// 构建产物 / 中间产物目录里的 appletvos、appletvsimulator 要分别并入 iphoneos、iphonesimulator
+    public static func normalizedPlatform(_ name: String) -> String {
+        switch name {
+        case "appletvos":
+            return "iphoneos"
+        case "appletvsimulator":
+            return "iphonesimulator"
+        default:
+            return name
+        }
+    }
+
     /// 由 -target 三元组推断平台名
     public static func platform(forTarget target: String?) -> String {
         guard let target else {
@@ -60,7 +73,7 @@ public struct RawCompileCommand: Codable {
         if target.contains("-macabi") {
             return "maccatalyst"
         }
-        if target.contains("-ios") {
+        if os.hasPrefix("ios") || os.hasPrefix("tvos") {
             return "iphoneos"
         }
         if target.contains("-macos") {
@@ -151,17 +164,27 @@ public struct ParsedCommands: Codable {
     static func platformOfProductPath(_ path: String) -> String? {
         let components = path.components(separatedBy: "/")
         if let index = components.firstIndex(of: "UninstalledProducts"), index + 1 < components.count {
-            return components[index + 1]
+            return RawCompileCommand.normalizedPlatform(components[index + 1])
         }
         guard let index = components.firstIndex(of: "Products"), index + 1 < components.count else {
             return nil
         }
         let configuration = components[index + 1]
         if let dash = configuration.lastIndex(of: "-") {
-            return String(configuration[configuration.index(after: dash)...])
+            let suffix = String(configuration[configuration.index(after: dash)...])
+            // 只认已知的平台后缀；"Debug-Staging" 这类带连字符的自定义配置名是 macOS 构建
+            if knownPlatformDirectorySuffixes.contains(suffix) {
+                return RawCompileCommand.normalizedPlatform(suffix)
+            }
         }
         return "macosx"
     }
+
+    /// 构建产物 / 中间产物配置目录（如 Debug-iphonesimulator）可能带的平台后缀
+    static let knownPlatformDirectorySuffixes: Set<String> = [
+        "iphoneos", "iphonesimulator", "macosx", "maccatalyst", "appletvos", "appletvsimulator",
+        "watchos", "watchsimulator", "xros", "xrsimulator",
+    ]
 
     static func moduleKey(_ command: RawCompileCommand) -> String {
         return "\(command.moduleName ?? "?")|\(command.platform)|\(command.arch ?? "?")"
@@ -570,7 +593,14 @@ public struct BuildLog {
     /// 逐份流式解析日志（按传入顺序，应为新→旧），不把解压后的明文整体读进内存。
     /// 大型工程单份全量构建日志解压后可超过 1GB，整体读入再按行切分会占用数 GB 内存、耗时数分钟
     public static func parse(logs: [String]) -> ParsedCommands {
+        return parseReportingFailures(logs: logs).commands
+    }
+
+    /// 同 parse(logs:)，额外返回没能完整解析的日志（gunzip 异常退出、超时被终止等）。
+    /// 调用方不应把这些日志登记为"已解析"，否则只拿到一部分命令后再也不会重新解析
+    public static func parseReportingFailures(logs: [String]) -> (commands: ParsedCommands, failed: Set<String>) {
         let parser = LogLineParser()
+        var failed = Set<String>()
         for log in logs {
             let start = Date()
             parser.beginLog()
@@ -578,12 +608,15 @@ public struct BuildLog {
                 parser.handle(line)
             }
             parser.endLog()
+            if !ok {
+                failed.insert(log)
+            }
             let elapsed = String(format: "%.2f", Date().timeIntervalSince(start))
             Diagnostics.shared.log("解析日志", "\((log as NSString).lastPathComponent)：\(ok ? "完成" : "gunzip 异常退出")，"
                 + "用时 \(elapsed)s，累计 \(parser.parsed.swiftModules.count) 条 Swift 模块命令、\(parser.parsed.clangFiles.count) 条 clang 命令",
                 level: ok ? .info : .warning)
         }
-        return parser.parsed
+        return (parser.parsed, failed)
     }
 
     /// 解析全部日志（新→旧）

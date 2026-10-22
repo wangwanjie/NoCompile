@@ -5,8 +5,8 @@ let package = Package(
     name: "NoCompile",
     platforms: [
         .macOS(.v12),
-        .iOS(.v13),
-        .tvOS(.v13),
+        .iOS(.v15),
+        .tvOS(.v15),
     ],
     products: [
         // 接入 App 工程的客户端（只在 Debug 生效）
@@ -35,6 +35,22 @@ let package = Package(
             name: "nocompile",
             dependencies: ["NoCompileKit"],
             path: "Sources/nocompile"
+        ),
+        // Mac 端引擎的单元测试（swift test）
+        .testTarget(
+            name: "NoCompileKitTests",
+            dependencies: ["NoCompileKit"],
+            path: "Tests/NoCompileKitTests"
+        ),
+        // App 进程内客户端的单元测试（macOS 上运行：帧收发、ObjC 注入、布局变化保护）
+        .testTarget(
+            name: "NoCompileClientTests",
+            dependencies: ["NoCompileClient"],
+            path: "Tests/NoCompileClientTests",
+            cSettings: [
+                // 测试需要访问客户端的内部头文件（NCConnection.h、NCInjector.h 等）
+                .headerSearchPath("../../Sources/NoCompileClient"),
+            ]
         ),
     ]
 )

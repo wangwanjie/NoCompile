@@ -136,7 +136,9 @@ public enum AppProducts {
             let is64 = magicBE == 0xcafe_babf
             let count = Int(head.uint32(at: 4, bigEndian: true))
             let entrySize = is64 ? 32 : 20
-            guard count > 0, count < 32, let table = read(handle, offset: 8, count: count * entrySize) else {
+            // 短读（二进制正在被链接器改写）时 table 不足，按完整长度校验，避免 subdata 越界崩溃
+            guard count > 0, count < 32, let table = read(handle, offset: 8, count: count * entrySize),
+                  table.count == count * entrySize else {
                 return []
             }
             var result = Set<String>()
@@ -159,7 +161,7 @@ public enum AppProducts {
         let commandCount = Int(header.uint32(at: 16, bigEndian: false))
         let commandsSize = Int(header.uint32(at: 20, bigEndian: false))
         guard commandsSize > 0, commandsSize < 16 * 1024 * 1024,
-              let commands = read(handle, offset: offset + 32, count: commandsSize) else {
+              let commands = read(handle, offset: offset + 32, count: commandsSize), commands.count == commandsSize else {
             return []
         }
         var cursor = 0

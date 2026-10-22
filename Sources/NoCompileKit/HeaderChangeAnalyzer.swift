@@ -151,12 +151,11 @@ public final class HeaderChangeAnalyzer {
             let balance = Self.braceBalance(of: lines[line])
             // balance > 0：这一行净打开了块；< 0：净关闭了块
             if balance > 0 {
-                let consumed = min(balance, needed)
-                needed -= consumed
-                if consumed > 0 {
-                    openers.append(line)
-                }
+                // 只有把未闭合的 "{" 全部抵消掉的那一行才是外层块的起始行；
+                // 抵消不完说明这一行打开的块在下方已经闭合（同级的兄弟块），不是外层声明
+                needed -= balance
                 if needed <= 0 {
+                    openers.append(line)
                     // 找到一个外层块，继续向外找更外层的
                     needed = 1
                 }

@@ -59,7 +59,34 @@ public struct InjectionRecord: Identifiable {
     public var pending: [String] = []
     /// 目标设备名
     public var deviceName: String = ""
+    /// 源文件的完整路径（用于在 Xcode 中打开）
+    public var path: String = ""
     public let date = Date()
+
+    /// 在编辑器中定位的位置：编译失败时取第一条错误所在的文件与行号，否则为源文件本身
+    public var sourceLocation: (path: String, line: Int?)? {
+        if !success, let location = Self.firstErrorLocation(in: message) {
+            return location
+        }
+        return path.isEmpty ? nil : (path, nil)
+    }
+
+    /// 从编译器输出里取第一条错误的位置，格式为 "<绝对路径>:<行>:<列>: error: ..."（也匹配 fatal error）
+    public static func firstErrorLocation(in output: String) -> (path: String, line: Int?)? {
+        for line in output.components(separatedBy: "\n") where line.contains(" error:") {
+            let parts = line.components(separatedBy: ":")
+            // 路径里可能含冒号以外的任意字符，从左往右找第一个「数字:数字:」的位置
+            guard parts.count >= 4, parts[0].hasPrefix("/") else {
+                continue
+            }
+            for index in 1 ..< parts.count - 2 {
+                if let lineNumber = Int(parts[index]), Int(parts[index + 1]) != nil {
+                    return (parts[0 ..< index].joined(separator: ":"), lineNumber)
+                }
+            }
+        }
+        return nil
+    }
 }
 
 public protocol EngineDelegate: AnyObject {
@@ -84,23 +111,28 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     public let customDerivedData: String?
     public weak var delegate: EngineDelegate?
 
+    // 以下偏好由调用方（通常是主线程）设置、在 workQueue 上读取，统一加锁访问
+
     /// 保存即注入（默认开）。关闭后改动会累积为"待注入"，由 triggerPendingInjection 手动触发
-    public var injectsOnSave: Bool = true
+    @Synchronized public var injectsOnSave: Bool = true
     /// 是否监听头文件变更
-    public var watchesHeaders: Bool = true
+    @Synchronized public var watchesHeaders: Bool = true
     /// 是否热重载资源文件（storyboard、xib、图片）
-    public var watchesResources: Bool = true
+    @Synchronized public var watchesResources: Bool = true
     /// 路径中包含这些关键字的文件不触发注入（如 "Pods/"、"Tests/"）
-    public var excludedKeywords: [String] = []
+    @Synchronized public var excludedKeywords: [String] = []
     /// 头文件被超过这么多实现文件引用时，只重编与它同名的实现文件（如 Foo.h → Foo.m），
     /// 避免改一个公共头文件就重编成百上千个文件
-    public var maxHeaderDependents: Int = 10
+    @Synchronized public var maxHeaderDependents: Int = 10
     /// 一批改动中的源文件超过这个数量（多半是切换分支）时不再逐个注入，提示重新编译
-    public var maxBatchSourceFiles: Int = 100
-    /// 下发给 App 端的偏好设置，变更后立即推送给所有已接入的 App
-    public var clientConfig: [String: Any] = [:] {
+    @Synchronized public var maxBatchSourceFiles: Int = 100
+    /// 下发给 App 端的偏好设置，内容变化时立即推送给所有已接入的 App（内容相同的重复赋值不推送）
+    @Synchronized public var clientConfig: [String: Any] = [:] {
         didSet {
             let config = clientConfig
+            guard !NSDictionary(dictionary: config).isEqual(to: oldValue) else {
+                return
+            }
             workQueue.async { [weak self] in
                 self?.members.values.forEach { $0.send(NCMessage(type: .config, json: ["config": config])) }
             }
@@ -126,6 +158,10 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     }
     /// 已解析过的日志及其修改时间，只解析新出现 / 有变化的日志
     private var parsedLogs: [String: Date] = [:]
+    /// 没能完整解析的日志 → 连续失败次数。失败的日志下次刷新时重试，超过上限后按已解析登记，
+    /// 避免一份损坏或超大的日志在每次保存时都被重新解析
+    private var failedLogAttempts: [String: Int] = [:]
+    private static let maxLogParseAttempts = 3
     /// 已读取的构建清单（manifest.json）→ 指纹（修改时间 + 大小）。只在内存里记录：
     /// 清单合成的命令不写入命令缓存（数万条命令会让缓存膨胀到数百 MB），每次启动重新读取清单即可
     private var parsedManifests: [String: String] = [:]
@@ -187,8 +223,10 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     private static let maxProcessRecords = 16
 
     private var pendingFiles = Set<String>()
-    /// 已推送、等待 App 回报结果的注入：键为 "连接标识|源文件"，值为（开始时间, 编译耗时）
-    private var inflight: [String: (start: Date, compile: TimeInterval)] = [:]
+    /// 已推送、等待 App 回报结果的注入：键为 "连接标识|源文件"，值为（开始时间, 编译耗时, 推送时该文件的改动序号）。
+    /// 收到回报后才把改动登记为该进程已应用：推送途中连接断开（写失败、半开连接）时回报不会到达，
+    /// 同一进程重连后会补推，改动不会静默丢失
+    private var inflight: [String: (start: Date, compile: TimeInterval, seq: Int?)] = [:]
     private let workQueue = DispatchQueue(label: "com.nocompile.engine")
 
     /// 所有已接受的连接（加锁访问）：stop() 时不经 workQueue 立即关闭，
@@ -205,6 +243,26 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
     }
 
     public static let outputDirectory = NSTemporaryDirectory() + "NoCompile"
+
+    /// 删除编译输出目录里的全部产物，返回删除的条目数。引擎运行时请用 clearOutputs，避免与编译并发
+    @discardableResult
+    public static func removeOutputs() -> Int {
+        let fm = FileManager.default
+        let entries = (try? fm.contentsOfDirectory(atPath: outputDirectory)) ?? []
+        var removed = 0
+        for entry in entries where (try? fm.removeItem(atPath: (outputDirectory as NSString).appendingPathComponent(entry))) != nil {
+            removed += 1
+        }
+        return removed
+    }
+
+    /// 在引擎的工作队列上清理编译产物：编译、链接、推送都在该队列上串行执行，不会删掉正在使用的文件。
+    /// 自建 PCH、符号桥接等缓存随之重建
+    public func clearOutputs(completion: @escaping (Int) -> Void) {
+        workQueue.async {
+            completion(Self.removeOutputs())
+        }
+    }
 
     public init(projectPath: String, customDerivedData: String? = nil) {
         self.projectPath = projectPath
@@ -367,11 +425,20 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         parseQueue.async { [weak self] in
             var merged = base
             var logDates: [String: Date] = [:]
+            var failedLogs: [String] = []
             if !changed.isEmpty {
-                let fresh = BuildLog.parse(logs: changed)
-                merged = isIncremental ? fresh.merging(older: base) : fresh
+                // 解析前先记下修改时间：解析期间 Xcode 又改写了日志（时间变了）或解析没能完整结束的，
+                // 都不登记为已解析，下次刷新时重新解析，避免只拿到一部分命令后一直提示"请先完整构建"
+                let datesBefore = Dictionary(uniqueKeysWithValues: changed.map { ($0, BuildLog.modificationDate(of: $0)) })
+                let result = BuildLog.parseReportingFailures(logs: changed)
+                merged = isIncremental ? result.commands.merging(older: base) : result.commands
                 for path in changed {
-                    logDates[path] = BuildLog.modificationDate(of: path)
+                    let date = BuildLog.modificationDate(of: path)
+                    if result.failed.contains(path) || date != datesBefore[path] {
+                        failedLogs.append(path)
+                    } else {
+                        logDates[path] = date
+                    }
                 }
             }
             var manifestResult: ManifestRefresh?
@@ -382,14 +449,16 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                 manifestResult = result
             }
             let parsed = merged
+            let failed = failedLogs
             self?.workQueue.async { [weak self] in
-                self?.finishRefresh(commands: parsed, logDates: logDates, manifests: manifestResult, started: start)
+                self?.finishRefresh(commands: parsed, logDates: logDates, failedLogs: failed, manifests: manifestResult, started: start)
             }
         }
     }
 
     /// 后台解析结束（在 workQueue 上）：采用新命令、保存缓存、让头文件索引重建，再执行排队的后续操作
-    private func finishRefresh(commands parsed: ParsedCommands, logDates: [String: Date], manifests: ManifestRefresh?, started: Date) {
+    private func finishRefresh(commands parsed: ParsedCommands, logDates: [String: Date], failedLogs: [String],
+                               manifests: ManifestRefresh?, started: Date) {
         refreshing = false
         let continuations = afterRefresh
         afterRefresh.removeAll()
@@ -398,7 +467,23 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
         let before = commands.clangFileCount
         commands = parsed
-        parsedLogs.merge(logDates) { _, new in new }
+        var dates = logDates
+        for path in logDates.keys {
+            failedLogAttempts[path] = nil
+        }
+        for path in failedLogs {
+            let attempts = (failedLogAttempts[path] ?? 0) + 1
+            if attempts >= Self.maxLogParseAttempts {
+                // 多次都没能完整解析：按已解析登记，已拿到的部分命令照常使用
+                failedLogAttempts[path] = nil
+                dates[path] = BuildLog.modificationDate(of: path)
+                Diagnostics.shared.log("解析日志", "\((path as NSString).lastPathComponent) 连续 \(attempts) 次未能完整解析，不再重试", level: .warning)
+            } else {
+                failedLogAttempts[path] = attempts
+                Diagnostics.shared.log("解析日志", "\((path as NSString).lastPathComponent) 未能完整解析（第 \(attempts) 次），下次刷新时重试", level: .warning)
+            }
+        }
+        parsedLogs.merge(dates) { _, new in new }
         // 已不存在的日志不再登记；命令本身保留在缓存里
         parsedLogs = parsedLogs.filter { FileManager.default.fileExists(atPath: $0.key) }
         if let manifests {
@@ -736,9 +821,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             let elapsed = Date().timeIntervalSince(start)
             if result.succeeded, let dylibPath = result.dylibPath {
                 succeeded += 1
-                inflight[inflightKey(connection, source)] = (Date(), elapsed)
+                inflight[inflightKey(connection, source)] = (Date(), elapsed, history[source]?.seq)
                 sendInject(dylibPath: dylibPath, shimPath: result.shimPath, source: source, isNewFile: result.isNewFile, to: connection)
-                markApplied(source, for: connection)
                 var newTag = result.isNewFile ? "（新增文件）" : ""
                 if result.shimSymbolCount > 0 {
                     newTag += "（桥接 \(result.shimSymbolCount) 个 App 未导出的符号）"
@@ -754,6 +838,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                                            platformTitle: connection.platformTitle, success: false,
                                            duration: elapsed, message: message, refreshed: [])
                 item.deviceName = connection.deviceName
+                item.path = source
                 record(item)
             }
         }
@@ -763,12 +848,15 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         setState(hadError ? .error("编译失败，详见日志") : .idle)
     }
 
-    private func markApplied(_ file: String, for connection: ServerConnection) {
-        guard let entry = history[file] else {
+    /// 把文件的改动登记为该进程已应用。seq 为推送时的改动序号（等待回报期间文件可能又被保存，
+    /// 那次更新的改动仍需补推）；不传则取当前序号
+    private func markApplied(_ file: String, for connection: ServerConnection, seq: Int? = nil) {
+        guard let current = seq ?? history[file]?.seq else {
             return
         }
         rememberProcess(connection.processKey)
-        applied[connection.processKey, default: [:]][file] = entry.seq
+        let existing = applied[connection.processKey]?[file] ?? 0
+        applied[connection.processKey, default: [:]][file] = max(existing, current)
     }
 
     /// 登记进程标识（已登记的不变），供 pruneProcessRecords 按先后顺序清理
@@ -1033,9 +1121,8 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             let elapsed = Date().timeIntervalSince(start)
             switch prepared {
             case .ready(let package):
-                inflight[inflightKey(connection, file)] = (Date(), elapsed)
+                inflight[inflightKey(connection, file)] = (Date(), elapsed, history[file]?.seq)
                 sendResource(package, to: connection)
-                markApplied(file, for: connection)
                 log("\(name) 已整理（\(String(format: "%.2f", elapsed))s），推送到 \(connection.deviceLabel)", level: 0, category: .resource)
             case .skipped(let reason):
                 markApplied(file, for: connection)
@@ -1052,6 +1139,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                                            platformTitle: connection.platformTitle, success: false,
                                            duration: elapsed, message: error, refreshed: [])
                 item.deviceName = connection.deviceName
+                item.path = file
                 record(item)
             }
         }
@@ -1098,12 +1186,16 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
             name = "iphoneos"; isSimulator = false; isDevice = true
         case "macosx":
             name = "macosx"; isSimulator = false; isDevice = false
+        case "maccatalyst":
+            // Mac Catalyst：编译命令按 -target ...-macabi 归为 maccatalyst，使用 macOS SDK，签名方式同 macOS
+            name = "maccatalyst"; isSimulator = false; isDevice = false
         default:
             log("未知的客户端平台：\(connection.platformName)", level: 3, category: .connection)
             return nil
         }
-        guard let sdkPath = ProjectInfo.sdkPath(for: name) else {
-            log("无法定位 \(name) SDK", level: 3, category: .compile)
+        let sdkName = name == "maccatalyst" ? "macosx" : name
+        guard let sdkPath = ProjectInfo.sdkPath(for: sdkName) else {
+            log("无法定位 \(sdkName) SDK", level: 3, category: .compile)
             return nil
         }
         // 模拟器 / macOS 的 machine 即 uname 架构（arm64 / x86_64）；真机是机型标识，统一按 arm64
@@ -1267,7 +1359,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         }
         // macOS App 直接从 DerivedData 运行，看路径即可
         let bundlePath = connection.clientInfo["bundlePath"] as? String ?? ""
-        if connection.platformName == "macosx", bundlePath.contains("/DerivedData/") || bundlePath.contains("/Build/Products/") {
+        if connection.platformName == "macosx" || connection.platformName == "maccatalyst", bundlePath.contains("/DerivedData/") || bundlePath.contains("/Build/Products/") {
             let ours = (derivedDataPath as NSString).standardizingPath + "/"
             if !(bundlePath as NSString).standardizingPath.hasPrefix(ours) {
                 return .foreign("它从另一个工程的构建目录运行（\(bundlePath)）")
@@ -1327,6 +1419,11 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
         let pending = json["pending"] as? [String] ?? []
         let key = inflightKey(connection, source)
         let started = inflight.removeValue(forKey: key)
+        // App 已收到并处理（无论成败）：登记为已应用。失败多半是确定性的（如加载失败），已提示用户，
+        // 重连时不再反复重试；只有没收到回报的推送才会在重连后补推
+        if let started {
+            markApplied(source, for: connection, seq: started.seq)
+        }
         let total = started.map { $0.compile + Date().timeIntervalSince($0.start) } ?? 0
         let message = json["message"] as? String ?? ""
         let name = (source as NSString).lastPathComponent
@@ -1360,6 +1457,7 @@ public final class Engine: ServerDelegate, ServerConnectionDelegate {
                                    refreshed: refreshed)
         item.pending = pending
         item.deviceName = connection.deviceName
+        item.path = source
         record(item)
     }
 

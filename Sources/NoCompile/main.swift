@@ -4,7 +4,9 @@
 //
 //  用法：
 //    nocompile --project <path> [--derived-data <path>] [--no-headers] [--no-resources] [--manual]
-//    nocompile <file.swift> ...   # 在运行中的实例外，一次性重编指定文件（配合 --project）
+//    nocompile <path/to/App.xcworkspace>          # 工程路径也可以直接作为位置参数
+//    nocompile selftest <project> <platform> <file> [derivedData] [--arch <arm64|x86_64>]
+//    nocompile --version
 //
 
 import Foundation
@@ -61,15 +63,23 @@ func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?
     var headers = true
     var resources = true
     var manual = false
+    /// 取选项的值；缺失时报错退出，避免把下一个选项误当成值或静默忽略
+    func value(after index: Int) -> String {
+        guard index + 1 < args.count, !args[index + 1].hasPrefix("-") else {
+            fail("选项 \(args[index]) 缺少参数值")
+        }
+        return args[index + 1]
+    }
     var i = 1
     while i < args.count {
-        switch args[i] {
+        let argument = args[i]
+        switch argument {
         case "--project", "-p":
+            project = value(after: i)
             i += 1
-            if i < args.count { project = args[i] }
         case "--derived-data", "-d":
+            derivedData = value(after: i)
             i += 1
-            if i < args.count { derivedData = args[i] }
         case "--no-headers":
             headers = false
         case "--no-resources":
@@ -79,12 +89,28 @@ func parseArguments(_ args: [String]) -> (project: String?, derivedData: String?
         case "--help", "-h":
             printUsage()
             exit(0)
+        case "--version", "-v":
+            print("nocompile \(NCProtocol.clientVersion)")
+            exit(0)
         default:
-            break
+            // 直接给出工程路径也可以
+            let ext = (argument as NSString).pathExtension
+            if !argument.hasPrefix("-"), project == nil, ext == "xcodeproj" || ext == "xcworkspace" {
+                project = argument
+            } else {
+                // 拼错的选项（如 --derived-dat）不能静默忽略，否则用户以为设置生效了
+                fail("无法识别的参数：\(argument)（nocompile --help 查看用法）")
+            }
         }
         i += 1
     }
     return (project, derivedData, headers, resources, manual)
+}
+
+/// 输出错误并以非零状态退出
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data(("❌ " + message + "\n").utf8))
+    exit(1)
 }
 
 func printUsage() {
@@ -93,6 +119,8 @@ func printUsage() {
 
     用法：
       nocompile --project <工程路径> [选项]
+      nocompile <工程路径> [选项]
+      nocompile selftest <工程路径> <iphonesimulator|iphoneos|macosx> <源文件> [DerivedData] [--arch <arm64|x86_64>]
 
     选项：
       -p, --project <path>        .xcodeproj / .xcworkspace 路径（必填）
@@ -100,6 +128,7 @@ func printUsage() {
           --no-headers            不监听头文件变更
           --no-resources          不热重载 storyboard / xib / 图片资源
           --manual                关闭保存即注入，仅手动触发
+      -v, --version               显示版本
       -h, --help                  显示帮助
 
     接入 App：在 Debug 配置的 Other Linker Flags 添加
@@ -176,6 +205,9 @@ guard let project = parsed.project else {
     printUsage()
     exit(1)
 }
+guard FileManager.default.fileExists(atPath: project) else {
+    fail("工程不存在：\(project)")
+}
 
 // 统一用绝对路径，确保 FSEvents 监听正确
 func absolutePath(_ path: String) -> String {
@@ -196,6 +228,21 @@ engine.start()
 
 print("NoCompile 正在监听：\(project)")
 print("按 Ctrl+C 退出")
+
+// Ctrl+C / kill 时先停止引擎（关闭端口与连接、停止监听），再退出
+signal(SIGINT, SIG_IGN)
+signal(SIGTERM, SIG_IGN)
+var signalSources: [DispatchSourceSignal] = []
+for signalNumber in [SIGINT, SIGTERM] {
+    let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+    source.setEventHandler {
+        print("\n正在退出…")
+        engine.stop()
+        exit(0)
+    }
+    source.resume()
+    signalSources.append(source)
+}
 
 // 保持运行
 RunLoop.main.run()

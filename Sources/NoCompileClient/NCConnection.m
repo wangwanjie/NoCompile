@@ -4,7 +4,8 @@
 //  线程约定：读循环独占 _ioQueue，写入在 _writeQueue 上串行执行。
 //  关闭时只 shutdown 唤醒阻塞的读写，描述符本身由读循环退出后在写队列上关闭——
 //  这样任何线程都不会在 close 之后再用到这个 fd 号（它可能已被 App 复用为别的文件，
-//  在 guarded fd 上误操作会触发 EXC_GUARD 崩溃）。
+//  在 guarded fd 上误操作会触发 EXC_GUARD 崩溃）。shutdown 与最终的 close(fd) 在同一把锁内
+//  互斥执行，并以 _fdClosed 标记，避免 close 线程被抢占后对已关闭、已被复用的 fd 号再 shutdown。
 //
 
 #if DEBUG || NOCOMPILE_FORCE_ENABLE
@@ -26,6 +27,9 @@
     atomic_bool _open;
     /// open 是否调用过：没调用过的连接由 dealloc 负责关闭描述符
     atomic_bool _started;
+    /// 保护 shutdown 与 close(fd)，见文件头说明
+    NSLock *_fdLock;
+    BOOL _fdClosed;
 }
 
 - (instancetype)initWithSocket:(int)fd {
@@ -34,6 +38,7 @@
         _fd = fd;
         atomic_init(&_open, false);
         atomic_init(&_started, false);
+        _fdLock = [NSLock new];
         _ioQueue = dispatch_queue_create("com.nocompile.connection.read", DISPATCH_QUEUE_SERIAL);
         _writeQueue = dispatch_queue_create("com.nocompile.connection.write", DISPATCH_QUEUE_SERIAL);
         [self configureSocket];
@@ -70,6 +75,16 @@
     int on = 1;
     setsockopt(_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     setsockopt(_fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+    // TCP 保活：Wi-Fi 连接时 Mac 休眠、断网或换网络不会发来 FIN，读循环会永远阻塞、不再重连。
+    // 空闲 30 秒后开始探测，每 10 秒一次，连续 3 次无应答即判定断开（约 1 分钟）。
+    // 由内核应答探测，App 停在断点时连接也不会被误判断开。非 TCP 套接字（单元测试的 socketpair）设置失败无影响
+    setsockopt(_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+    int idle = 30;
+    int interval = 10;
+    int count = 3;
+    setsockopt(_fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+    setsockopt(_fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(_fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
 }
 
 - (BOOL)isOpen {
@@ -94,7 +109,11 @@
         return;
     }
     // 只唤醒阻塞中的读写；描述符由读循环退出时关闭
-    shutdown(_fd, SHUT_RDWR);
+    [_fdLock lock];
+    if (!_fdClosed) {
+        shutdown(_fd, SHUT_RDWR);
+    }
+    [_fdLock unlock];
 }
 
 #pragma mark - 读
@@ -157,9 +176,13 @@
                                      userInfo:@{ NSLocalizedDescriptionKey: reason }];
     [self.delegate connection:self didCloseWithError:error];
     // 写队列上排在前面的写入会因 shutdown 立即失败，之后再关闭描述符
-    int fd = _fd;
     dispatch_async(_writeQueue, ^{
-        close(fd);
+        [self->_fdLock lock];
+        if (!self->_fdClosed) {
+            self->_fdClosed = YES;
+            close(self->_fd);
+        }
+        [self->_fdLock unlock];
     });
 }
 
@@ -171,6 +194,11 @@
     }
     NSData *jsonData = nil;
     if (json) {
+        // 含非 JSON 类型（NSDate、NSData 等）时 dataWithJSONObject: 会抛异常让宿主 App 崩溃，先校验，不合法就丢弃整帧
+        if (![NSJSONSerialization isValidJSONObject:json]) {
+            NSLog(@"[NoCompile] 消息含无法序列化为 JSON 的内容，已丢弃（类型 %u）", (unsigned)type);
+            return;
+        }
         jsonData = [NSJSONSerialization dataWithJSONObject:json options:0 error:NULL];
     }
     NCFrameHeader header = {0};

@@ -11,7 +11,7 @@ public enum NCProtocol {
     public static let version: Int = 1
     /// 客户端版本：须与 Sources/NoCompileClient/NCProtocol.h 的 NC_CLIENT_VERSION、
     /// App/project.yml 的 MARKETING_VERSION 同步更新。仅用于展示与诊断，不参与兼容性判断
-    public static let clientVersion: String = "0.2.8"
+    public static let clientVersion: String = "0.2.9"
     /// 客户端修订号：须与 NCProtocol.h 的 NC_CLIENT_REVISION 一致。握手时比对，不一致则不推送热重载并提示重新编译 App。
     /// 只有客户端（Sources/NoCompileClient）的行为或与 Mac 端的交互发生不兼容变化时才递增；发版改版本号不需要动它
     public static let clientRevision: Int = 1
@@ -55,7 +55,8 @@ public enum NCFrameCodec {
 
     public static func encode(_ message: NCMessage) -> Data {
         var jsonData = Data()
-        if let json = message.json {
+        // 含 Date、NaN 等非法 JSON 内容时 JSONSerialization 会抛 Objective-C 异常（try? 拦不住）导致崩溃，先校验
+        if let json = message.json, JSONSerialization.isValidJSONObject(json) {
             jsonData = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
         }
         let payload = message.data ?? Data()

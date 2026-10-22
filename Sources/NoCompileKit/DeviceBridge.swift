@@ -285,7 +285,8 @@ public final class DeviceBridge {
         }
         let length = headerData.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
         let bodyLength = Int(length) - 16
-        guard bodyLength > 0, let body = readFully(fd: fd, count: bodyLength) else {
+        // usbmuxd 的响应是很小的 plist，异常的长度字段不能导致分配数 GB 内存
+        guard bodyLength > 0, bodyLength <= 4 * 1024 * 1024, let body = readFully(fd: fd, count: bodyLength) else {
             return nil
         }
         return (try? PropertyListSerialization.propertyList(from: body, options: [], format: nil)) as? [String: Any]

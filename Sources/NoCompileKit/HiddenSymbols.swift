@@ -266,7 +266,9 @@ public enum HiddenSymbols {
             let is64 = magicBE == 0xcafe_babf
             let count = Int(head.be32(at: 4))
             let entrySize = is64 ? 32 : 20
-            guard count > 0, count < 32, let table = read(handle, offset: 8, count: count * entrySize) else {
+            // 短读（文件正在被链接器改写）时 table 不足，按完整长度校验，避免越界读取
+            guard count > 0, count < 32, let table = read(handle, offset: 8, count: count * entrySize),
+                  table.count == count * entrySize else {
                 return nil
             }
             for i in 0 ..< count {
@@ -350,16 +352,26 @@ public enum HiddenSymbols {
     }
 }
 
+/// 越界时返回 0 而不是读到缓冲区之外：调用方都会再校验魔数 / 命令大小，0 会被当作无效数据丢弃
 private extension Data {
     func le32(at offset: Int) -> UInt32 {
+        guard offset >= 0, offset + 4 <= count else {
+            return 0
+        }
         return withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
     }
 
     func be32(at offset: Int) -> UInt32 {
+        guard offset >= 0, offset + 4 <= count else {
+            return 0
+        }
         return withUnsafeBytes { UInt32(bigEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
     }
 
     func be64(at offset: Int) -> UInt64 {
+        guard offset >= 0, offset + 8 <= count else {
+            return 0
+        }
         return withUnsafeBytes { UInt64(bigEndian: $0.loadUnaligned(fromByteOffset: offset, as: UInt64.self)) }
     }
 }

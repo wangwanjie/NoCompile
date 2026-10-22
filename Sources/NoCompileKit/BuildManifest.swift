@@ -213,10 +213,8 @@ enum BuildManifest {
         }
         if let dash = configuration.lastIndex(of: "-") {
             let suffix = String(configuration[configuration.index(after: dash)...])
-            let known: Set<String> = ["iphoneos", "iphonesimulator", "macosx", "maccatalyst", "appletvos", "appletvsimulator",
-                                      "watchos", "watchsimulator", "xros", "xrsimulator"]
-            if known.contains(suffix) {
-                return suffix
+            if ParsedCommands.knownPlatformDirectorySuffixes.contains(suffix) {
+                return RawCompileCommand.normalizedPlatform(suffix)
             }
         }
         // 无平台后缀：macOS 构建。归档路径里的配置目录同样落在这一类
