@@ -8,11 +8,17 @@
 
 修改代码，保存，立即在运行中的 App 看到效果，无需等待整个工程重新编译。
 
-[下载最新版](https://github.com/wangwanjie/NoCompile/releases/latest) · [接入指南](Docs/Integration.md) · [架构与原理](Docs/Architecture.md) · [示例工程](Examples/NoCompileExample)
+**下载：[Apple 芯片（arm64）](https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_arm64.dmg) · [Intel（x86_64）](https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_x86_64.dmg)**
+
+[所有版本](https://github.com/wangwanjie/NoCompile/releases) · [接入指南](Docs/Integration.md) · [架构与原理](Docs/Architecture.md) · [示例工程](Examples/NoCompileExample)
 
 </div>
 
-<img src="Docs/images/Screenshot.png" alt="NoCompile 控制台与 Mac 示例 App：保存源文件后，约 1.5 秒即在运行中的 App 里生效">
+## 主界面
+
+<img src="Docs/images/Screenshot.png" alt="NoCompile 控制台与 iOS 模拟器中的示例 App：分别修改 Swift、Objective-C、C 文件并保存，0.3～0.8 秒即在运行中的 App 里生效">
+
+控制台左侧是已连接的 App（模拟器、真机、macOS 各一台设备一个 App）与最近的注入记录（成功 / 失败数、平均耗时；右键可在 Xcode 中打开对应文件，编译失败时直接定位到出错行），右侧是按类别着色、可筛选和搜索的日志。顶栏可切换工程、开关「保存即注入」、手动「检查改动」。菜单栏的 ⚡ 图标提供同样的入口。
 
 ---
 
@@ -51,7 +57,7 @@
 └─────────────────────┘                          └──────────────────────┘
 ```
 
-- **Mac 端引擎**（`NoCompileKit`）：定位 DerivedData、解析 `.xcactivitylog`、单文件重编、链接、签名、通过 socket 推送。被命令行工具 `nocompile` 和菜单栏 App `NoCompileApp` 共用。
+- **Mac 端引擎**（`NoCompileKit`）：定位 DerivedData、解析 `.xcactivitylog`、单文件重编、链接、签名、通过 socket 推送。被命令行工具 `nocompile` 和菜单栏 App `NoCompile.app` 共用。
 - **客户端**（`NoCompileClient`）：以 Debug-only 的库形式链入 App（SPM / CocoaPods / Carthage），或以 bundle 形式在运行时加载，自动连接 Mac 端，收到 dylib 后在进程内完成替换。
 
 详见 [Docs/Architecture.md](Docs/Architecture.md)。
@@ -60,7 +66,14 @@
 
 ### 1. 安装 NoCompile
 
-从 [Releases](https://github.com/wangwanjie/NoCompile/releases/latest) 按芯片下载对应的 DMG：Apple 芯片选 `NoCompile_vX.Y.Z_arm64.dmg`，Intel 选 `NoCompile_vX.Y.Z_x86_64.dmg`，拖入「应用程序」即可。安装包已经过 Apple 公证，后续版本会通过 Sparkle 自动更新。
+按芯片下载对应的 DMG，拖入「应用程序」即可：
+
+| 芯片 | 下载（始终是最新版） |
+|---|---|
+| Apple 芯片（M 系列） | [NoCompile_arm64.dmg](https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_arm64.dmg) |
+| Intel | [NoCompile_x86_64.dmg](https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_x86_64.dmg) |
+
+不确定芯片类型：点击屏幕左上角的苹果菜单 → 关于本机，「芯片」一栏显示 Apple M 系列选 arm64，显示 Intel 选 x86_64。每个 Release 都附带 `SHA256SUMS.txt` 供核对。安装包已经过 Apple 公证，后续版本通过 Sparkle 自动更新，且只会收到同架构的更新；在 Apple 芯片上误装了 Intel 版时，下次更新会自动换成 arm64 版本。
 
 也可以从源码构建（需要 [XcodeGen](https://github.com/yonaskolb/XcodeGen)）：
 
@@ -128,11 +141,11 @@ Scripts/build-app.sh --open
 Scripts/build-app.sh --open --project /path/to/YourApp.xcworkspace
 ```
 
-日志可在 ⚡ → 显示日志 查看，同时写入 `~/Library/Logs/NoCompile/NoCompile.log`。遇到问题时点控制台日志栏的 📦 按钮（或菜单 ⚡ → 导出诊断包…）导出 zip，里面有各环节的诊断日志、编译失败的完整命令与输出、主线程卡顿时自动采集的调用栈，发给开发者即可排查。
+日志可在 ⚡ → 打开控制台 查看，同时写入 `~/Library/Logs/NoCompile/NoCompile.log`。遇到问题时点控制台日志栏的 📦 按钮（或菜单 ⚡ → 导出诊断包…）导出 zip，里面有各环节的诊断日志、编译失败的完整命令与输出、主线程卡顿时自动采集的调用栈，发给开发者即可排查。
 
 然后 `Command+R` 运行你的 App。编辑任意源文件并保存，几秒后就能在 App 看到改动生效。
 
-状态栏图标颜色：绿色表示就绪，黄色表示执行中，红色表示出错。
+状态栏图标颜色：跟随菜单栏文字颜色表示就绪，橙色表示正在编译 / 注入，红色表示出错，灰色表示未在监听。
 
 ### 验证环境
 
@@ -169,7 +182,7 @@ python3 E2E/run_e2e.py --clean
 
 - 必须先在 Xcode 完整构建过一次，NoCompile 才能从构建日志拿到编译命令。
 - storyboard、xib、图片与新增源文件也支持热重载，范围与限制见 [接入指南](Docs/Integration.md#资源与新增文件)。
-- 真机注入需要 iOS 13+，并用与 App 一致的开发者身份签名（NoCompile 会从构建日志自动提取签名身份）。
+- 支持 iOS / tvOS 15+（Xcode 27 的最低部署目标）、macOS 12+，Mac Catalyst 为实验性支持；真机注入需用与 App 一致的开发者身份签名（NoCompile 会从构建日志自动提取签名身份）。
 - 暂不兼容 Whole Module Optimization 和编译缓存（`COMPILATION_CACHE_ENABLE_CACHING`），Debug 配置默认关闭它们即可。
 
 ## SwiftUI
@@ -188,27 +201,45 @@ Sources/
   nocompile/         命令行工具
 App/                 NoCompile.app（Xcode 工程由 project.yml 生成，集成 Sparkle）
 Examples/            iOS / macOS 示例工程（workspace 多模块 + 端到端自测）
-Scripts/             构建、图标、打包、公证、发布脚本
+Tests/               单元测试（swift test）
+Scripts/             构建、版本号、图标、打包、公证、发布脚本
 Docs/                架构、接入指南、发布说明
 ```
 
+## 开发与测试
+
+```bash
+swift build                # 构建引擎、客户端与命令行工具
+swift test                 # 单元测试：引擎（日志解析、分词、协议、头文件分析、版本一致性等）与客户端（帧收发、ObjC 注入、布局变化保护）
+Scripts/build-app.sh --open   # 构建并启动 NoCompile.app
+```
+
+改动引擎或客户端后，再用示例工程的端到端自测回归（见上文「试一试：示例工程」）。
+
 ## 发布新版本
 
-1. 修改 `App/project.yml` 中的 `MARKETING_VERSION` 与 `CURRENT_PROJECT_VERSION`，并同步 `NoCompile.podspec` 的 `s.version` 与 `Client/project.yml` 的 `MARKETING_VERSION`。
-2. 分别构建、签名并公证 arm64 与 x86_64 两个 DMG（会先用 `Scripts/build-client-bundles.sh` 构建通用的客户端 bundle 并放进 App；`--arch arm64` 可只构建单个架构）：
+1. 改版本号：一次改齐 App、客户端工程、podspec 与两端协议常量，构建号自动加 1；写好 `Docs/ReleaseNotes/X.Y.Z.md`：
+
+   ```bash
+   Scripts/bump_version.sh X.Y.Z
+   ```
+
+2. 分别构建、签名并公证 arm64 与 x86_64 两个 DMG。脚本会先构建五个客户端 bundle（缺任一 SDK 即失败），把 App 内的 Sparkle 等依赖精简为单一架构并逐个校验，签名后做严格校验，生成 DMG 与 `.sha256`：
 
    ```bash
    Scripts/build_dmg.sh
    ```
 
-3. 创建 GitHub Release、上传两个 DMG，并更新 Sparkle feed：各架构的 App 分别读取 `appcast-arm64.xml` / `appcast-x86_64.xml`；`appcast.xml` 同时列出两个架构的包，供 0.2.3 及更早的通用版升级：
+3. 提交并推送版本号改动（Release 的 tag 打在本地 HEAD 上，HEAD 必须已推送），然后创建 GitHub Release：上传两个 DMG、不带版本号的 `NoCompile_<arch>.dmg`（README 的固定下载地址）与 `SHA256SUMS.txt`，发布说明末尾自动追加下载表格，并更新 Sparkle feed（已发布的旧条目原样保留，发布后自检下载地址与文件大小）：
 
    ```bash
-   Scripts/publish_github_release.sh --notes-file Docs/ReleaseNotes/X.Y.Z.md
+   HTTPS_PROXY=http://127.0.0.1:7890 Scripts/publish_github_release.sh --notes-file Docs/ReleaseNotes/X.Y.Z.md
    ```
 
+   各架构的 App 分别读取 `appcast-arm64.xml` / `appcast-x86_64.xml`；`appcast.xml` 同时列出两个架构的包，供 0.2.3 及更早的通用版升级。`--draft` / `--prerelease` 不更新 feed。
+
 4. 提交并推送 `appcast.xml`、`appcast-arm64.xml`、`appcast-x86_64.xml`，已安装的用户会收到更新提示。
-5. 发布 CocoaPods（tag 为 `vX.Y.Z`，由上一步的 Release 创建）：
+5. 发布 CocoaPods：
 
    ```bash
    pod trunk push NoCompile.podspec

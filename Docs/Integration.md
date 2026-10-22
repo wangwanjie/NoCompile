@@ -219,9 +219,13 @@ nocompile --project /path/to/YourApp.xcworkspace
 
 0. 客户端必须打进 App 包里：用方式 A / B / C / E / G。方式 D、F 从 Mac 路径加载，真机上无效。
 1. 用数据线连接设备（USB 为主通道，走 usbmuxd）。
-2. 真机注入需要 iOS 13+。
+2. 真机注入需要 iOS / tvOS 15+（Xcode 27 的最低部署目标）。
 3. dylib 要用与 App 一致的开发者身份签名。NoCompile 会从构建日志自动提取签名身份，所以需要先在 Xcode 成功跑过一次真机构建。
-4. 若要走 Wi-Fi，设置环境变量 `NOCOMPILE_HOST=<Mac 的 IP>` 后再运行 App。
+4. 若要走 Wi-Fi，设置环境变量 `NOCOMPILE_HOST=<Mac 的 IP>` 后再运行 App。两端都开启了 TCP 保活：Mac 休眠、设备断网等情况下约 1 分钟内判定断开，App 随后自动重连，期间漏掉的改动会补推。
+
+## Mac Catalyst（实验性）
+
+Catalyst App 与 macOS App 一样主动连接本机的 NoCompile（端口 21890），按 `-target …-macabi` 的编译命令重编，使用临时签名，接入方式同 iOS（SPM / CocoaPods / bundle 均可）。
 
 ## 界面如何刷新（零侵入）
 
