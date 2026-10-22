@@ -32,8 +32,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             model.requestNotificationPermission()
         }
 
+        if UpdateManager.isRunningUnderRosetta {
+            model.appendLog("当前运行的是 Intel 版 NoCompile（经 Rosetta 转译），这台 Mac 是 Apple 芯片：检查更新时会自动换成 arm64 版本，"
+                + "也可以从 GitHub Releases 下载 NoCompile_arm64.dmg", level: 2)
+        }
+
         // 优先使用启动参数 --project，其次恢复上次的工程
-        if let path = launchArgumentProject(), FileManager.default.fileExists(atPath: path) {
+        let argumentProject = launchArgumentProject()
+        if let path = argumentProject, !FileManager.default.fileExists(atPath: path) {
+            model.appendLog("启动参数 --project 指定的工程不存在：\(path)", level: 3)
+        }
+        if let path = argumentProject, FileManager.default.fileExists(atPath: path) {
             model.open(project: path)
         } else if model.hasProject, FileManager.default.fileExists(atPath: preferences.projectPath) {
             model.restartEngine()

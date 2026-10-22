@@ -31,7 +31,8 @@ final class HangWatchdog {
 
     private let lock = NSLock()
     /// 已投递、主线程尚未处理的心跳的投递时间
-    private var pendingSince: Date?
+    /// 心跳发出的时刻（单调时钟，见 now()）；nil 表示上一次心跳已被主线程处理
+    private var pendingSince: TimeInterval?
 
     private init() {}
 
@@ -57,10 +58,16 @@ final class HangWatchdog {
         thread.start()
     }
 
+    /// 单调时钟（开机以来的秒数，系统睡眠期间不增长）。不能用 Date：Mac 睡眠唤醒或调整系统时间后，
+    /// 墙钟会跳变，被误判为主线程卡顿并去暂停主线程采样
+    private func now() -> TimeInterval {
+        return ProcessInfo.processInfo.systemUptime
+    }
+
     private func run() {
-        var hangStart: Date?
+        var hangStart: TimeInterval?
         var samples: [String] = []
-        var nextSample = Date.distantFuture
+        var nextSample = TimeInterval.greatestFiniteMagnitude
         while true {
             Thread.sleep(forTimeInterval: interval)
             lock.lock()
@@ -70,12 +77,12 @@ final class HangWatchdog {
             guard let since else {
                 // 上一次心跳已被处理：若刚结束一次卡顿，写下报告
                 if let start = hangStart {
-                    report(duration: Date().timeIntervalSince(start), samples: samples)
+                    report(duration: now() - start, samples: samples)
                     hangStart = nil
                     samples.removeAll()
                 }
                 lock.lock()
-                pendingSince = Date()
+                pendingSince = now()
                 lock.unlock()
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -86,19 +93,19 @@ final class HangWatchdog {
                 continue
             }
 
-            let elapsed = Date().timeIntervalSince(since)
+            let elapsed = now() - since
             guard elapsed >= threshold else {
                 continue
             }
             if hangStart == nil {
                 hangStart = since
-                nextSample = Date()
+                nextSample = now()
                 Diagnostics.shared.log("卡顿", "主线程已 \(String(format: "%.1f", elapsed))s 无响应，开始采集调用栈", level: .warning)
             }
-            if samples.count < maxSamplesPerHang, Date() >= nextSample {
+            if samples.count < maxSamplesPerHang, now() >= nextSample {
                 let stack = captureMainThreadStack()
                 samples.append("—— 第 \(samples.count + 1) 次采样（已卡 \(String(format: "%.1f", elapsed))s）——\n\(stack)")
-                nextSample = Date().addingTimeInterval(3)
+                nextSample = now() + 3
             }
         }
     }

@@ -40,8 +40,14 @@ private struct GeneralSettings: View {
             SettingsSection(title: "更新") {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("当前版本 \(UpdateManager.versionDescription)")
+                        Text("当前版本 \(UpdateManager.versionDescription) · \(UpdateManager.appArchitecture)")
                             .font(.system(size: 13))
+                        if UpdateManager.isRunningUnderRosetta {
+                            Text("这台 Mac 是 Apple 芯片，建议安装 arm64 版本；检查更新时会自动换成 arm64 版本。")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if let date = updater.lastCheckDate {
                             Text("上次检查：\(date.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 11))
@@ -104,12 +110,12 @@ private struct GeneralSettings: View {
                               detail: "注入成功与失败分别播放不同提示音。",
                               isOn: $preferences.playsSounds)
                 if #available(macOS 13.0, *) {
-                    SettingToggle(title: "登录时自动启动", detail: nil, isOn: $launchAtLogin)
+                    // 只在用户拨动开关时注册 / 注销：onAppear 同步状态不能触发注册，失败后回写状态也不能再触发注销
+                    SettingToggle(title: "登录时自动启动", detail: nil, isOn: Binding(
+                        get: { launchAtLogin },
+                        set: { updateLaunchAtLogin($0) }))
                         .onAppear {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
-                        }
-                        .onChange(of: launchAtLogin) { enabled in
-                            updateLaunchAtLogin(enabled)
                         }
                 }
             }
@@ -123,15 +129,22 @@ private struct GeneralSettings: View {
 
     @available(macOS 13.0, *)
     private func updateLaunchAtLogin(_ enabled: Bool) {
+        let service = SMAppService.mainApp
         do {
             if enabled {
-                try SMAppService.mainApp.register()
+                try service.register()
             } else {
-                try SMAppService.mainApp.unregister()
+                try service.unregister()
             }
         } catch {
             model.appendLog("设置登录启动失败：\(error.localizedDescription)", level: 3)
-            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+        // 以系统的实际状态为准
+        launchAtLogin = service.status == .enabled
+        if enabled, service.status == .requiresApproval {
+            // 用户曾在系统设置里关掉过该登录项：需要到「登录项」里重新允许
+            model.appendLog("登录启动需要在「系统设置 → 通用 → 登录项」中允许 NoCompile", level: 2)
+            SMAppService.openSystemSettingsLoginItems()
         }
     }
 }
@@ -202,6 +215,13 @@ private struct ProjectSettings: View {
         .onAppear {
             derivedDataDraft = preferences.customDerivedData
             excludedDraft = preferences.excludedKeywords
+        }
+        // 「恢复默认设置」等外部修改后同步输入框，避免显示旧值
+        .onReceive(preferences.$customDerivedData) { value in
+            derivedDataDraft = value
+        }
+        .onReceive(preferences.$excludedKeywords) { value in
+            excludedDraft = value
         }
     }
 
@@ -274,19 +294,17 @@ private struct AdvancedSettings: View {
             }
             SettingsSection(title: "重置") {
                 Button("恢复默认设置") {
-                    preferences.resetToDefaults()
+                    model.resetPreferences()
                 }
             }
         }
     }
 
     private func clearCache() {
-        let dir = Engine.outputDirectory
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-        for file in files {
-            try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(file))
+        cacheMessage = "清理中…"
+        model.clearCompileCache { count in
+            cacheMessage = "已清理 \(count) 个文件"
         }
-        cacheMessage = "已清理 \(files.count) 个文件"
     }
 }
 

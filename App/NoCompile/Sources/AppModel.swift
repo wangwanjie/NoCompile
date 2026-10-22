@@ -50,7 +50,8 @@ final class AppModel: ObservableObject, EngineDelegate {
             try? fm.removeItem(at: previous)
             try? fm.moveItem(at: logFileURL, to: previous)
         }
-        return LogFileWriter(url: logFileURL, truncate: true)
+        // 长时间运行、App 日志转发密集时文件会持续变大：超过 50MB 轮转为 NoCompile.1.log
+        return LogFileWriter(url: logFileURL, truncate: true, maxBytes: 50 * 1024 * 1024)
     }()
 
     /// 尚未刷到界面的日志：日志密集时合并成一次界面更新，避免逐行刷新拖慢主线程
@@ -93,9 +94,25 @@ final class AppModel: ObservableObject, EngineDelegate {
 
     /// 打开工程并启动引擎
     func open(project path: String) {
+        // 最近列表里的工程可能已被移动或删除：提示并移出列表，不覆盖当前工程
+        guard FileManager.default.fileExists(atPath: path) else {
+            appendLog("工程不存在，已从最近打开列表移除：\(path)", level: 3)
+            preferences.forgetProject(path)
+            return
+        }
         preferences.projectPath = path
         preferences.rememberProject(path)
         restartEngine()
+    }
+
+    /// 从最近打开列表移除工程（不影响当前工程）
+    func forgetProject(_ path: String) {
+        preferences.forgetProject(path)
+    }
+
+    /// 清空最近打开列表（保留当前工程）
+    func clearRecentProjects() {
+        preferences.recentProjects = preferences.projectPath.isEmpty ? [] : [preferences.projectPath]
     }
 
     /// 以当前偏好重启引擎（切换工程、修改 DerivedData / 排除规则后调用）
@@ -104,9 +121,16 @@ final class AppModel: ObservableObject, EngineDelegate {
         engine = nil
         clients = []
         pendingFiles = []
+        // 旧引擎的状态（如红色的出错状态）不能带到新工程上
+        state = .idle
         let path = preferences.projectPath
-        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
+        guard !path.isEmpty else {
             isRunning = false
+            return
+        }
+        guard FileManager.default.fileExists(atPath: path) else {
+            isRunning = false
+            appendLog("工程不存在：\(path)。可能已被移动或删除，请重新选择工程", level: 3)
             return
         }
         let derivedData = preferences.customDerivedData.trimmingCharacters(in: .whitespaces)
@@ -207,6 +231,34 @@ final class AppModel: ObservableObject, EngineDelegate {
             return
         }
         open(project: url.path)
+    }
+
+    /// 清理编译缓存：交给引擎在其工作队列上执行，避免删掉正在编译、尚未推送的 dylib。
+    /// 没有运行中的引擎时直接清理。completion 在主线程回调，参数为删除的文件数
+    func clearCompileCache(completion: @escaping (Int) -> Void) {
+        if let engine {
+            engine.clearOutputs { count in
+                DispatchQueue.main.async {
+                    completion(count)
+                }
+            }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let count = Engine.removeOutputs()
+            DispatchQueue.main.async {
+                completion(count)
+            }
+        }
+    }
+
+    /// 恢复默认设置：DerivedData、排除规则等需要重启引擎才生效的项一并应用
+    func resetPreferences() {
+        let needsRestart = !preferences.customDerivedData.isEmpty || !preferences.excludedKeywords.isEmpty
+        preferences.resetToDefaults()
+        if needsRestart, hasProject {
+            restartEngine()
+        }
     }
 
     // MARK: - 偏好联动

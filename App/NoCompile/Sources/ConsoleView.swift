@@ -153,10 +153,14 @@ private struct HeaderBar: View {
                         Button {
                             model.open(project: path)
                         } label: {
-                            // 工程名 + 所在目录：同名工程（如多份 kugou.xcworkspace）也能分清
-                            Text(Preferences.projectTitle(path))
+                            // 工程名 + 所在目录：同名工程（如多份 kugou.xcworkspace）也能分清；已不存在的工程标注出来
+                            Text(Preferences.projectTitle(path) + (FileManager.default.fileExists(atPath: path) ? "" : "（已不存在）"))
                         }
                         .help(path)
+                    }
+                    Divider()
+                    Button("清空最近打开") {
+                        model.clearRecentProjects()
                     }
                 } label: {
                     Label("最近", systemImage: "clock.arrow.circlepath")
@@ -348,7 +352,7 @@ private struct ClientCard: View {
 
     private var symbol: String {
         switch client.platform {
-        case "macosx": return "macwindow"
+        case "macosx", "maccatalyst": return "macwindow"
         case "simulator": return client.machine.lowercased().contains("ipad") ? "ipad" : "iphone"
         default: return client.machine.lowercased().hasPrefix("ipad") ? "ipad" : "iphone"
         }
@@ -669,6 +673,15 @@ private struct RecordList: View {
                         }
                         Button("复制") {
                             copy(record)
+                        }
+                        if let location = record.sourceLocation {
+                            Divider()
+                            Button(location.line.map { "在 Xcode 中打开（第 \($0) 行）" } ?? "在 Xcode 中打开") {
+                                XcodeOpener.open(path: location.path, line: location.line)
+                            }
+                            Button("在访达中显示") {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: location.path)])
+                            }
                         }
                         Divider()
                         Button("删除此记录") {
@@ -1290,5 +1303,29 @@ struct VisualEffect: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
+    }
+}
+
+/// 在 Xcode 中打开文件并定位到行：用 Xcode 自带的 xed 命令，Xcode 已打开该工程时直接跳转
+enum XcodeOpener {
+    static func open(path: String, line: Int?) {
+        guard FileManager.default.fileExists(atPath: path) else {
+            AppModel.shared.appendLog("文件不存在：\(path)", level: 3)
+            return
+        }
+        var arguments: [String] = []
+        if let line {
+            arguments.append(contentsOf: ["--line", "\(line)"])
+        }
+        arguments.append(path)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xed")
+        process.arguments = arguments
+        do {
+            try process.run()
+        } catch {
+            // 没有安装命令行工具等情况：退回用默认应用打开
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        }
     }
 }

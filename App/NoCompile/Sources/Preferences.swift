@@ -131,6 +131,11 @@ final class Preferences: ObservableObject {
         recentProjects = Array(list.prefix(8))
     }
 
+    /// 从最近打开列表移除工程
+    func forgetProject(_ path: String) {
+        recentProjects = recentProjects.filter { $0 != path }
+    }
+
     /// 恢复默认设置（保留当前工程与最近工程）
     func resetToDefaults() {
         injectsOnSave = true
