@@ -3,8 +3,13 @@
 //  类型判定修复
 //
 //  被注入后，dylib 内 [Foo new] 得到的是"新 Foo"，App 其余代码持有的是"旧 Foo"，
-//  两者不是同一个 Class 对象。这会让 isKindOfClass: / isMemberOfClass: 以及 Swift 的
-//  as? 判定失败。这里登记新旧类的等价关系，并改写判定逻辑使其按"原始类"比较。
+//  两者不是同一个 Class 对象。这会让 isKindOfClass: / isMemberOfClass: 判定失败。
+//  这里登记新旧类的等价关系，并改写判定逻辑使其按"原始类"比较。
+//
+//  覆盖范围：ObjC 的 -isKindOfClass: / -isMemberOfClass:，以及 Swift 对 ObjC 类（NSObject 子类）的 as?
+//  （运行时经 swift_dynamicCastObjCClass 走 -isKindOfClass:）。纯 Swift 类的 as? 由 swift_dynamicCastClass
+//  直接比较元数据的父类链，不经过这里；为此注入时不重绑 Swift 类的分配构造器（见 NCInjector），
+//  旧代码创建的仍是旧类实例，避免出现"新类实例被旧代码 as? 判定"的情况。
 //
 
 #if DEBUG || NOCOMPILE_FORCE_ENABLE
@@ -32,10 +37,6 @@ static Class NCCanonicalClassIn(CFDictionaryRef snapshot, Class cls) {
     }
     const void *mapped = CFDictionaryGetValue(snapshot, (__bridge const void *)cls);
     return mapped ? (__bridge Class)mapped : cls;
-}
-
-static Class NCCanonicalClass(Class cls) {
-    return NCCanonicalClassIn(atomic_load_explicit(&gAliasSnapshot, memory_order_acquire), cls);
 }
 
 void NCRegisterClassAlias(Class newClass, Class oldClass) {

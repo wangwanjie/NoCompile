@@ -93,8 +93,8 @@ static NSUInteger gInjectionCount = 0;
         [self forwardLog:level message:message];
     });
 
-#if TARGET_OS_SIMULATOR || TARGET_OS_OSX
-    // 模拟器 / macOS：主动连接本机 Mac 端
+#if TARGET_OS_SIMULATOR || TARGET_OS_OSX || TARGET_OS_MACCATALYST
+    // 模拟器 / macOS / Mac Catalyst：与 Mac 端在同一台机器上，主动连接本机 Mac 端
     [self connectLoop];
 #else
     // 真机：监听回环端口，等待 Mac 经 usbmuxd 连入；若设置了 host 则同时尝试 Wi-Fi
@@ -317,7 +317,7 @@ static NSString *NCImageUUID(const struct mach_header *header) {
     info[@"deviceName"] = env[@"SIMULATOR_DEVICE_NAME"] ?: UIDevice.currentDevice.name;
     NSString *version = env[@"SIMULATOR_RUNTIME_VERSION"] ?: UIDevice.currentDevice.systemVersion;
     info[@"systemVersion"] = [NSString stringWithFormat:@"%@ %@", UIDevice.currentDevice.systemName, version];
-#elif TARGET_OS_OSX
+#elif TARGET_OS_OSX || TARGET_OS_MACCATALYST
     NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
     info[@"deviceID"] = @"local";
     info[@"systemVersion"] = [NSString stringWithFormat:@"macOS %ld.%ld", (long)version.majorVersion, (long)version.minorVersion];
@@ -348,6 +348,9 @@ static NSString *NCImageUUID(const struct mach_header *header) {
         @"machine": @(systemInfo.machine),
 #if TARGET_OS_SIMULATOR
         @"platform": @"simulator",
+#elif TARGET_OS_MACCATALYST
+        // Mac Catalyst：TARGET_OS_OSX 为 0、TARGET_OS_IOS 为 1，必须先于真机分支判断
+        @"platform": @"maccatalyst",
 #elif TARGET_OS_OSX
         @"platform": @"macosx",
 #else
@@ -432,11 +435,20 @@ static id NCTyped(NSDictionary *json, NSString *key, Class cls) {
         NSData *dylibData = data;
         if (shimLength > 0 && shimName.length > 0) {
             shimPath = [NSTemporaryDirectory() stringByAppendingPathComponent:shimName];
-            [[data subdataWithRange:NSMakeRange(0, shimLength)] writeToFile:shimPath atomically:YES];
+            if (![[data subdataWithRange:NSMakeRange(0, shimLength)] writeToFile:shimPath atomically:YES]) {
+                [self sendInjectResult:NO message:[NSString stringWithFormat:@"无法写入符号桥接 dylib（%@），设备存储空间可能不足", shimPath]
+                                source:sourceFiles summary:nil refreshed:nil pending:nil on:connection];
+                return;
+            }
             dylibData = [data subdataWithRange:NSMakeRange(shimLength, data.length - shimLength)];
         }
         dylibPath = [NSTemporaryDirectory() stringByAppendingPathComponent:dylibName];
-        [dylibData writeToFile:dylibPath atomically:YES];
+        // 写入失败（如存储空间不足）时直接报告，否则 dlopen 报的"找不到镜像"会误导排查方向
+        if (![dylibData writeToFile:dylibPath atomically:YES]) {
+            [self sendInjectResult:NO message:[NSString stringWithFormat:@"无法写入 dylib（%@），设备存储空间可能不足", dylibPath]
+                            source:sourceFiles summary:nil refreshed:nil pending:nil on:connection];
+            return;
+        }
     } else {
         [self sendInjectResult:NO message:@"注入请求缺少 dylib" source:sourceFiles summary:nil refreshed:nil pending:nil on:connection];
         return;
