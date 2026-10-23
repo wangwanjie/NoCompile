@@ -21,7 +21,7 @@
 #define NC_PROTOCOL_VERSION 1
 /// 客户端版本：须与 Sources/NoCompileKit/Protocol.swift 的 NCProtocol.clientVersion 同步更新。
 /// 仅用于展示与诊断，不参与兼容性判断
-#define NC_CLIENT_VERSION @"0.2.10"
+#define NC_CLIENT_VERSION @"0.2.11"
 /// 客户端修订号：须与 NCProtocol.clientRevision 一致。握手时上报，不一致时 Mac 端提示重新编译 App
 /// （例如 App 包内拷贝的仍是旧 bundle）。只有客户端行为或与 Mac 端的交互发生不兼容变化时才递增
 #define NC_CLIENT_REVISION 1
