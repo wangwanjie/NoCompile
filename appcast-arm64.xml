@@ -6,6 +6,21 @@
         <description>NoCompile release feed.</description>
         <language>en</language>
         <item>
+            <title>0.2.12</title>
+            <pubDate>Fri, 23 Oct 2026 15:35:34 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.12</link>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>0.2.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.12/NoCompile_v0.2.12_arm64.dmg" length="3708836" type="application/octet-stream" sparkle:edSignature="nozSSnZ9Bke/3SvPrEeS3VVLhRYg24dUTUrxp72vrPJqUnRJq8wP+SF7f5wvGto27hLhBq+g6xPhCU2sNmj/BA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.12&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;「拷贝 bundle」方式接入后工程编译失败&lt;/strong&gt;：`[NoCompile] Copy Bundle` 阶段报 `IDENTITY\357: unbound variable` 与 `Command PhaseScriptExecution failed with a nonzero exit code`。Xcode 用系统自带的 bash 3.2 执行 Run Script，在 UTF-8 环境下它会把紧跟变量名的中文全角字符当成变量名的一部分，`nocompile_copy_bundle.sh` 因此在签名完成后退出。已修复所有同类写法，并新增测试防止再次出现&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;升级后直接重新编译即可，Run Script 调用的是 NoCompile.app 内的新脚本，工程无需改动&lt;/li&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
             <title>0.2.11</title>
             <pubDate>Fri, 23 Oct 2026 12:34:22 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.11</link>
