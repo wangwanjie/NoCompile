@@ -6,6 +6,25 @@
         <description>NoCompile release feed.</description>
         <language>en</language>
         <item>
+            <title>0.2.11</title>
+            <pubDate>Fri, 23 Oct 2026 12:34:22 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.11</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.11/NoCompile_v0.2.11_arm64.dmg" length="3708856" type="application/octet-stream" sparkle:edSignature="SPY1Zixz8me454Kv30YdpNihJvokURlLlP9bD+0xV+DYGVsTfnIi7HUVe8it9nBEIo96mhTDQBynePua7B4uBQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.11&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;Podfile 钩子接入后看不到链接参数和 Run Script&lt;/strong&gt;：启用了 `cocoapods-arm64-to-sim` 等会在 `post_integrate` 中保存工程的 CocoaPods 插件时，插件在 Podfile 钩子之后执行，用内存中的旧工程覆盖了 `nocompile_setup.py` 对 `project.pbxproj` 的修改，只剩 AppDelegate 里的加载代码。`--install-pod-hook` 生成的钩子改为在 `pod install` 成功结束、所有钩子执行完后再接入&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;用 0.2.10 生成或照抄了旧钩子的 Podfile，需要换成新钩子：删掉旧的 `post_integrate` 钩子后重新运行&lt;/li&gt;&lt;/ul&gt;
+&lt;pre&gt;&lt;code&gt;/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --uninstall-pod-hook   # 去掉带标记的旧钩子；手动粘贴的需手动删除
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --install-pod-hook&lt;/code&gt;&lt;/pre&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载，无需重新编译&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md#一键接入脚本本地调试不提交"&gt;接入指南 · 一键接入脚本&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
             <title>0.2.10</title>
             <pubDate>Fri, 23 Oct 2026 11:44:31 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.10</link>
