@@ -183,6 +183,13 @@ verify_client_bundles() {
             exit 1
         fi
     done
+    # 接入方脚本：拷贝脚本供 Run Script 调用，一键接入脚本供 Podfile 钩子调用，必须可执行
+    for name in nocompile_copy_bundle.sh nocompile_setup.py; do
+        if [[ ! -x "$app_path/Contents/Resources/$name" ]]; then
+            echo "错误: App 中缺少可执行的 $name" >&2
+            exit 1
+        fi
+    done
 }
 
 # 参数解析
