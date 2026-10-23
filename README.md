@@ -131,6 +131,16 @@ Scripts/build-app.sh --open
 > #endif
 > ```
 
+> [!TIP]
+> 接入改动不便提交、切换分支后要重新设置时，可以用一键脚本自动完成上面的「拷贝 bundle」接入（链接参数、Run Script、在 `didFinishLaunching` 最前面插入加载代码，自动区分 Swift / Objective-C 与平台），切分支前用 `--remove` 原样撤销：
+>
+> ```bash
+> /Applications/NoCompile.app/Contents/Resources/nocompile_setup.py            # 在工程目录运行
+> /Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --remove   # 撤销
+> ```
+>
+> 用 CocoaPods 的工程还可以用 `--install-pod-hook` 在 Podfile 加一个可提交的钩子，本机 `export IntegrateNoCompile=true` 后，`pod install` 会自动接入。详见 [接入指南 · 一键接入](Docs/Integration.md#一键接入脚本本地调试不提交)。
+
 链接方式在镜像加载时自动启动，bundle 方式在 `load()` 时启动，都无需再写启动代码。各方式的完整步骤与注意事项见 [接入指南](Docs/Integration.md)，真机连不上时见 [真机排查](Docs/Integration.md#真机连不上)。
 
 ### 3. 选择工程

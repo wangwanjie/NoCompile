@@ -170,6 +170,68 @@ Objective-C：
 | `NOCOMPILE_COPY_CONFIGURATIONS` | 允许拷贝的配置名，逗号分隔，例如 `Debug,Dev` |
 | `NOCOMPILE_DISABLE_COPY=1` | 临时关闭拷贝 |
 
+#### 一键接入脚本（本地调试、不提交）
+
+接入改动不想提交到仓库时，每次切换分支都要重新设置一遍。`nocompile_setup.py` 可以自动完成方式 E 的全部接入，并能原样撤销：
+
+```bash
+cd /path/to/YourProject   # 含 .xcworkspace 或 .xcodeproj 的目录
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py
+```
+
+脚本对每个 App 类型的 target、名字含 `Debug` 的配置做以下改动：
+
+1. Other Linker Flags 追加 `-Xlinker -interposable`（project 级配置里已有且 target 级用 `$(inherited)` 继承时跳过）；`EXPORTED_SYMBOLS_FILE` 有值时清空（例如只导出 `_main` 的工程），不想清空就加 `--keep-exported-symbols`；
+2. Build Phases 末尾添加 Run Script「[NoCompile] Copy Bundle」调用 `nocompile_copy_bundle.sh`，并在这些配置里设置 `ENABLE_USER_SCRIPT_SANDBOXING = NO`；
+3. 在 `application:didFinishLaunchingWithOptions:`（iOS / tvOS）、`applicationDidFinishLaunching`（macOS）或 SwiftUI `App` 的 `init()` 最前面插入加载 `NoCompile.bundle` 的代码，按文件语言生成 Swift 或 Objective-C。模拟器与 macOS 上 App 内没有 bundle 时，代码会回退到从 NoCompile.app 加载对应平台的 bundle。
+
+切换分支前撤销，切过去后再运行一次：
+
+```bash
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --remove
+git checkout other-branch
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py
+```
+
+**配合 CocoaPods 自动接入**：每次切换分支后都要 `pod install` 的工程，可以在 Podfile 里加一个钩子，用环境变量 `IntegrateNoCompile` 作开关（写法与常见的 `integrateHotReload` 之类开关一致）：
+
+```bash
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --install-pod-hook   # 在 Podfile 加钩子，提交给团队
+```
+
+生成的钩子如下（Podfile 已有 `post_integrate` 时，调用会插到它的最前面）：
+
+```ruby
+post_integrate do |installer|
+  nc_setup_script = ENV['NOCOMPILE_SETUP_SCRIPT'] || '/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py'
+  if File.exist?(nc_setup_script)
+    system('/usr/bin/python3', nc_setup_script, '--sync', File.dirname(File.expand_path(__FILE__)))
+  end
+end
+```
+
+钩子会在 `pod install` 写完工程后调用 `--sync`：`IntegrateNoCompile=true` 时接入，否则撤销之前接入的改动（本来没接入时不输出任何内容）。没装 NoCompile.app 的同事不受影响，钩子本身可以提交。要用的人在 shell 配置里打开开关：
+
+```bash
+export IntegrateNoCompile=true
+```
+
+之后切换分支的流程：
+
+```bash
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --remove   # 切换分支前撤销
+git checkout other-branch
+pod install                                                                   # 钩子自动重新接入
+```
+
+`NOCOMPILE_SETUP_SCRIPT` 可以临时把钩子指向其他位置的脚本（例如 NoCompile 仓库里的开发版本），只在本机 shell 里设置，不要写进 Podfile。去掉钩子用 `--uninstall-pod-hook`。
+
+- 改动都带标记：构建设置的原值记录在 `NOCOMPILE_SETUP_ADDED` 中，源码插入在 `>>> NoCompile setup` 与 `<<< NoCompile setup` 两行注释之间。`--remove` 只还原这些标记处，工程与源码里的其他改动不受影响；在没有其他改动时，撤销后 `git status` 是干净的。
+- 重复运行是安全的，已接入的部分会跳过。已通过 CocoaPods 引入 NoCompile 的 target 整体跳过；已通过 SPM 链接客户端的 target 只补链接参数。源码里已有加载 `NoCompile.bundle` 的代码时不再插入。
+- 目录下有多个 workspace 或工程时，把要接入的那个作为参数传入。
+- 常用参数：`--configs Debug,Dev` 指定配置（同时会写入 `NOCOMPILE_COPY_CONFIGURATIONS`）、`--target App` 只处理某个 target、`--dry-run` 只预览不写文件。
+- 运行前最好关闭工程或确认 Xcode 里没有未保存的工程设置改动，避免 Xcode 用内存中的旧工程覆盖脚本的修改。
+
 ### 方式 F：DYLD_INSERT_LIBRARIES（零代码，仅模拟器 / macOS）
 
 只适用于模拟器和 macOS App，真机请用方式 E。bundle 的可执行文件是动态库，可以在 scheme 里直接注入，工程和代码都不用改。Edit Scheme → Run → Arguments → Environment Variables 添加：

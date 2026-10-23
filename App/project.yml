@@ -89,8 +89,10 @@ targets:
               cp -R "$BUNDLE" "$DEST/$NAME"
               /usr/bin/codesign --force --sign "$IDENTITY" --timestamp=none "$DEST/$NAME"
           done
-          cp "${SRCROOT}/../Scripts/nocompile_copy_bundle.sh" "$DEST/nocompile_copy_bundle.sh"
-          chmod +x "$DEST/nocompile_copy_bundle.sh"
+          for SCRIPT in nocompile_copy_bundle.sh nocompile_setup.py; do
+              cp "${SRCROOT}/../Scripts/$SCRIPT" "$DEST/$SCRIPT"
+              chmod +x "$DEST/$SCRIPT"
+          done
     settings:
       base:
         PRODUCT_NAME: NoCompile

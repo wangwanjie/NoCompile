@@ -130,8 +130,10 @@ while read -r NAME TARGET SDK; do
     BUILT=$((BUILT + 1))
 done <<< "$VARIANTS"
 
-# 拷贝脚本与 bundle 放在一起，接入方从同一目录调用
-cp "$ROOT/Scripts/nocompile_copy_bundle.sh" "$OUTPUT/nocompile_copy_bundle.sh"
-chmod +x "$OUTPUT/nocompile_copy_bundle.sh"
+# 拷贝脚本、一键接入脚本与 bundle 放在一起，接入方从同一目录调用
+for SCRIPT in nocompile_copy_bundle.sh nocompile_setup.py; do
+    cp "$ROOT/Scripts/$SCRIPT" "$OUTPUT/$SCRIPT"
+    chmod +x "$OUTPUT/$SCRIPT"
+done
 
 echo "✅ 已构建 $BUILT 个客户端 bundle：$OUTPUT"
