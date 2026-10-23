@@ -862,14 +862,22 @@ def base_dir_of(path):
 
 
 def hook_lines(indent):
-    # 钩子会随 Podfile 提交，只引用 NoCompile.app 内的脚本；NOCOMPILE_SETUP_SCRIPT 供本机临时指向其他位置
+    # 钩子会随 Podfile 提交，只引用 NoCompile.app 内的脚本；NOCOMPILE_SETUP_SCRIPT 供本机临时指向其他位置。
+    # 插件（如 cocoapods-arm64-to-sim）的 post_integrate 在 Podfile 钩子之后执行，会把内存中的工程再保存一次、
+    # 覆盖脚本的修改，所以用 at_exit 等 pod 进程结束、所有钩子执行完后再运行，且只在 pod install 成功时运行
     lines = [
         HOOK_BEGIN,
         "# 本机 export IntegrateNoCompile=true 后，pod install 会自动接入 NoCompile（拷贝 bundle 方式，仅 Debug），",
         "# 未设置时自动撤销；未安装 NoCompile.app 时不做任何事。接入的改动只在本地，请勿提交。",
         "nc_setup_script = ENV['NOCOMPILE_SETUP_SCRIPT'] || '%s/nocompile_setup.py'" % DEFAULT_RESOURCES,
         "if File.exist?(nc_setup_script)",
-        "  system('/usr/bin/python3', nc_setup_script, '--sync', File.dirname(File.expand_path(__FILE__)))",
+        "  nc_project_dir = File.dirname(File.expand_path(__FILE__))",
+        "  # 等所有钩子（包括插件的）执行完再运行，避免插件保存工程时覆盖脚本的修改",
+        "  at_exit do",
+        "    if $!.nil? || ($!.is_a?(SystemExit) && $!.success?)",
+        "      system('/usr/bin/python3', nc_setup_script, '--sync', nc_project_dir)",
+        "    end",
+        "  end",
         "end",
         HOOK_END,
     ]

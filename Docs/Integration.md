@@ -205,12 +205,18 @@ git checkout other-branch
 post_integrate do |installer|
   nc_setup_script = ENV['NOCOMPILE_SETUP_SCRIPT'] || '/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py'
   if File.exist?(nc_setup_script)
-    system('/usr/bin/python3', nc_setup_script, '--sync', File.dirname(File.expand_path(__FILE__)))
+    nc_project_dir = File.dirname(File.expand_path(__FILE__))
+    # 等所有钩子（包括插件的）执行完再运行，避免插件保存工程时覆盖脚本的修改
+    at_exit do
+      if $!.nil? || ($!.is_a?(SystemExit) && $!.success?)
+        system('/usr/bin/python3', nc_setup_script, '--sync', nc_project_dir)
+      end
+    end
   end
 end
 ```
 
-钩子会在 `pod install` 写完工程后调用 `--sync`：`IntegrateNoCompile=true` 时接入，否则撤销之前接入的改动（本来没接入时不输出任何内容）。没装 NoCompile.app 的同事不受影响，钩子本身可以提交。要用的人在 shell 配置里打开开关：
+钩子会在 `pod install` 成功结束时调用 `--sync`：`IntegrateNoCompile=true` 时接入，否则撤销之前接入的改动（本来没接入时不输出任何内容）。没装 NoCompile.app 的同事不受影响，钩子本身可以提交。要用的人在 shell 配置里打开开关：
 
 ```bash
 export IntegrateNoCompile=true
@@ -223,6 +229,8 @@ export IntegrateNoCompile=true
 git checkout other-branch
 pod install                                                                   # 钩子自动重新接入
 ```
+
+调用放在 `at_exit` 里，是因为 CocoaPods 插件的 `post_integrate`（例如 `cocoapods-arm64-to-sim`）在 Podfile 的钩子之后执行，并会把内存中的工程再保存一次；在钩子里直接调用脚本，脚本对 `project.pbxproj` 的修改会被覆盖，只剩源码里的加载代码。用 0.2.10 生成或手动照抄了旧钩子的，先删掉旧钩子再运行 `--install-pod-hook`。
 
 `NOCOMPILE_SETUP_SCRIPT` 可以临时把钩子指向其他位置的脚本（例如 NoCompile 仓库里的开发版本），只在本机 shell 里设置，不要写进 Podfile。去掉钩子用 `--uninstall-pod-hook`。
 
