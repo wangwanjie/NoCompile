@@ -76,7 +76,7 @@ set -e
 grep -E "error:|BUILD SUCCEEDED|BUILD FAILED" "$BUILD_LOG" || true
 
 if [ "$BUILD_STATUS" -ne 0 ] || [ ! -d "$APP" ]; then
-    echo "❌ 构建失败（xcodebuild 退出码 $BUILD_STATUS），完整日志：$BUILD_LOG"
+    echo "❌ 构建失败（xcodebuild 退出码 ${BUILD_STATUS}），完整日志：$BUILD_LOG"
     exit 1
 fi
 echo "✅ 已生成：$APP"

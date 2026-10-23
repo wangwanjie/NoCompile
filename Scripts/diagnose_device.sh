@@ -102,7 +102,7 @@ PYEOF
     echo "## 4. CoreDevice 设备列表（Xcode 使用的通道）"
     run xcrun devicectl list devices
     echo "## 5. Mac 端监听端口 $MAC_PORT"
-    lsof -nP -iTCP:$MAC_PORT -sTCP:LISTEN 2>&1 || echo "（没有进程监听 $MAC_PORT）"
+    lsof -nP -iTCP:$MAC_PORT -sTCP:LISTEN 2>&1 || echo "（没有进程监听 ${MAC_PORT}）"
     echo
 
     echo "## 6. NoCompile 诊断日志（真机 / 连接相关的最近 60 行）"

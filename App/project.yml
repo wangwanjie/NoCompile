@@ -72,7 +72,7 @@ targets:
           SRC="${SRCROOT}/../build/ClientBundles"
           DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
           if [ ! -d "$SRC" ]; then
-              echo "warning: 未找到 $SRC，NoCompile.app 将不含客户端 bundle。请先运行 Scripts/build-client-bundles.sh"
+              echo "warning: 未找到 ${SRC}，NoCompile.app 将不含客户端 bundle。请先运行 Scripts/build-client-bundles.sh"
               exit 0
           fi
           IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"

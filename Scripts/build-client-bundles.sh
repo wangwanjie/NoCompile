@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -d "$PROJECT" ]; then
-    command -v xcodegen >/dev/null 2>&1 || { echo "错误：未找到 $PROJECT，且没有 xcodegen 可以生成它"; exit 1; }
+    command -v xcodegen >/dev/null 2>&1 || { echo "错误：未找到 ${PROJECT}，且没有 xcodegen 可以生成它"; exit 1; }
     (cd "$ROOT/Client" && xcodegen generate >/dev/null)
 fi
 
@@ -92,7 +92,7 @@ while read -r NAME TARGET SDK; do
     # 没装对应平台（例如 tvOS）时跳过，不影响其他产物
     if ! xcrun --sdk "$SDK" --show-sdk-path >/dev/null 2>&1; then
         if [ "$REQUIRE_ALL" -eq 1 ]; then
-            echo "❌ 未安装 $SDK SDK，无法构建 $NAME（发布包必须包含全部客户端 bundle）"
+            echo "❌ 未安装 $SDK SDK，无法构建 ${NAME}（发布包必须包含全部客户端 bundle）"
             exit 1
         fi
         # 删掉上次留下的同名产物，避免把旧版客户端打进 App
@@ -101,7 +101,7 @@ while read -r NAME TARGET SDK; do
         continue
     fi
 
-    echo "⚙️  构建 $NAME.bundle（$SDK）…"
+    echo "⚙️  构建 $NAME.bundle（${SDK}）…"
     LOG="$WORK/$NAME.log"
     mkdir -p "$WORK"
     # 产物只用于调试；不在这里签名，由拷贝方（App 打包 / nocompile_copy_bundle.sh）按需签名

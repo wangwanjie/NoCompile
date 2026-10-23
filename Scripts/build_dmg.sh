@@ -138,7 +138,7 @@ thin_to_arch() {
             continue
         fi
         if [[ " $archs " != *" $arch "* ]]; then
-            echo "错误: $file 不含 $arch 架构（$archs）" >&2
+            echo "错误: $file 不含 $arch 架构（${archs}）" >&2
             exit 1
         fi
         lipo -thin "$arch" "$file" -output "$file.thin"
@@ -216,7 +216,7 @@ if [[ ${#ARCHS_TO_BUILD[@]} -eq 0 ]]; then
 fi
 for arch in "${ARCHS_TO_BUILD[@]}"; do
     if [[ " ${SUPPORTED_ARCHS[*]} " != *" $arch "* ]]; then
-        echo "错误: 不支持的架构 $arch（可选: ${SUPPORTED_ARCHS[*]}）" >&2
+        echo "错误: 不支持的架构 ${arch}（可选: ${SUPPORTED_ARCHS[*]}）" >&2
         exit 1
     fi
 done
@@ -235,7 +235,7 @@ if [[ -z "$VERSION" ]]; then
     echo "错误: 无法读取 MARKETING_VERSION" >&2
     exit 1
 fi
-echo "版本: $VERSION，架构: ${ARCHS_TO_BUILD[*]}"
+echo "版本: ${VERSION}，架构: ${ARCHS_TO_BUILD[*]}"
 # App、客户端工程、podspec、两端协议常量的版本号必须一致
 "$PROJECT_DIR/Scripts/bump_version.sh" --check
 

@@ -71,5 +71,5 @@ sed -i '' -E "s/(s\.version[[:space:]]*=[[:space:]]*')[0-9.]+(')/\1$VERSION\2/" 
 sed -i '' -E "s/(clientVersion: String = \")[0-9.]+(\")/\1$VERSION\2/" "$PROTOCOL_SWIFT"
 sed -i '' -E "s/(NC_CLIENT_VERSION @\")[0-9.]+(\")/\1$VERSION\2/" "$PROTOCOL_HEADER"
 
-echo "版本号：$VERSION，构建号：$BUILD → $NEXT_BUILD"
+echo "版本号：${VERSION}，构建号：$BUILD → $NEXT_BUILD"
 check

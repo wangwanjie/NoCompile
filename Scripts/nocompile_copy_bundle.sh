@@ -65,7 +65,7 @@ esac
 BUNDLES_DIR="${NOCOMPILE_BUNDLES_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 SOURCE="$BUNDLES_DIR/$SOURCE_NAME.bundle"
 if [ ! -d "$SOURCE" ]; then
-    echo "error: [NoCompile] 未找到 $SOURCE。请确认 NoCompile.app 版本支持 bundle 方式，或用 NOCOMPILE_BUNDLES_DIR 指定目录"
+    echo "error: [NoCompile] 未找到 ${SOURCE}。请确认 NoCompile.app 版本支持 bundle 方式，或用 NOCOMPILE_BUNDLES_DIR 指定目录"
     exit 1
 fi
 
@@ -83,7 +83,7 @@ if [ -z "$IDENTITY" ] || [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
     IDENTITY="-"
 fi
 /usr/bin/codesign --force --sign "$IDENTITY" --timestamp=none "$DEST"
-log "已签名（$IDENTITY）"
+log "已签名（${IDENTITY}）"
 
 # 提醒：缺少 -interposable 时函数级替换不会生效
 if [[ " ${OTHER_LDFLAGS:-} " != *"-interposable"* ]]; then
