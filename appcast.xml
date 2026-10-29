@@ -1,0 +1,379 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>NoCompile</title>
+        <link>https://github.com/wangwanjie/NoCompile</link>
+        <description>NoCompile release feed.</description>
+        <language>en</language>
+        <item>
+            <title>0.2.13</title>
+            <pubDate>Wed, 28 Oct 2026 18:28:22 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.13</link>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>0.2.13</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.13/NoCompile_v0.2.13_arm64.dmg" length="3738523" type="application/octet-stream" sparkle:edSignature="qeXpt0Bm0vem4iSm9p9rR6FB07jTgcad3nzGs9W2pvFkLIMjMMzgW8tyGtpFDJVYGvf9hUf6lcQrHiRAPKzyBw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.13&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;pod install / update 后控制台一直刷头文件分析，只能重启 NoCompile 才恢复&lt;/strong&gt;：依赖工具一次改写成千上万个文件时，引擎逐个分析每个头文件，期间打开的文件描述符没有及时释放，最终耗尽进程上限（默认 256）。之后重新打开工程时读不到目录、文件基线为空，被碰到的每个文件都被当成新增文件。现在：&lt;/li&gt;&lt;li&gt;一批改动超过 100 个文件时，在分析头文件之前就跳过并提示重新编译，不再堵住引擎&lt;/li&gt;&lt;li&gt;子进程调用不再滞留描述符，启动时把打开文件数上限提高到 10240&lt;/li&gt;&lt;li&gt;扫描工程目录失败时不再建立空基线，会自动重试&lt;/li&gt;&lt;li&gt;读不到工程目录时按实际原因提示，描述符耗尽时不再误导去开隐私授权&lt;/li&gt;&lt;li&gt;&lt;strong&gt;依赖工具原样重写的文件被当成改动&lt;/strong&gt;：pod install / update、git checkout 等会把内容没变的文件重新写一遍。现在文件基线会记录内容摘要，内容没变的文件不再触发热重载。摘要缓存在 `~/Library/Caches/NoCompile/FileDigests`，再次启动时直接复用；首次启动在后台计算，十万个文件约 1 秒&lt;/li&gt;&lt;li&gt;菜单栏图标在引擎未启动时显示为黑色的问题&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;升级后无需改动工程，已编译的 App 仍可正常热重载&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
+            <title>0.2.13</title>
+            <pubDate>Wed, 28 Oct 2026 18:28:26 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.13</link>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>0.2.13</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.13/NoCompile_v0.2.13_x86_64.dmg" length="3915113" type="application/octet-stream" sparkle:edSignature="BSnJl8SfVNQoccdNZP2iJJQeD+nkj0jtTi+HI4iH20L9yJEq2oYzVBeIySPbIVyLRQUGiBBzOyqH5D0BcZeLBg==" />
+            <description>&lt;h2&gt;NoCompile 0.2.13&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;pod install / update 后控制台一直刷头文件分析，只能重启 NoCompile 才恢复&lt;/strong&gt;：依赖工具一次改写成千上万个文件时，引擎逐个分析每个头文件，期间打开的文件描述符没有及时释放，最终耗尽进程上限（默认 256）。之后重新打开工程时读不到目录、文件基线为空，被碰到的每个文件都被当成新增文件。现在：&lt;/li&gt;&lt;li&gt;一批改动超过 100 个文件时，在分析头文件之前就跳过并提示重新编译，不再堵住引擎&lt;/li&gt;&lt;li&gt;子进程调用不再滞留描述符，启动时把打开文件数上限提高到 10240&lt;/li&gt;&lt;li&gt;扫描工程目录失败时不再建立空基线，会自动重试&lt;/li&gt;&lt;li&gt;读不到工程目录时按实际原因提示，描述符耗尽时不再误导去开隐私授权&lt;/li&gt;&lt;li&gt;&lt;strong&gt;依赖工具原样重写的文件被当成改动&lt;/strong&gt;：pod install / update、git checkout 等会把内容没变的文件重新写一遍。现在文件基线会记录内容摘要，内容没变的文件不再触发热重载。摘要缓存在 `~/Library/Caches/NoCompile/FileDigests`，再次启动时直接复用；首次启动在后台计算，十万个文件约 1 秒&lt;/li&gt;&lt;li&gt;菜单栏图标在引擎未启动时显示为黑色的问题&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;升级后无需改动工程，已编译的 App 仍可正常热重载&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
+            <title>0.2.12</title>
+            <pubDate>Fri, 23 Oct 2026 15:35:34 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.12</link>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>0.2.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.12/NoCompile_v0.2.12_arm64.dmg" length="3708836" type="application/octet-stream" sparkle:edSignature="nozSSnZ9Bke/3SvPrEeS3VVLhRYg24dUTUrxp72vrPJqUnRJq8wP+SF7f5wvGto27hLhBq+g6xPhCU2sNmj/BA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.12&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;「拷贝 bundle」方式接入后工程编译失败&lt;/strong&gt;：`[NoCompile] Copy Bundle` 阶段报 `IDENTITY\357: unbound variable` 与 `Command PhaseScriptExecution failed with a nonzero exit code`。Xcode 用系统自带的 bash 3.2 执行 Run Script，在 UTF-8 环境下它会把紧跟变量名的中文全角字符当成变量名的一部分，`nocompile_copy_bundle.sh` 因此在签名完成后退出。已修复所有同类写法，并新增测试防止再次出现&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;升级后直接重新编译即可，Run Script 调用的是 NoCompile.app 内的新脚本，工程无需改动&lt;/li&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
+            <title>0.2.12</title>
+            <pubDate>Fri, 23 Oct 2026 15:35:36 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.12</link>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>0.2.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.12/NoCompile_v0.2.12_x86_64.dmg" length="3881033" type="application/octet-stream" sparkle:edSignature="McXHIQMgRuUci6w+tfrJYi5cGm8lzCrAGPJfT9dNmgE7Wo8WenUVHwsqVGkaZuSq6l3tnKfZpQ1M3XXmDBcsCg==" />
+            <description>&lt;h2&gt;NoCompile 0.2.12&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;「拷贝 bundle」方式接入后工程编译失败&lt;/strong&gt;：`[NoCompile] Copy Bundle` 阶段报 `IDENTITY\357: unbound variable` 与 `Command PhaseScriptExecution failed with a nonzero exit code`。Xcode 用系统自带的 bash 3.2 执行 Run Script，在 UTF-8 环境下它会把紧跟变量名的中文全角字符当成变量名的一部分，`nocompile_copy_bundle.sh` 因此在签名完成后退出。已修复所有同类写法，并新增测试防止再次出现&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;升级后直接重新编译即可，Run Script 调用的是 NoCompile.app 内的新脚本，工程无需改动&lt;/li&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
+            <title>0.2.11</title>
+            <pubDate>Fri, 23 Oct 2026 12:34:22 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.11</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.11/NoCompile_v0.2.11_arm64.dmg" length="3708856" type="application/octet-stream" sparkle:edSignature="SPY1Zixz8me454Kv30YdpNihJvokURlLlP9bD+0xV+DYGVsTfnIi7HUVe8it9nBEIo96mhTDQBynePua7B4uBQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.11&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;Podfile 钩子接入后看不到链接参数和 Run Script&lt;/strong&gt;：启用了 `cocoapods-arm64-to-sim` 等会在 `post_integrate` 中保存工程的 CocoaPods 插件时，插件在 Podfile 钩子之后执行，用内存中的旧工程覆盖了 `nocompile_setup.py` 对 `project.pbxproj` 的修改，只剩 AppDelegate 里的加载代码。`--install-pod-hook` 生成的钩子改为在 `pod install` 成功结束、所有钩子执行完后再接入&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;用 0.2.10 生成或照抄了旧钩子的 Podfile，需要换成新钩子：删掉旧的 `post_integrate` 钩子后重新运行&lt;/li&gt;&lt;/ul&gt;
+&lt;pre&gt;&lt;code&gt;/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --uninstall-pod-hook   # 去掉带标记的旧钩子；手动粘贴的需手动删除
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --install-pod-hook&lt;/code&gt;&lt;/pre&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载，无需重新编译&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md#一键接入脚本本地调试不提交"&gt;接入指南 · 一键接入脚本&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.11</title>
+            <pubDate>Fri, 23 Oct 2026 12:34:26 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.11</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.11/NoCompile_v0.2.11_x86_64.dmg" length="3881010" type="application/octet-stream" sparkle:edSignature="myvno4Z09a7ki2YLCNPXwm/4/+jSczNjn5yAYHcL6UMxwJkmh4Kh0FzOeJHWyUuEb4IHZ07hxKjvwWoCA5rtAA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.11&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;Podfile 钩子接入后看不到链接参数和 Run Script&lt;/strong&gt;：启用了 `cocoapods-arm64-to-sim` 等会在 `post_integrate` 中保存工程的 CocoaPods 插件时，插件在 Podfile 钩子之后执行，用内存中的旧工程覆盖了 `nocompile_setup.py` 对 `project.pbxproj` 的修改，只剩 AppDelegate 里的加载代码。`--install-pod-hook` 生成的钩子改为在 `pod install` 成功结束、所有钩子执行完后再接入&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;用 0.2.10 生成或照抄了旧钩子的 Podfile，需要换成新钩子：删掉旧的 `post_integrate` 钩子后重新运行&lt;/li&gt;&lt;/ul&gt;
+&lt;pre&gt;&lt;code&gt;/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --uninstall-pod-hook   # 去掉带标记的旧钩子；手动粘贴的需手动删除
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --install-pod-hook&lt;/code&gt;&lt;/pre&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载，无需重新编译&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md#一键接入脚本本地调试不提交"&gt;接入指南 · 一键接入脚本&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.10</title>
+            <pubDate>Fri, 23 Oct 2026 11:44:31 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.10</link>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.2.10</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.10/NoCompile_v0.2.10_arm64.dmg" length="3708533" type="application/octet-stream" sparkle:edSignature="+0OnX7L2t4+pkPF0ZmcnuKScLpQMyGB+gbBmTXt7QAEzcW6TeZ+Yjf8HeHXRXvrTDwmqv0leJD8GRtNF4kRmCQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.10&lt;/h2&gt;
+&lt;p&gt;本版本新增一键接入脚本，解决「接入改动不能提交、每次切换分支都要重新设置」的问题。&lt;/p&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;一键接入脚本 `nocompile_setup.py`&lt;/strong&gt;（位于 `NoCompile.app/Contents/Resources`）：在工程目录运行即可完成「拷贝 bundle」方式的全部接入，只作用于 App 类型 target 的 Debug 配置&lt;/li&gt;&lt;li&gt;Other Linker Flags 追加 `-Xlinker -interposable`；清空 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main` 的工程，可用 `--keep-exported-symbols` 保留）；关闭 `ENABLE_USER_SCRIPT_SANDBOXING`&lt;/li&gt;&lt;li&gt;Build Phases 末尾添加 Run Script「[NoCompile] Copy Bundle」&lt;/li&gt;&lt;li&gt;在 `didFinishLaunchingWithOptions`、`applicationDidFinishLaunching` 或 SwiftUI `App` 的 `init()` 最前面插入加载代码，自动区分 Swift / Objective-C 与 iOS / tvOS / macOS、模拟器 / 真机&lt;/li&gt;&lt;li&gt;所有改动都带标记，`--remove` 原样撤销，不影响工程里的其他改动；重复运行会跳过已接入的部分&lt;/li&gt;&lt;li&gt;&lt;strong&gt;CocoaPods 钩子&lt;/strong&gt;：`nocompile_setup.py --install-pod-hook` 在 Podfile 添加一个可以提交的 `post_integrate` 钩子。本机 `export IntegrateNoCompile=true` 后，`pod install` 会自动接入；未设置时自动撤销；没装 NoCompile.app 的同事不受影响&lt;/li&gt;&lt;/ul&gt;
+&lt;pre&gt;&lt;code&gt;/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py            # 在工程目录运行，接入
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --remove   # 切换分支前撤销&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载，无需重新编译&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md#一键接入脚本本地调试不提交"&gt;接入指南 · 一键接入脚本&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.10</title>
+            <pubDate>Fri, 23 Oct 2026 11:44:34 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.10</link>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.2.10</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.10/NoCompile_v0.2.10_x86_64.dmg" length="3880746" type="application/octet-stream" sparkle:edSignature="4KzcA/TA3L2HmRulDeOvkrI5h9aJeDoEmREtgBw2t2glMl92nZFGbCNsgEChkNWtAiocEvQKGmj3gNQhS/jJBQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.10&lt;/h2&gt;
+&lt;p&gt;本版本新增一键接入脚本，解决「接入改动不能提交、每次切换分支都要重新设置」的问题。&lt;/p&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;一键接入脚本 `nocompile_setup.py`&lt;/strong&gt;（位于 `NoCompile.app/Contents/Resources`）：在工程目录运行即可完成「拷贝 bundle」方式的全部接入，只作用于 App 类型 target 的 Debug 配置&lt;/li&gt;&lt;li&gt;Other Linker Flags 追加 `-Xlinker -interposable`；清空 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main` 的工程，可用 `--keep-exported-symbols` 保留）；关闭 `ENABLE_USER_SCRIPT_SANDBOXING`&lt;/li&gt;&lt;li&gt;Build Phases 末尾添加 Run Script「[NoCompile] Copy Bundle」&lt;/li&gt;&lt;li&gt;在 `didFinishLaunchingWithOptions`、`applicationDidFinishLaunching` 或 SwiftUI `App` 的 `init()` 最前面插入加载代码，自动区分 Swift / Objective-C 与 iOS / tvOS / macOS、模拟器 / 真机&lt;/li&gt;&lt;li&gt;所有改动都带标记，`--remove` 原样撤销，不影响工程里的其他改动；重复运行会跳过已接入的部分&lt;/li&gt;&lt;li&gt;&lt;strong&gt;CocoaPods 钩子&lt;/strong&gt;：`nocompile_setup.py --install-pod-hook` 在 Podfile 添加一个可以提交的 `post_integrate` 钩子。本机 `export IntegrateNoCompile=true` 后，`pod install` 会自动接入；未设置时自动撤销；没装 NoCompile.app 的同事不受影响&lt;/li&gt;&lt;/ul&gt;
+&lt;pre&gt;&lt;code&gt;/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py            # 在工程目录运行，接入
+/Applications/NoCompile.app/Contents/Resources/nocompile_setup.py --remove   # 切换分支前撤销&lt;/code&gt;&lt;/pre&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载，无需重新编译&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md#一键接入脚本本地调试不提交"&gt;接入指南 · 一键接入脚本&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.9</title>
+            <pubDate>Thu, 22 Oct 2026 14:39:26 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.9</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.9/NoCompile_v0.2.9_arm64.dmg" length="3694086" type="application/octet-stream" sparkle:edSignature="0koZRLfisFBuqHgOzFMaRu5UM4LY4YJPMa15KM9UVZVZvKUh5bFIttQMK+3ytbcFe9Q3+BYmLlCQaCA392X+Aw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.9&lt;/h2&gt;
+&lt;p&gt;本版本是一次全面的代码审查与加固：修复了连接、日志解析、资源热重载、注入中的多处缺陷，补齐了单元测试，并改进了按芯片分发的安装包。&lt;/p&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;私有类的改动不生效&lt;/strong&gt;：`private` / `fileprivate` 的 Swift 类，以及开启 `-fvisibility=hidden` 或 `EXPORTED_SYMBOLS_FILE` 的工程里的 ObjC 类，改了方法体后注入报「未替换任何实现」。现在改用符号表中的地址定位这些类&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机上修改颜色集（.colorset）必定失败&lt;/strong&gt;，提示「资源包缺少文件」&lt;/li&gt;&lt;li&gt;名称带设备后缀的资源（如 `icon@2x~ipad.png`、`Main~iphone.xib`）保存后不触发热重载&lt;/li&gt;&lt;li&gt;颜色集以 0–255 整数填写分量时颜色错误&lt;/li&gt;&lt;li&gt;`swiftc -###` 输出中单引号包裹的参数（如 `-Xcc '-DM=a\b'`）里的反斜杠被吞掉，宏值被改写&lt;/li&gt;&lt;li&gt;推送途中连接断开时，改动被误记为「已应用」，同一进程重连后不再补推。现在收到 App 回报后才登记&lt;/li&gt;&lt;li&gt;Wi-Fi 连接在 Mac 休眠或设备断网后变成半开连接，两端都不会重连。两端已开启 TCP 保活，约 1 分钟内判定断开并自动重连&lt;/li&gt;&lt;li&gt;模拟器 App 刚连上就崩溃等情况下，Mac 端停止接受所有新连接，之后的 App 都连不上&lt;/li&gt;&lt;li&gt;切换工程的瞬间连上的连接不会被关闭、一直占着设备&lt;/li&gt;&lt;li&gt;构建日志解析中途失败（超时、Xcode 正在写入）后被记为已解析，之后一直提示「请先完整构建」&lt;/li&gt;&lt;li&gt;偏好设置在主线程修改、在引擎线程读取的数据竞争，可能导致崩溃&lt;/li&gt;&lt;li&gt;tvOS 真机的编译命令被归为未知平台，无法热重载&lt;/li&gt;&lt;li&gt;自定义了带连字符配置名（如 `Debug-Staging`）的 macOS 工程，资源找不到所属的 bundle&lt;/li&gt;&lt;li&gt;消息中含无法序列化为 JSON 的内容时 App 或 Mac 端崩溃&lt;/li&gt;&lt;li&gt;在主线程发起注入时可能死锁；`+load` 中用 `method_setImplementation` / `class_replaceMethod` 写的 hook 在注入时被重复安装&lt;/li&gt;&lt;li&gt;方法实现的符号被剥离时，新实现可能被写到无关的方法上&lt;/li&gt;&lt;li&gt;真机写入 dylib 失败（存储空间不足）时给出误导性的错误&lt;/li&gt;&lt;li&gt;打开已被移动或删除的最近工程时没有任何提示；恢复默认设置后 DerivedData、排除规则不生效；「登录时自动启动」开关会重复注册 / 注销；系统睡眠唤醒后被误判为主线程卡顿&lt;/li&gt;&lt;li&gt;命令行工具静默忽略拼错的参数，现在报错退出；支持 `nocompile &amp;lt;工程路径&amp;gt;`、`--version`，Ctrl+C 时先停止引擎再退出&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;注入记录右键「在 Xcode 中打开」，编译失败时直接定位到第一条错误所在的行&lt;/li&gt;&lt;li&gt;Mac Catalyst App（实验性）：与 macOS App 一样连接本机 NoCompile&lt;/li&gt;&lt;li&gt;在 Apple 芯片的 Mac 上运行 Intel 版时给出提示，检查更新时自动换成 arm64 版本&lt;/li&gt;&lt;li&gt;最近工程菜单标出已不存在的工程，并可一键清空&lt;/li&gt;&lt;li&gt;偏好设置显示当前安装包的架构&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;分发&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;每个 Release 额外提供不带版本号的 `NoCompile_arm64.dmg` / `NoCompile_x86_64.dmg`，README 中的下载链接始终指向最新版，并附 `SHA256SUMS.txt`&lt;/li&gt;&lt;li&gt;arm64 包中的 Sparkle 等依赖也精简为单一架构，打包时逐个校验所有二进制的架构、客户端 bundle 的完整性与版本&lt;/li&gt;&lt;li&gt;Sparkle feed 保留全部历史版本，发布后自动校验下载地址&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;测试&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;新增单元测试（`swift test`）：构建日志解析、命令分词、协议帧编解码、构建清单、头文件改动分析、版本号一致性，以及客户端的帧收发、ObjC 方法替换、布局变化保护等&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。要用上客户端侧的修复（私有类、颜色集、Wi-Fi 保活等），请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.9</title>
+            <pubDate>Thu, 22 Oct 2026 14:39:28 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.9</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.9/NoCompile_v0.2.9_x86_64.dmg" length="3868125" type="application/octet-stream" sparkle:edSignature="jG9LTkhXZrhsnnsE/M85e+YDMN+NI6HzK64qPlYMTUxP1Ibs+NNJiQyJCU0XqVLdHXD0Tdo4vQIShjmJA+v+CA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.9&lt;/h2&gt;
+&lt;p&gt;本版本是一次全面的代码审查与加固：修复了连接、日志解析、资源热重载、注入中的多处缺陷，补齐了单元测试，并改进了按芯片分发的安装包。&lt;/p&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;私有类的改动不生效&lt;/strong&gt;：`private` / `fileprivate` 的 Swift 类，以及开启 `-fvisibility=hidden` 或 `EXPORTED_SYMBOLS_FILE` 的工程里的 ObjC 类，改了方法体后注入报「未替换任何实现」。现在改用符号表中的地址定位这些类&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机上修改颜色集（.colorset）必定失败&lt;/strong&gt;，提示「资源包缺少文件」&lt;/li&gt;&lt;li&gt;名称带设备后缀的资源（如 `icon@2x~ipad.png`、`Main~iphone.xib`）保存后不触发热重载&lt;/li&gt;&lt;li&gt;颜色集以 0–255 整数填写分量时颜色错误&lt;/li&gt;&lt;li&gt;`swiftc -###` 输出中单引号包裹的参数（如 `-Xcc '-DM=a\b'`）里的反斜杠被吞掉，宏值被改写&lt;/li&gt;&lt;li&gt;推送途中连接断开时，改动被误记为「已应用」，同一进程重连后不再补推。现在收到 App 回报后才登记&lt;/li&gt;&lt;li&gt;Wi-Fi 连接在 Mac 休眠或设备断网后变成半开连接，两端都不会重连。两端已开启 TCP 保活，约 1 分钟内判定断开并自动重连&lt;/li&gt;&lt;li&gt;模拟器 App 刚连上就崩溃等情况下，Mac 端停止接受所有新连接，之后的 App 都连不上&lt;/li&gt;&lt;li&gt;切换工程的瞬间连上的连接不会被关闭、一直占着设备&lt;/li&gt;&lt;li&gt;构建日志解析中途失败（超时、Xcode 正在写入）后被记为已解析，之后一直提示「请先完整构建」&lt;/li&gt;&lt;li&gt;偏好设置在主线程修改、在引擎线程读取的数据竞争，可能导致崩溃&lt;/li&gt;&lt;li&gt;tvOS 真机的编译命令被归为未知平台，无法热重载&lt;/li&gt;&lt;li&gt;自定义了带连字符配置名（如 `Debug-Staging`）的 macOS 工程，资源找不到所属的 bundle&lt;/li&gt;&lt;li&gt;消息中含无法序列化为 JSON 的内容时 App 或 Mac 端崩溃&lt;/li&gt;&lt;li&gt;在主线程发起注入时可能死锁；`+load` 中用 `method_setImplementation` / `class_replaceMethod` 写的 hook 在注入时被重复安装&lt;/li&gt;&lt;li&gt;方法实现的符号被剥离时，新实现可能被写到无关的方法上&lt;/li&gt;&lt;li&gt;真机写入 dylib 失败（存储空间不足）时给出误导性的错误&lt;/li&gt;&lt;li&gt;打开已被移动或删除的最近工程时没有任何提示；恢复默认设置后 DerivedData、排除规则不生效；「登录时自动启动」开关会重复注册 / 注销；系统睡眠唤醒后被误判为主线程卡顿&lt;/li&gt;&lt;li&gt;命令行工具静默忽略拼错的参数，现在报错退出；支持 `nocompile &amp;lt;工程路径&amp;gt;`、`--version`，Ctrl+C 时先停止引擎再退出&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;注入记录右键「在 Xcode 中打开」，编译失败时直接定位到第一条错误所在的行&lt;/li&gt;&lt;li&gt;Mac Catalyst App（实验性）：与 macOS App 一样连接本机 NoCompile&lt;/li&gt;&lt;li&gt;在 Apple 芯片的 Mac 上运行 Intel 版时给出提示，检查更新时自动换成 arm64 版本&lt;/li&gt;&lt;li&gt;最近工程菜单标出已不存在的工程，并可一键清空&lt;/li&gt;&lt;li&gt;偏好设置显示当前安装包的架构&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;分发&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;每个 Release 额外提供不带版本号的 `NoCompile_arm64.dmg` / `NoCompile_x86_64.dmg`，README 中的下载链接始终指向最新版，并附 `SHA256SUMS.txt`&lt;/li&gt;&lt;li&gt;arm64 包中的 Sparkle 等依赖也精简为单一架构，打包时逐个校验所有二进制的架构、客户端 bundle 的完整性与版本&lt;/li&gt;&lt;li&gt;Sparkle feed 保留全部历史版本，发布后自动校验下载地址&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;测试&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;新增单元测试（`swift test`）：构建日志解析、命令分词、协议帧编解码、构建清单、头文件改动分析、版本号一致性，以及客户端的帧收发、ObjC 方法替换、布局变化保护等&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。要用上客户端侧的修复（私有类、颜色集、Wi-Fi 保活等），请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.8</title>
+            <pubDate>Wed, 21 Oct 2026 17:22:50 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.8</link>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.8/NoCompile_v0.2.8_arm64.dmg" length="4112966" type="application/octet-stream" sparkle:edSignature="cvLGWDhJ6XXiTgcC29PWmyFEzJLwpxpWyDv/Dbl+PtF2x8EGKOR8YcwAFqePuh2kbj8XXqsUGygeu7Tu/ipaDw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.8&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机注入报「存在未解析符号」（symbol not found in flat namespace）&lt;/strong&gt;：工程在 Debug 下也设置了 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main`）或 `-fvisibility=hidden` 时，App 里的类、函数、常量都不在导出表中，注入的 dylib 加载失败。现在 Mac 端会从 DerivedData 中与 App 相同 UUID 的二进制里找到这些符号，按 App 运行时的地址生成一个小的「符号桥接」dylib，先于注入 dylib 加载，日志中显示「桥接 N 个 App 未导出的符号」&lt;/li&gt;&lt;li&gt;&lt;strong&gt;App 启动后很久才显示「已连接」&lt;/strong&gt;：解析构建日志与构建清单改在后台进行，头文件依赖索引在后台重建、重建期间沿用旧索引，大型工程刚构建完时 App 也能立即完成握手&lt;/li&gt;&lt;li&gt;同一个 App 进程重新连接（网络抖动、重新插拔数据线）时不再把已推送过的改动再推一遍&lt;/li&gt;&lt;li&gt;同时运行两个 NoCompile 时，后启动的实例不再连接真机，避免两个实例互相顶掉设备上的连接&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;接入指南「常见问题」新增「存在未解析符号」的说明&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。符号桥接需要新版客户端在握手时上报镜像信息，App 未导出符号的工程请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`，把新 bundle 拷进了 App&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.8</title>
+            <pubDate>Wed, 21 Oct 2026 17:22:51 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.8</link>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.8/NoCompile_v0.2.8_x86_64.dmg" length="4200162" type="application/octet-stream" sparkle:edSignature="1j66SFLkkJbXebUzEZwsZars2CmT4CULzuKvydcv/wuaQqUC7pt0n+IuLv0Sx4CFgqAnS7edkIbX/AFvrbrwCg==" />
+            <description>&lt;h2&gt;NoCompile 0.2.8&lt;/h2&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机注入报「存在未解析符号」（symbol not found in flat namespace）&lt;/strong&gt;：工程在 Debug 下也设置了 `EXPORTED_SYMBOLS_FILE`（例如只导出 `_main`）或 `-fvisibility=hidden` 时，App 里的类、函数、常量都不在导出表中，注入的 dylib 加载失败。现在 Mac 端会从 DerivedData 中与 App 相同 UUID 的二进制里找到这些符号，按 App 运行时的地址生成一个小的「符号桥接」dylib，先于注入 dylib 加载，日志中显示「桥接 N 个 App 未导出的符号」&lt;/li&gt;&lt;li&gt;&lt;strong&gt;App 启动后很久才显示「已连接」&lt;/strong&gt;：解析构建日志与构建清单改在后台进行，头文件依赖索引在后台重建、重建期间沿用旧索引，大型工程刚构建完时 App 也能立即完成握手&lt;/li&gt;&lt;li&gt;同一个 App 进程重新连接（网络抖动、重新插拔数据线）时不再把已推送过的改动再推一遍&lt;/li&gt;&lt;li&gt;同时运行两个 NoCompile 时，后启动的实例不再连接真机，避免两个实例互相顶掉设备上的连接&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;接入指南「常见问题」新增「存在未解析符号」的说明&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端修订号没有变化，已编译的 App 仍可正常热重载。符号桥接需要新版客户端在握手时上报镜像信息，App 未导出符号的工程请重新编译运行 App；用「拷贝 bundle」方式接入的，确认这次构建执行了 `nocompile_copy_bundle.sh`，把新 bundle 拷进了 App&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.7</title>
+            <pubDate>Wed, 21 Oct 2026 15:03:57 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.7</link>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.7/NoCompile_v0.2.7_arm64.dmg" length="4049060" type="application/octet-stream" sparkle:edSignature="7fBJpSud2IcvdWAaMh6acMZtz5cUhGdTvia+2o68cDwxj51/j9LNnPqZ4fiORdFoCfFO5qGXeA8afRI/IJ6+AQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.7&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机显示设备名称&lt;/strong&gt;：设备列表、日志与注入记录中的真机改为显示 Xcode 中的设备名称（如「张三的 iPhone 16 Pro」），多台真机可以区分。iOS 16 起 App 内只能拿到「iPhone」，现由 Mac 端直接从设备读取&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机连不上时给出提示&lt;/strong&gt;：USB 连接的真机上持续没有 NoCompile 客户端在运行时，控制台会提示一次；若当前工程从 `/Applications/NoCompile.app` 加载客户端，会说明真机需要改用「拷贝 bundle」方式接入&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机诊断脚本&lt;/strong&gt;：新增 `Scripts/diagnose_device.sh`，一键收集 usbmuxd、设备端口与 NoCompile 日志，判断真机卡在哪一步&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;usbmuxd 请求增加超时，避免一次无响应的请求让真机轮询永久停住&lt;/li&gt;&lt;li&gt;同一台设备同时以 USB 与网络方式出现时优先走 USB，不再被网络连接拖慢&lt;/li&gt;&lt;li&gt;本地 Pod 根目录下不属于 App 的源文件不再被当作新增文件重编&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;明确「从 NoCompile.app 加载 bundle」（`bundleWithPath:@"/Applications/NoCompile.app/..."`）与 `DYLD_INSERT_LIBRARIES` &lt;strong&gt;只适用于模拟器 / macOS&lt;/strong&gt;，真机上会静默失败。要在真机热重载，请改用「拷贝 bundle」（Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle`）或 CocoaPods / SPM&lt;/li&gt;&lt;li&gt;接入指南新增「真机连不上」排查章节&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;客户端没有不兼容变化，已编译的 App 无需重新编译。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.7</title>
+            <pubDate>Wed, 21 Oct 2026 15:03:58 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.7</link>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.7/NoCompile_v0.2.7_x86_64.dmg" length="4149892" type="application/octet-stream" sparkle:edSignature="x9iZHC3qeKRQPigqzbHn10o25DYnsNc76VCAV+6tx1PX+PfA50Gp+yffOSDatypk9nxlDEzV9UGkrvSBK9jyAQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.7&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;真机显示设备名称&lt;/strong&gt;：设备列表、日志与注入记录中的真机改为显示 Xcode 中的设备名称（如「张三的 iPhone 16 Pro」），多台真机可以区分。iOS 16 起 App 内只能拿到「iPhone」，现由 Mac 端直接从设备读取&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机连不上时给出提示&lt;/strong&gt;：USB 连接的真机上持续没有 NoCompile 客户端在运行时，控制台会提示一次；若当前工程从 `/Applications/NoCompile.app` 加载客户端，会说明真机需要改用「拷贝 bundle」方式接入&lt;/li&gt;&lt;li&gt;&lt;strong&gt;真机诊断脚本&lt;/strong&gt;：新增 `Scripts/diagnose_device.sh`，一键收集 usbmuxd、设备端口与 NoCompile 日志，判断真机卡在哪一步&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;usbmuxd 请求增加超时，避免一次无响应的请求让真机轮询永久停住&lt;/li&gt;&lt;li&gt;同一台设备同时以 USB 与网络方式出现时优先走 USB，不再被网络连接拖慢&lt;/li&gt;&lt;li&gt;本地 Pod 根目录下不属于 App 的源文件不再被当作新增文件重编&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;文档&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;明确「从 NoCompile.app 加载 bundle」（`bundleWithPath:@"/Applications/NoCompile.app/..."`）与 `DYLD_INSERT_LIBRARIES` &lt;strong&gt;只适用于模拟器 / macOS&lt;/strong&gt;，真机上会静默失败。要在真机热重载，请改用「拷贝 bundle」（Run Script 调用 `nocompile_copy_bundle.sh`，再加载 App 内的 `NoCompile.bundle`）或 CocoaPods / SPM&lt;/li&gt;&lt;li&gt;接入指南新增「真机连不上」排查章节&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;客户端没有不兼容变化，已编译的 App 无需重新编译。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.6</title>
+            <pubDate>Tue, 20 Oct 2026 11:50:42 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.6</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.2.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.6/NoCompile_v0.2.6_arm64.dmg" length="4007706" type="application/octet-stream" sparkle:edSignature="pNGK5o41ji3f77YSTndKOba5qsqveUyi9NQFK9V66ssDJyPwu6xOLbscP2y3pvOuBfT6mIoDx2kVuPLMyUsdBw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.6&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;多设备切换与补推&lt;/strong&gt;：每台设备接入一个 App，只向当前选中的设备推送热重载；切换设备或 App 重新运行后，自动补推缺少的改动&lt;/li&gt;&lt;li&gt;&lt;strong&gt;控制台日志分类着色&lt;/strong&gt;：日志按类别加 emoji 与彩色标签，重复日志合并显示；最近工程下显示所在目录&lt;/li&gt;&lt;li&gt;&lt;strong&gt;检查改动&lt;/strong&gt;：顶栏新增「检查改动」按钮，并支持全局快捷键（默认 ⌃⌥⌘R）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;主界面去掉「保存即注入」开关&lt;/strong&gt;：改动检测统一由 Mac 端处理&lt;/li&gt;&lt;li&gt;&lt;strong&gt;其他工程的 App 不再接入&lt;/strong&gt;：同名工程副本或其他工程运行的 App 不会再被接入，也不再每 2 秒重连刷屏&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;文件监听改为按文件指纹判定改动，修复 Xcode 保存后偶发漏检&lt;/li&gt;&lt;li&gt;从构建清单补全编译命令：Xcode 清理旧构建日志后，大部分 ObjC 文件仍可热重载（大型工程此前只能解析到极少数编译命令）；编译命令缓存随 Xcode 版本失效&lt;/li&gt;&lt;li&gt;修复热重载频繁崩溃：类的内存布局变化（增删、重排属性或 ivar）时不再替换该类实现，避免越界访问；vtable 按函数名核对后再覆写；+load 中 swizzle 的分类重新注入不再无限递归&lt;/li&gt;&lt;li&gt;连接层线程安全，真机监听出错后自动重建&lt;/li&gt;&lt;li&gt;修复 SwiftUI `some View` 类型变化、资源 hook 安装竞态、C++ 函数内静态对象迁移等问题&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;客户端有以上修复，需要更新依赖并重新编译 App 才能生效；未重新编译的客户端仍可正常热重载，不会被要求重新编译。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.6</title>
+            <pubDate>Tue, 20 Oct 2026 11:50:43 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.6</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.2.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.6/NoCompile_v0.2.6_x86_64.dmg" length="4098936" type="application/octet-stream" sparkle:edSignature="4tRht3YaEEYM8ThNjhnkEa8U5Zrywf/OefIzxDi2kP+Cl3qpT68uaw4W9o1hMkXlmotuIvZyLwDDJv3kxfg6Cg==" />
+            <description>&lt;h2&gt;NoCompile 0.2.6&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;多设备切换与补推&lt;/strong&gt;：每台设备接入一个 App，只向当前选中的设备推送热重载；切换设备或 App 重新运行后，自动补推缺少的改动&lt;/li&gt;&lt;li&gt;&lt;strong&gt;控制台日志分类着色&lt;/strong&gt;：日志按类别加 emoji 与彩色标签，重复日志合并显示；最近工程下显示所在目录&lt;/li&gt;&lt;li&gt;&lt;strong&gt;检查改动&lt;/strong&gt;：顶栏新增「检查改动」按钮，并支持全局快捷键（默认 ⌃⌥⌘R）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;主界面去掉「保存即注入」开关&lt;/strong&gt;：改动检测统一由 Mac 端处理&lt;/li&gt;&lt;li&gt;&lt;strong&gt;其他工程的 App 不再接入&lt;/strong&gt;：同名工程副本或其他工程运行的 App 不会再被接入，也不再每 2 秒重连刷屏&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;文件监听改为按文件指纹判定改动，修复 Xcode 保存后偶发漏检&lt;/li&gt;&lt;li&gt;从构建清单补全编译命令：Xcode 清理旧构建日志后，大部分 ObjC 文件仍可热重载（大型工程此前只能解析到极少数编译命令）；编译命令缓存随 Xcode 版本失效&lt;/li&gt;&lt;li&gt;修复热重载频繁崩溃：类的内存布局变化（增删、重排属性或 ivar）时不再替换该类实现，避免越界访问；vtable 按函数名核对后再覆写；+load 中 swizzle 的分类重新注入不再无限递归&lt;/li&gt;&lt;li&gt;连接层线程安全，真机监听出错后自动重建&lt;/li&gt;&lt;li&gt;修复 SwiftUI `some View` 类型变化、资源 hook 安装竞态、C++ 函数内静态对象迁移等问题&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;客户端有以上修复，需要更新依赖并重新编译 App 才能生效；未重新编译的客户端仍可正常热重载，不会被要求重新编译。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.4</title>
+            <pubDate>Tue, 20 Oct 2026 11:50:42 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.4</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.4/NoCompile_v0.2.4_arm64.dmg" length="3774128" type="application/octet-stream" sparkle:edSignature="pYhzKvX/C6814scNbHC3xc5Ki11o31EGMnr3z/Rlo1SoBDPTI7pt6EnJPe5ust+daw9tormunBWRRgBzPeR1Aw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.4&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;安装包按芯片拆分&lt;/strong&gt;：从本版本起分别提供 Apple 芯片（`_arm64`）与 Intel（`_x86_64`）两个 DMG，体积更小；Sparkle 自动更新也按架构分别推送。已安装的旧版会自动升级到与本机芯片匹配的版本&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;iOS 与 macOS App 同时连接时，只属于其他平台的源文件不再被借用别的模块的编译命令重编（此前会报找不到 AppKit），资源也按平台分别下发，不再报找不到所属 bundle&lt;/li&gt;&lt;li&gt;CocoaPods `resource_bundles` 中的 xcassets 能正确判定所属 bundle 并热重载&lt;/li&gt;&lt;li&gt;编译命令持久化缓存，Xcode 清理旧构建日志后仍能找到命令；Xcode 显式模块 PCH 不兼容时自建 PCH&lt;/li&gt;&lt;li&gt;以 `$sSo` 开头的 Swift 扩展符号不再被误判为标准库符号&lt;/li&gt;&lt;li&gt;C / ObjC `static` 变量状态随注入迁移；swizzle 按函数体配对；弱符号正确重绑&lt;/li&gt;&lt;li&gt;ObjC ivar 布局变化时跳过方法替换，避免越界访问&lt;/li&gt;&lt;li&gt;新增符号提升为全局，后注入的 dylib 绑定到最新实现&lt;/li&gt;&lt;li&gt;framework 头文件副本同步、显式模块头文件依赖，以及按改动的标识符筛选依赖文件&lt;/li&gt;&lt;li&gt;framework 内资源、strings、json、颜色集支持热重载，修复克隆文件事件导致的循环触发&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;示例&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;示例工程扩展为多模块 workspace（动态 framework、静态库、本地 SPM）并新增 CocoaPods 版本，附约 120 个场景的端到端自测&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.4</title>
+            <pubDate>Tue, 20 Oct 2026 11:50:43 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.4</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.4/NoCompile_v0.2.4_x86_64.dmg" length="3853127" type="application/octet-stream" sparkle:edSignature="QbaomdUhKDKwFtmBGiAIP8+V0bo7LxpwpKT0Xil8jKWnvqg39trIAM8gEQFzZsUxOhYqf8weNh6V3rQulI2VAA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.4&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;安装包按芯片拆分&lt;/strong&gt;：从本版本起分别提供 Apple 芯片（`_arm64`）与 Intel（`_x86_64`）两个 DMG，体积更小；Sparkle 自动更新也按架构分别推送。已安装的旧版会自动升级到与本机芯片匹配的版本&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;iOS 与 macOS App 同时连接时，只属于其他平台的源文件不再被借用别的模块的编译命令重编（此前会报找不到 AppKit），资源也按平台分别下发，不再报找不到所属 bundle&lt;/li&gt;&lt;li&gt;CocoaPods `resource_bundles` 中的 xcassets 能正确判定所属 bundle 并热重载&lt;/li&gt;&lt;li&gt;编译命令持久化缓存，Xcode 清理旧构建日志后仍能找到命令；Xcode 显式模块 PCH 不兼容时自建 PCH&lt;/li&gt;&lt;li&gt;以 `$sSo` 开头的 Swift 扩展符号不再被误判为标准库符号&lt;/li&gt;&lt;li&gt;C / ObjC `static` 变量状态随注入迁移；swizzle 按函数体配对；弱符号正确重绑&lt;/li&gt;&lt;li&gt;ObjC ivar 布局变化时跳过方法替换，避免越界访问&lt;/li&gt;&lt;li&gt;新增符号提升为全局，后注入的 dylib 绑定到最新实现&lt;/li&gt;&lt;li&gt;framework 头文件副本同步、显式模块头文件依赖，以及按改动的标识符筛选依赖文件&lt;/li&gt;&lt;li&gt;framework 内资源、strings、json、颜色集支持热重载，修复克隆文件事件导致的循环触发&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;示例&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;示例工程扩展为多模块 workspace（动态 framework、静态库、本地 SPM）并新增 CocoaPods 版本，附约 120 个场景的端到端自测&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.4。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.3</title>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.3</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.3/NoCompile_v0.2.3.dmg" length="4297235" type="application/octet-stream" sparkle:edSignature="QNk6If1XaXz4BKclzACC6v214MN3hbaMPexpzGXkSb4n73+9yW8/Pb3881rYNAXNnMVetesFY++liQFqg640Dw==" />
+            <description>&lt;h2&gt;NoCompile 0.2.3&lt;/h2&gt;
+&lt;h3&gt;新增&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;注入记录可清除&lt;/strong&gt;：「最近注入」标题行新增清除按钮；右键菜单可删除单条记录，选中后按 Delete 键同样可删&lt;/li&gt;&lt;li&gt;&lt;strong&gt;注入记录可预览与查看详情&lt;/strong&gt;：单击选中记录，按空格弹出预览，↑/↓ 切换，双击或回车打开详情（含完整失败信息，可复制），⌘C 复制选中记录&lt;/li&gt;&lt;li&gt;&lt;strong&gt;日志控制台快捷键&lt;/strong&gt;：⌘+ / ⌘- 缩放日志字号（会记住），⌘F 聚焦日志搜索框&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;优化&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;日志控制台支持跨行拖选与复制，不再只能逐条复制；追加日志为增量刷新，选择文字时不会自动滚动打断选区&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;只含分类的 .m 文件注入后误报「未替换」&lt;/li&gt;&lt;li&gt;头文件变更后模块缓存过期导致 ObjC 重编出现无法重建的 fatal error（默认不再加 `-fno-validate-pch`）&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.3。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.2</title>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.2</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.2/NoCompile_v0.2.2.dmg" length="4220352" type="application/octet-stream" sparkle:edSignature="e01GQFcarMlOZSJOa1IUSYlD0ITK/kCNknv0cb4w8CRzkFIm8L2UiFH5YWPRcHLboDjdcv1YJQPxHDDDMdI3DQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.2&lt;/h2&gt;
+&lt;h3&gt;新增&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;断开工程&lt;/strong&gt;：控制台顶栏、菜单栏与「文件」菜单可断开当前工程（停止监听并断开已连接的 App），断开后可一键重新打开最近的工程&lt;/li&gt;&lt;li&gt;&lt;strong&gt;导出诊断包&lt;/strong&gt;：控制台日志栏的 📦 按钮或菜单「导出诊断包…」生成 zip，包含各环节诊断日志、编译失败的完整命令与输出、主线程卡顿时自动采集的调用栈、引擎状态与最近注入记录，便于反馈问题&lt;/li&gt;&lt;li&gt;&lt;strong&gt;客户端版本校验&lt;/strong&gt;：App 内的客户端与 Mac 端版本不一致（例如 App 包里拷贝的仍是旧 bundle）时，控制台、系统通知与 App 浮层提示重新编译 App，并暂停向其推送热重载&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;优化&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;大型工程的构建日志改为流式解析并增量合并：1.1GB 的日志从 217 秒 / 4.5GB 内存降到约 8 秒 / 不到 100MB，修复打开大型工程后 Mac 端长时间无响应、转菊花&lt;/li&gt;&lt;li&gt;头文件改动改用依赖索引查找引用方，被大量文件引用的公共头文件只重编同名实现文件&lt;/li&gt;&lt;li&gt;本地 Pod / 子模块 git 拉取、合并后能正确触发热重载：一次 git 操作合并为一批处理，并监听 Podfile.lock 中工程目录之外的本地 Pod&lt;/li&gt;&lt;li&gt;App 内状态浮层支持多行，长提示不再被截断&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;存在同名工程（如两份 Example.xcworkspace）时可能用错另一份工程的构建日志&lt;/li&gt;&lt;li&gt;切换工程、重启监听时可能卡住主线程&lt;/li&gt;&lt;li&gt;日志达到上限后「跟随最新」失效&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;升级后请重新编译运行接入了 NoCompile 的 App，CocoaPods / SPM / Carthage 接入的请同时把依赖更新到 0.2.2。&lt;/p&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+        <item>
+            <title>0.2.1</title>
+            <pubDate>Sat, 17 Oct 2026 11:34:00 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.1</link>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.1/NoCompile_v0.2.1.dmg" length="3847728" type="application/octet-stream" sparkle:edSignature="hSSdh0GEv0C5CZ2wxhIb+oJ0MA3vm6FPoLH+ulRSPAKR5HZ+x34rCMWDFV/tPXVcConENnN0ETS7spaDQt5aAQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.1&lt;/h2&gt;
+&lt;h3&gt;变更&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;默认不再自动重建已打开的页面&lt;/strong&gt;：注入后新代码立即生效，受影响的已加载页面保持原样，日志、App 顶部浮层和控制台提示「退出页面重进即可看到」。避免在旧实例上重跑 `viewDidLoad` 带来的重复注册通知 / KVO、页面状态丢失等问题。需要原地刷新时，可在偏好设置开启「自动重建已加载的页面」，或设置 `NoCompile.autoReloadViewControllers = YES`&lt;/li&gt;&lt;li&gt;&lt;strong&gt;增删方法 / 存储属性不再拒绝注入&lt;/strong&gt;：新代码会被安全加载，ObjC / `@objc` 方法的增删即时生效；纯 Swift 的增删方法 / 属性不动屏幕上的旧实例（其布局已固定），重新运行 App 后生效，不会崩溃&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;多架构模拟器构建（同时包含 arm64 与 x86_64）时，按 App 实际架构挑选编译命令，修复注入 x86_64 dylib 失败&lt;/li&gt;&lt;/ul&gt;
+&lt;p&gt;详见 &lt;a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"&gt;接入指南&lt;/a&gt;。&lt;/p&gt;</description>
+        </item>
+    </channel>
+</rss>
