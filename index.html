@@ -1,333 +1,313 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NoCompile — iOS / macOS 热重载工具</title>
-<meta name="description" content="NoCompile 只重新编译改动的文件并注入运行中的 App，支持 C、C++、Objective-C、Swift，覆盖模拟器、真机与 macOS。">
+<meta name="description" content="NoCompile 只重新编译改动的那个文件并注入运行中的 App，保存即生效。支持 C、C++、Objective-C、Swift，覆盖模拟器、真机与 macOS，客户端 SDK 以 MIT 开源。">
+<meta property="og:type" content="website">
 <meta property="og:title" content="NoCompile — iOS / macOS 热重载工具">
 <meta property="og:description" content="修改代码，保存，立即在运行中的 App 看到效果。支持 C、C++、Objective-C、Swift。">
-<meta property="og:image" content="https://wangwanjie.github.io/NoCompile/assets/icon.png">
-<link rel="icon" type="image/png" href="assets/icon-256.png">
-<style>
-  :root {
-    --bg: #0d0b1a;
-    --bg-2: #15122b;
-    --card: rgba(255, 255, 255, 0.045);
-    --card-border: rgba(255, 255, 255, 0.08);
-    --text: #f2f0fa;
-    --muted: #a19cbc;
-    --accent: #7b6cff;
-    --accent-2: #4f8dff;
-    --radius: 18px;
-    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0;
-    font-family: var(--sans);
-    color: var(--text);
-    background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(123, 108, 255, 0.28), transparent 60%),
-      radial-gradient(800px 500px at 90% 30%, rgba(79, 141, 255, 0.12), transparent 60%),
-      var(--bg);
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: inherit; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
-
-  nav {
-    position: sticky; top: 0; z-index: 10;
-    backdrop-filter: saturate(180%) blur(18px);
-    -webkit-backdrop-filter: saturate(180%) blur(18px);
-    background: rgba(13, 11, 26, 0.6);
-    border-bottom: 1px solid var(--card-border);
-  }
-  nav .wrap { display: flex; align-items: center; height: 56px; gap: 28px; }
-  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; text-decoration: none; }
-  nav .brand img { width: 26px; height: 26px; }
-  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; }
-  nav .links a { color: var(--muted); text-decoration: none; }
-  nav .links a:hover { color: var(--text); }
-  nav .lang { cursor: pointer; border: 1px solid var(--card-border); border-radius: 999px; padding: 3px 12px; background: none; color: var(--muted); font: inherit; font-size: 13px; }
-
-  header.hero { text-align: center; padding: 88px 0 40px; }
-  .hero img.icon { width: 148px; height: 148px; filter: drop-shadow(0 24px 48px rgba(123, 108, 255, 0.45)); }
-  .hero h1 { font-size: clamp(40px, 7vw, 68px); letter-spacing: -0.03em; margin: 18px 0 8px; line-height: 1.05; }
-  .hero h1 span {
-    background: linear-gradient(120deg, #c7bfff, #7b6cff 45%, #4f8dff);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .hero p.lead { font-size: clamp(17px, 2.2vw, 21px); color: var(--muted); max-width: 720px; margin: 0 auto; }
-  .downloads { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin: 36px 0 14px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    padding: 13px 22px; border-radius: 14px; text-decoration: none; font-weight: 600; font-size: 16px;
-    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
-  }
-  .btn small { display: block; font-weight: 400; font-size: 12px; opacity: .75; }
-  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 10px 30px rgba(123, 108, 255, .35); }
-  .btn.secondary { background: var(--card); border: 1px solid var(--card-border); }
-  .btn:hover { transform: translateY(-2px); }
-  .btn svg { width: 22px; height: 22px; flex: none; }
-  .meta { color: var(--muted); font-size: 13px; }
-  .meta a { color: var(--muted); }
-
-  .shot { margin: 56px auto 0; max-width: 1000px; position: relative; }
-  .shot img { width: 100%; display: block; border-radius: 14px; box-shadow: 0 40px 120px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .06); }
-  .tabs { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
-  .tabs button {
-    font: inherit; font-size: 13px; color: var(--muted); background: var(--card); border: 1px solid var(--card-border);
-    border-radius: 999px; padding: 6px 14px; cursor: pointer;
-  }
-  .tabs button.active { color: var(--text); border-color: rgba(123, 108, 255, .7); background: rgba(123, 108, 255, .18); }
-
-  section { padding: 96px 0 0; }
-  section h2 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; margin: 0 0 8px; text-align: center; }
-  section p.sub { text-align: center; color: var(--muted); margin: 0 auto 44px; max-width: 640px; }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-  .card {
-    background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius);
-    padding: 20px; transition: border-color .15s ease, transform .15s ease;
-  }
-  .card:hover { border-color: rgba(123, 108, 255, .45); transform: translateY(-2px); }
-  .card .tile {
-    width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
-    font-size: 19px; color: #fff; margin-bottom: 12px;
-  }
-  .card h3 { margin: 0 0 4px; font-size: 17px; }
-  .card .alt { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-  .card p { margin: 0; color: var(--muted); font-size: 14px; }
-
-  .points { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-  .point { padding: 24px; border-radius: var(--radius); background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.015)); border: 1px solid var(--card-border); }
-  .point b { display: block; font-size: 18px; margin-bottom: 6px; }
-  .point span { color: var(--muted); font-size: 14px; }
-
-  .install ol { counter-reset: step; list-style: none; padding: 0; margin: 0 auto; max-width: 720px; }
-  .install li { counter-increment: step; position: relative; padding: 18px 20px 18px 64px; margin-bottom: 10px; background: var(--card); border: 1px solid var(--card-border); border-radius: 14px; }
-  .install li::before {
-    content: counter(step); position: absolute; left: 18px; top: 16px; width: 30px; height: 30px; border-radius: 50%;
-    display: grid; place-items: center; font-weight: 700; background: rgba(123, 108, 255, .22); color: #cfc8ff;
-  }
-  .install li code { background: rgba(255,255,255,.08); border-radius: 6px; padding: 1px 6px; font-size: 13px; }
-
-  footer { margin-top: 110px; padding: 36px 0 48px; border-top: 1px solid var(--card-border); color: var(--muted); font-size: 13px; }
-  footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; }
-  footer a { color: var(--muted); }
-
-  [data-lang="en"] .zh, [data-lang="zh"] .en { display: none !important; }
-
-  @media (max-width: 640px) {
-    nav .links a.hide-sm { display: none; }
-    header.hero { padding-top: 56px; }
-  }
-
-  .code { max-width: 820px; margin: 0 auto; }
-  .code .tabs { justify-content: flex-start; margin: 0 0 12px; }
-  .code pre {
-    margin: 0; padding: 18px 20px; border-radius: 14px; overflow-x: auto;
-    background: rgba(0, 0, 0, .35); border: 1px solid var(--card-border);
-    font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #e7e3ff;
-  }
-  .code .note { color: var(--muted); font-size: 14px; margin-top: 12px; }
-  .code .note code, .point code { background: rgba(255,255,255,.08); border-radius: 6px; padding: 1px 6px; font-size: 13px; }
-</style>
+<meta property="og:image" content="assets/icon-256.png">
+<meta name="theme-color" content="#08070f">
+<link rel="icon" type="image/png" href="assets/icon-180.png">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<script>
+  // 首屏前确定主题与语言，避免闪烁；URL 参数优先于 localStorage
+  (function () {
+    var d = document.documentElement;
+    d.classList.add('js');
+    var q = new URLSearchParams(location.search), pref, lang;
+    try { pref = q.get('theme') || localStorage.getItem('nc-theme'); } catch (e) {}
+    if (pref !== 'light' && pref !== 'dark') { pref = 'system'; }
+    var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    d.setAttribute('data-theme', dark ? 'dark' : 'light');
+    d.setAttribute('data-theme-pref', pref);
+    try { lang = q.get('lang') || localStorage.getItem('nc-lang'); } catch (e) {}
+    if (lang === 'zh-CN' || lang === 'en' || lang === 'zh-TW') { d.lang = lang; }
+  })();
+</script>
+<link rel="stylesheet" href="assets/site.css">
 </head>
-<body data-lang="zh">
+<body>
+<a class="skip" href="#main" data-i18n="skip">跳到正文</a>
 
-<nav>
-  <div class="wrap">
-    <a class="brand" href="#"><img src="assets/icon-256.png" alt="">NoCompile</a>
-    <div class="links">
-      <a class="hide-sm" href="#features"><span class="zh">特性</span><span class="en">Features</span></a>
-      <a class="hide-sm" href="#integrate"><span class="zh">接入</span><span class="en">Integrate</span></a>
-      <a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"><span class="zh">接入指南</span><span class="en">Guide</span></a>
-      <a href="https://github.com/wangwanjie/NoCompile/releases"><span class="zh">版本历史</span><span class="en">Releases</span></a>
-      <a href="https://github.com/wangwanjie/NoCompile">GitHub</a>
-    </div>
-    <button class="lang" id="lang-toggle" type="button">EN</button>
-  </div>
-</nav>
-
-<header class="hero">
-  <div class="wrap">
-    <img class="icon" src="assets/icon.png" alt="NoCompile">
-    <h1><span>NoCompile</span></h1>
-    <p class="lead">
-      <span class="zh">iOS / macOS 热重载工具，支持 C、C++、Objective-C、Swift。修改代码，保存，1~3 秒内就在运行中的 App 里看到效果，无需等待整个工程重新编译。</span>
-      <span class="en">Hot reload for iOS and macOS, supporting C, C++, Objective-C and Swift. Edit, save, and see the change in your running app within 1–3 seconds, without rebuilding the whole project.</span>
-    </p>
-    <div class="downloads">
-      <a class="btn primary" id="dl-arm" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_arm64.dmg">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/></svg>
-        <span><span class="zh">下载 Apple 芯片版</span><span class="en">Download for Apple silicon</span><small>M1 / M2 / M3 / M4 …</small></span>
-      </a>
-      <a class="btn secondary" id="dl-intel" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_x86_64.dmg">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/></svg>
-        <span><span class="zh">下载 Intel 版</span><span class="en">Download for Intel</span><small>x86_64</small></span>
-      </a>
-    </div>
-    <div class="meta">
-      <span class="zh">免费 · 菜单栏 App · 已通过 Apple 公证 · 内置自动更新 · 客户端 SDK 以 MIT 开源</span>
-      <span class="en">Free · Menu bar app · Notarized by Apple · Built-in auto update · Client SDK under MIT</span>
-      <span id="version"></span>
-    </div>
-
-    <div class="shot">
-      <img src="assets/screenshot.png" alt="NoCompile">
+<header class="top" id="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#top" data-i18n-aria="brandAria" aria-label="NoCompile 首页">
+      <img src="assets/icon-64.webp" srcset="assets/icon-64.webp 1x, assets/icon-128.webp 2x" width="32" height="32" alt="" decoding="async">
+      <span>NoCompile</span>
+    </a>
+    <nav class="nav" data-i18n-aria="navAria" aria-label="页面导航">
+      <a href="#how" data-i18n="navHow">原理</a>
+      <a href="#features" data-i18n="navFeatures">特性</a>
+      <a href="#integrate" data-i18n="navIntegrate">接入</a>
+      <a href="#download" data-i18n="navDownload">下载</a>
+    </nav>
+    <div class="ctrls">
+      <div class="seg" role="group" data-i18n-aria="langAria" aria-label="语言">
+        <button type="button" data-lang="zh-CN" lang="zh-CN" title="简体中文">简</button>
+        <button type="button" data-lang="en" lang="en" title="English">EN</button>
+        <button type="button" data-lang="zh-TW" lang="zh-TW" title="繁體中文">繁</button>
+      </div>
+      <div class="seg" role="group" data-i18n-aria="themeAria" aria-label="主题">
+        <button type="button" data-theme-set="light" data-i18n-aria="themeLight" aria-label="浅色"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg></button>
+        <button type="button" data-theme-set="dark" data-i18n-aria="themeDark" aria-label="深色"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
+        <button type="button" data-theme-set="system" data-i18n-aria="themeSystem" aria-label="跟随系统"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16.5V20"/></svg></button>
+      </div>
+      <a class="gh" href="https://github.com/wangwanjie/NoCompile" target="_blank" rel="noopener" aria-label="GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     </div>
   </div>
 </header>
 
-<section>
-  <div class="wrap">
-    <div class="points">
-      <div class="point"><b><span class="zh">只编一个文件</span><span class="en">One file at a time</span></b><span class="zh">只重新编译刚改动的文件，链接成 dylib 注入运行中的 App，大型工程也能秒级生效。</span><span class="en">Only the file you changed is recompiled, linked into a dylib and injected into the running app.</span></div>
-      <div class="point"><b><span class="zh">四种语言</span><span class="en">Four languages</span></b><span class="zh">C / C++ / Objective-C / Swift 统一支持，C/C++ 自由函数通过 GOT 重绑覆盖。</span><span class="en">C, C++, Objective-C and Swift alike; C/C++ free functions are rebound through the GOT.</span></div>
-      <div class="point"><b><span class="zh">真机可用</span><span class="en">Works on device</span></b><span class="zh">以 USB（usbmuxd）为主通道连接真机，模拟器与 macOS App 同样支持。</span><span class="en">Devices connect over USB (usbmuxd); simulators and macOS apps are supported too.</span></div>
-      <div class="point"><b><span class="zh">零侵入</span><span class="en">Zero intrusion</span></b><span class="zh">保存即注入，无需在业务类里实现 <code>injected()</code>；只在 Debug 配置生效。</span><span class="en">Inject on save with no <code>injected()</code> boilerplate. Debug configuration only.</span></div>
+<main id="main">
+  <!-- 首屏：左侧编辑器 + 右侧模拟器，保存后闪电划过、界面瞬间变化 -->
+  <section class="hero">
+    <div class="wrap hero-in">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="pip"></span><span data-i18n="eyebrow">iOS / macOS 热重载 · C · C++ · Objective-C · Swift</span></p>
+        <h1 data-i18n="heroTitle">改完代码，按下 <kbd>⌘S</kbd>，<br><em>它已经在 App 里生效</em></h1>
+        <p class="lede" data-i18n="heroLede">NoCompile 只重新编译你刚改动的那一个文件，链接成 dylib 注入正在运行的 App，把新实现换上去。不用停 App，也不用等整个工程重新编译。</p>
+        <div class="cta">
+          <a class="btn btn-volt" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_arm64.dmg">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+            <span><b data-i18n="dlArm">下载 · Apple 芯片</b><small>NoCompile_arm64.dmg</small></span>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_x86_64.dmg">
+            <span><b data-i18n="dlIntel">Intel 版</b><small>NoCompile_x86_64.dmg</small></span>
+          </a>
+        </div>
+        <p class="meta"><span data-i18n="metaLatest">最新版本</span> <a class="ver" data-version href="https://github.com/wangwanjie/NoCompile/releases/latest">v0.2.13</a> · <span data-i18n="metaReq">macOS 12+ · Apple 公证 · Sparkle 自动更新 · 客户端 SDK MIT 开源</span></p>
+      </div>
+
+      <div class="stage" id="stage" data-i18n-aria="stageAria" aria-label="演示：修改 Swift 代码并保存，闪电划过，模拟器里的界面立即更新" role="img">
+        <canvas class="bolt" id="bolt" aria-hidden="true"></canvas>
+        <div class="editor" aria-hidden="true">
+          <div class="ed-bar">
+            <i></i><i></i><i></i>
+            <span class="ed-tab"><span class="sw">swift</span> HomeViewController.swift<span class="dirty" id="dirty"></span></span>
+            <span class="keycap" id="keycap">⌘S</span>
+          </div>
+<pre class="ed-code"><code><span class="ln">1</span><span class="k">import</span> UIKit
+<span class="ln">2</span>
+<span class="ln">3</span><span class="k">final class</span> <span class="t">HomeViewController</span>: <span class="t">UIViewController</span> {
+<span class="ln">4</span>    <span class="k">override func</span> <span class="f">viewDidLoad</span>() {
+<span class="ln">5</span>        <span class="k">super</span>.<span class="f">viewDidLoad</span>()
+<span class="ln" data-line="0">6</span>        titleLabel.text = <span class="s">"<span class="v" id="v0">你好，NoCompile</span>"</span>
+<span class="ln" data-line="1">7</span>        heroCard.backgroundColor = .<span class="p"><span class="v" id="v1">systemIndigo</span></span>
+<span class="ln" data-line="2">8</span>        actionButton.<span class="f">setTitle</span>(<span class="s">"<span class="v" id="v2">开始使用</span>"</span>, for: .normal)
+<span class="ln">9</span>    }
+<span class="ln">10</span>}</code></pre>
+          <div class="ed-log" id="edlog"><span class="bolt-ic">⚡</span> <span class="logtext" id="logtext">HomeViewController.swift 已生效</span></div>
+        </div>
+
+        <div class="phone" aria-hidden="true">
+          <div class="ph-frame">
+            <div class="ph-screen" id="screen">
+              <div class="ph-status"><span>9:41</span><span class="ph-island"></span><span class="ph-bat"></span></div>
+              <p class="ph-small">Home</p>
+              <p class="ph-title" id="p0">你好，NoCompile</p>
+              <div class="ph-card" id="p1" data-c="indigo">
+                <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+                <span class="ph-lines"><i></i><i></i></span>
+              </div>
+              <div class="ph-rows"><i></i><i></i></div>
+              <span class="ph-btn" id="p2">开始使用</span>
+              <span class="ph-flash" id="flash"></span>
+            </div>
+          </div>
+          <div class="timer" id="timer"><span class="t-ic">⚡</span><span id="tval">0.30</span>s</div>
+        </div>
+      </div>
+      <p class="stage-note" data-i18n="stageNote">演示动画。示例工程实测：单个 Swift / Objective-C / C 文件保存后 0.3～0.8 秒生效，整个过程通常在 1～3 秒内完成。</p>
     </div>
-  </div>
-</section>
+  </section>
 
-<section id="features">
-  <div class="wrap">
-    <h2><span class="zh">针对现有工具的短板做了改进</span><span class="en">Built to fix what hurts</span></h2>
-    <p class="sub"><span class="zh">借鉴 InjectionIII、HotReloading、InjectionNext 的核心原理。</span><span class="en">Inspired by the core ideas of InjectionIII, HotReloading and InjectionNext.</span></p>
-    <div class="grid" id="feature-grid"></div>
-  </div>
-</section>
-
-<section id="integrate">
-  <div class="wrap code">
-    <h2><span class="zh">接入 App 工程</span><span class="en">Add it to your app</span></h2>
-    <p class="sub"><span class="zh">先在 Debug 配置的 Other Linker Flags 加上 <code>-Xlinker -interposable</code>（CocoaPods 会自动添加），再任选一种方式接入客户端。</span><span class="en">Add <code>-Xlinker -interposable</code> to Other Linker Flags for Debug (CocoaPods does this for you), then pick one way to add the client.</span></p>
-    <div class="tabs" id="code-tabs">
-      <button type="button" class="active" data-code="spm">Swift Package Manager</button>
-      <button type="button" data-code="pods">CocoaPods</button>
-      <button type="button" data-code="carthage">Carthage</button>
-      <button type="button" data-code="bundle"><span class="zh">拷贝 bundle</span><span class="en">Copy bundle</span></button>
+  <!-- 原理：五步流水线 -->
+  <section class="sec" id="how">
+    <div class="wrap">
+      <p class="kicker reveal">01 · <span data-i18n="howKicker">原理</span></p>
+      <h2 class="reveal" data-i18n="howTitle">一次保存，五步注入</h2>
+      <p class="sub reveal" data-i18n="howSub">Mac 端监听文件变化，只重编改动的文件；App 进程内的客户端收到 dylib 后完成替换。模拟器与 macOS 走本机 TCP，真机走 USB（usbmuxd）。</p>
+      <div class="flow-wrap reveal">
+        <span class="track" aria-hidden="true"><span class="runner"></span></span>
+        <ol class="flow">
+        <li><b>⌘S</b><span data-i18n="flow1">FSEvents 捕获保存</span></li>
+        <li><b>swiftc -###</b><span data-i18n="flow2">从构建日志还原单文件编译命令</span></li>
+        <li><b>.dylib</b><span data-i18n="flow3">只编译这一个文件并链接</span></li>
+        <li><b>codesign</b><span data-i18n="flow4">用 App 的身份签名后推送</span></li>
+        <li><b>dlopen</b><span data-i18n="flow5">进程内替换为新实现</span></li>
+        </ol>
+      </div>
+      <div class="layers reveal">
+        <div><code>class_replaceMethod</code><span data-i18n="layer1">Objective-C 方法替换</span></div>
+        <div><code>vtable</code><span data-i18n="layer2">Swift 类的虚函数表覆写</span></div>
+        <div><code>GOT rebind</code><span data-i18n="layer3">C / C++ 自由函数与符号重绑</span></div>
+      </div>
     </div>
-    <pre data-code="spm">File → Add Package Dependencies…
-https://github.com/wangwanjie/NoCompile
+  </section>
 
-// 把 NoCompile 库加到 App target，只在 Debug 链接</pre>
-    <pre data-code="pods" hidden>pod 'NoCompile', :configurations => ['Debug']</pre>
-    <pre data-code="carthage" hidden>github "wangwanjie/NoCompile"
+  <!-- 特性 -->
+  <section class="sec" id="features">
+    <div class="wrap">
+      <p class="kicker reveal">02 · <span data-i18n="featKicker">特性</span></p>
+      <h2 class="reveal" data-i18n="featTitle">为日常开发打磨的热重载</h2>
+      <div class="grid">
+        <article class="card reveal wide">
+          <h3 data-i18n="f1t">四种语言，一套机制</h3>
+          <p data-i18n="f1d">C、C++、Objective-C、Swift 统一支持：ObjC 方法、Swift 类方法、C/C++ 自由函数都能替换，后者通过 GOT 重绑覆盖。</p>
+          <div class="chips"><span>C</span><span>C++</span><span>Objective-C</span><span>Swift</span><span>SwiftUI</span></div>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f2t">编译命令跟随 Xcode</h3>
+          <p data-i18n="f2d">解析构建日志拿到 driver 命令，再交给官方 <code>swiftc -###</code> 展开单文件命令。参数由编译器自己生成，Xcode 升级自动跟随。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f3t">保存即注入</h3>
+          <p data-i18n="f3d">FSEvents 自动触发，无需按快捷键。漏检时点「检查改动」或按全局快捷键 <kbd>⌃⌥⌘R</kbd> 补上。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f4t">真机走 USB</h3>
+          <p data-i18n="f4d">以 usbmuxd 为主通道连接真机，不依赖局域网广播；从构建日志自动提取签名身份。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f5t">资源与新文件</h3>
+          <p data-i18n="f5d">storyboard、xib、图片保存即生效（含真机）；运行中新建的源文件也能注入。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f6t">零侵入刷新</h3>
+          <p data-i18n="f6d">业务类不必实现 <code>injected()</code>。已打开的页面退出重进即可看到，也可开启自动重建；SwiftUI 配合 <code>@ObserveInjection</code> 监听注入通知自动重绘。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f7t">类型判定不失效</h3>
+          <p data-i18n="f7d">登记新旧类的等价关系，注入后 <code>isKindOfClass:</code> 与 <code>as?</code> 照常工作。</p>
+        </article>
+        <article class="card reveal">
+          <h3 data-i18n="f8t">中文与空格路径</h3>
+          <p data-i18n="f8d">全程用参数数组调用子进程，不拼接 shell 字符串，工程放在任何目录都能用。</p>
+        </article>
+        <article class="card reveal full">
+          <h3 data-i18n="f9t">布局变化时主动保护</h3>
+          <p data-i18n="f9d">增删存储属性、调换 Swift 方法顺序、SwiftUI 视图结构变化会改变内存布局。NoCompile 检测到后不替换该类，并在日志与 App 浮层提示重新运行；同文件里其他类和函数照常生效。SwiftUI 在 <code>body</code> 末尾加 <code>.enableInjection()</code> 即可热重载结构改动。</p>
+        </article>
+      </div>
+    </div>
+  </section>
 
-carthage update NoCompile --use-xcframeworks
-# Release 配置用 EXCLUDED_SOURCE_FILE_NAMES 排除 NoCompile.framework</pre>
-    <pre data-code="bundle" hidden># Build Phases 末尾加 Run Script
-"/Applications/NoCompile.app/Contents/Resources/nocompile_copy_bundle.sh"
+  <!-- 控制台截图 -->
+  <section class="sec shot-sec">
+    <div class="wrap">
+      <p class="kicker reveal">03 · <span data-i18n="shotKicker">控制台</span></p>
+      <h2 class="reveal" data-i18n="shotTitle">每一次注入都看得见</h2>
+      <p class="sub reveal" data-i18n="shotSub">左侧是已连接的 App 与最近的注入记录（成功 / 失败数、平均耗时），右侧是按类别着色、可筛选搜索的日志。编译失败时右键即可在 Xcode 中定位到出错行；遇到问题可一键导出诊断包。</p>
+      <figure class="shot reveal">
+        <img src="assets/screenshot-1600.webp" srcset="assets/screenshot-800.webp 800w, assets/screenshot-1600.webp 1600w" sizes="(max-width: 1180px) 100vw, 1120px" width="1600" height="818" loading="lazy" decoding="async" data-i18n-alt="shotAlt" alt="NoCompile 控制台与 iOS 模拟器中的示例 App：分别修改 Swift、Objective-C、C 文件并保存，0.3～0.8 秒即在运行中的 App 里生效">
+      </figure>
+    </div>
+  </section>
 
-// 启动时加载 App 内的 bundle（Swift）
-#if DEBUG
-if let path = Bundle.main.path(forResource: "NoCompile", ofType: "bundle") {
-    Bundle(path: path)?.load()
+  <!-- 接入 -->
+  <section class="sec" id="integrate">
+    <div class="wrap">
+      <p class="kicker reveal">04 · <span data-i18n="intKicker">接入</span></p>
+      <h2 class="reveal" data-i18n="intTitle">两步接入，只在 Debug 生效</h2>
+      <p class="sub reveal" data-i18n="intSub">客户端 SDK 就在本仓库，零第三方依赖，支持 iOS / tvOS 15+ 与 macOS 12+。</p>
+
+      <div class="step reveal">
+        <div class="step-h"><span class="num">1</span><div><h3 data-i18n="s1t">Debug 配置添加链接参数</h3><p data-i18n="s1d">Build Settings → Other Linker Flags，只给 <b>Debug</b> 填写。它让 App 内部的函数调用走 GOT 间接寻址，运行时才能重定向到新实现。CocoaPods 方式会自动加上。</p></div></div>
+        <div class="code"><pre><code id="c-ld">-Xlinker -interposable</code></pre><button type="button" class="copy" data-copy="c-ld" data-i18n="copy">复制</button></div>
+      </div>
+
+      <div class="step reveal">
+        <div class="step-h"><span class="num">2</span><div><h3 data-i18n="s2t">接入客户端，任选一种</h3><p data-i18n="s2d">以下方式都支持真机，镜像加载或 <code>load()</code> 时自动启动，无需写启动代码。</p></div></div>
+        <div class="tabs" role="tablist" data-i18n-aria="tabsAria" aria-label="接入方式">
+          <button type="button" role="tab" id="t-spm" aria-controls="p-spm" aria-selected="true">Swift Package Manager</button>
+          <button type="button" role="tab" id="t-pod" aria-controls="p-pod" aria-selected="false" tabindex="-1">CocoaPods</button>
+          <button type="button" role="tab" id="t-carthage" aria-controls="p-carthage" aria-selected="false" tabindex="-1">Carthage</button>
+          <button type="button" role="tab" id="t-bundle" aria-controls="p-bundle" aria-selected="false" tabindex="-1"><span data-i18n="tabBundle">拷贝 bundle</span><span class="rec" data-i18n="rec">零依赖</span></button>
+        </div>
+
+        <div class="panel" role="tabpanel" id="p-spm" aria-labelledby="t-spm">
+          <p data-i18n="spm1">Xcode：File → Add Package Dependencies，填入下面的地址，把 <code>NoCompile</code> 库加到 App target。</p>
+          <div class="code"><pre><code id="c-spm-url">https://github.com/wangwanjie/NoCompile</code></pre><button type="button" class="copy" data-copy="c-spm-url" data-i18n="copy">复制</button></div>
+          <p data-i18n="spm2">或写进 <code>Package.swift</code>：</p>
+          <div class="code"><pre><code id="c-spm-pkg"><span class="f">.package</span>(url: <span class="s">"https://github.com/wangwanjie/NoCompile"</span>, from: <span class="s">"<span data-ver-plain>0.2.13</span>"</span>),
+<span class="cm" data-i18n="spmCm">// target 的 dependencies</span>
+<span class="f">.product</span>(name: <span class="s">"NoCompile"</span>, package: <span class="s">"NoCompile"</span>)</code></pre><button type="button" class="copy" data-copy="c-spm-pkg" data-i18n="copy">复制</button></div>
+          <p class="note" data-i18n="spm3">Debug 的 Other Linker Flags 再加 <code>-ObjC</code>，确保客户端的类被完整链接。模块名为 <code>NoCompileClient</code>。</p>
+        </div>
+
+        <div class="panel" role="tabpanel" id="p-pod" aria-labelledby="t-pod" hidden>
+          <p data-i18n="pod1">在 Podfile 里只给 Debug 配置引入，然后 <code>pod install</code>：</p>
+          <div class="code"><pre><code id="c-pod"><span class="f">pod</span> <span class="s">'NoCompile'</span>, <span class="p">:configurations</span> =&gt; [<span class="s">'Debug'</span>]</code></pre><button type="button" class="copy" data-copy="c-pod" data-i18n="copy">复制</button></div>
+          <p class="note" data-i18n="pod2">Pod 会自动给 Debug 合并 <code>-Xlinker -interposable</code>，Release 不受影响。其他调试配置名（如 Dev）用 <code>project 'App', 'Dev' =&gt; :debug</code> 声明。</p>
+        </div>
+
+        <div class="panel" role="tabpanel" id="p-carthage" aria-labelledby="t-carthage" hidden>
+          <p data-i18n="cart1">Cartfile 加一行，然后构建 xcframework：</p>
+          <div class="code"><pre><code id="c-cart"><span class="f">github</span> <span class="s">"wangwanjie/NoCompile"</span></code></pre><button type="button" class="copy" data-copy="c-cart" data-i18n="copy">复制</button></div>
+          <div class="code"><pre><code id="c-cart-up">carthage update NoCompile --use-xcframeworks</code></pre><button type="button" class="copy" data-copy="c-cart-up" data-i18n="copy">复制</button></div>
+          <p data-i18n="cart2">把 <code>Carthage/Build/NoCompile.xcframework</code> 以 Embed &amp; Sign 加到 App target，再给 <b>Release</b> 等非调试配置设置排除：</p>
+          <div class="code"><pre><code id="c-cart-ex">EXCLUDED_SOURCE_FILE_NAMES = NoCompile.xcframework NoCompile.framework</code></pre><button type="button" class="copy" data-copy="c-cart-ex" data-i18n="copy">复制</button></div>
+        </div>
+
+        <div class="panel" role="tabpanel" id="p-bundle" aria-labelledby="t-bundle" hidden>
+          <p data-i18n="bun1">不引入任何依赖：App target 的 Build Phases 末尾加一个 Run Script，它会把对应平台的 bundle 拷进 App 并重签（默认只在 Debug 配置生效）：</p>
+          <div class="code"><pre><code id="c-bun-sh"><span class="s">"/Applications/NoCompile.app/Contents/Resources/nocompile_copy_bundle.sh"</span></code></pre><button type="button" class="copy" data-copy="c-bun-sh" data-i18n="copy">复制</button></div>
+          <p data-i18n="bun2">在启动尽早的位置加载，模拟器与真机写法相同：</p>
+          <div class="code"><pre><code id="c-bun-swift"><span class="k">#if</span> DEBUG
+<span class="k">if let</span> path = <span class="t">Bundle</span>.main.<span class="f">path</span>(forResource: <span class="s">"NoCompile"</span>, ofType: <span class="s">"bundle"</span>) {
+    <span class="t">Bundle</span>(path: path)?.<span class="f">load</span>()
 }
-#endif</pre>
-    <p class="note"><span class="zh">各方式的完整步骤、一键接入脚本与真机排查见 <a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md">接入指南</a>。</span><span class="en">See the <a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md">integration guide</a> for full steps, the one-step setup script and device troubleshooting.</span></p>
-  </div>
-</section>
+<span class="k">#endif</span></code></pre><button type="button" class="copy" data-copy="c-bun-swift" data-i18n="copy">复制</button></div>
+          <p class="note" data-i18n="bun3">也可以在工程目录运行 <code>nocompile_setup.py</code> 自动完成以上接入，切分支前用 <code>--remove</code> 原样撤销。</p>
+        </div>
+      </div>
 
-<section id="install" class="install">
-  <div class="wrap">
-    <h2><span class="zh">开始使用</span><span class="en">Get started</span></h2>
-    <p class="sub"><span class="zh">不确定芯片类型？打开「苹果菜单 › 关于本机」，看“芯片”一栏。</span><span class="en">Not sure which chip you have? Open  › About This Mac and check “Chip”.</span></p>
-    <ol>
-      <li><span class="zh">下载与本机芯片匹配的 DMG，打开后把 NoCompile 拖进「应用程序」文件夹。</span><span class="en">Download the DMG for your chip, open it and drag NoCompile into Applications.</span></li>
-      <li><span class="zh">按上面任选一种方式接入客户端，并在 Xcode 里完整构建一次工程。</span><span class="en">Add the client using one of the options above, then build your project once in Xcode.</span></li>
-      <li><span class="zh">点击菜单栏的 ⚡ 图标 → 选择工程，然后 <code>Command+R</code> 运行 App。</span><span class="en">Click ⚡ in the menu bar → choose your project, then run the app with <code>Command+R</code>.</span></li>
-      <li><span class="zh">编辑任意源文件并保存，几秒后就能在 App 里看到改动生效。</span><span class="en">Edit any source file and save. The change shows up in the running app within seconds.</span></li>
-    </ol>
-  </div>
-</section>
+      <div class="step reveal">
+        <div class="step-h"><span class="num">3</span><div><h3 data-i18n="s3t">选择工程，运行 App</h3><p data-i18n="s3d">在 Xcode 完整构建过一次后，点菜单栏 ⚡ → 选择工程，再 <kbd>⌘R</kbd> 运行 App。之后编辑任意源文件并保存即可。</p></div></div>
+      </div>
+      <p class="more reveal"><a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md" target="_blank" rel="noopener" data-i18n="guide">完整接入指南：Mac Catalyst、DYLD_INSERT_LIBRARIES、真机排查 →</a></p>
+    </div>
+  </section>
 
-<footer>
-  <div class="wrap">
-    <span>© 2026 VanJay · NoCompile</span>
-    <span>
-      <a href="https://github.com/wangwanjie/NoCompile/releases"><span class="zh">版本历史</span><span class="en">Releases</span></a> ·
-      <a href="https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md"><span class="zh">接入指南</span><span class="en">Guide</span></a> ·
-      <a href="https://github.com/wangwanjie/NoCompile/issues"><span class="zh">反馈问题</span><span class="en">Feedback</span></a>
-    </span>
+  <!-- 下载 -->
+  <section class="sec dl" id="download">
+    <div class="wrap">
+      <div class="dl-box reveal">
+        <img src="assets/icon-128.webp" srcset="assets/icon-128.webp 1x, assets/icon-256.webp 2x" width="96" height="96" alt="" loading="lazy" decoding="async">
+        <h2 data-i18n="dlTitle">下载 NoCompile</h2>
+        <p data-i18n="dlSub">按芯片选择安装包，拖入「应用程序」即可。安装包已经过 Apple 公证，之后通过 Sparkle 自动更新，只接收同架构的更新。</p>
+        <div class="cta center">
+          <a class="btn btn-volt" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_arm64.dmg">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+            <span><b data-i18n="dlArm2">Apple 芯片（M 系列）</b><small>NoCompile_arm64.dmg</small></span>
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/wangwanjie/NoCompile/releases/latest/download/NoCompile_x86_64.dmg">
+            <span><b data-i18n="dlIntel2">Intel 芯片</b><small>NoCompile_x86_64.dmg</small></span>
+          </a>
+        </div>
+        <p class="fine" data-i18n="dlFine">不确定芯片类型：苹果菜单 → 关于本机，「芯片」显示 Apple M 系列选 arm64，显示 Intel 选 x86_64。每个版本附带 <code>SHA256SUMS.txt</code> 供核对。</p>
+        <p class="fine"><a href="https://github.com/wangwanjie/NoCompile/releases" target="_blank" rel="noopener" data-i18n="allReleases">所有版本与更新说明</a></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <div class="foot-brand"><img src="assets/icon-64.webp" width="28" height="28" alt="" loading="lazy" decoding="async"><span>NoCompile</span></div>
+    <nav class="foot-links" data-i18n-aria="footAria" aria-label="页脚链接">
+      <a href="https://vanjay.cn" data-i18n="more">VanJay 的更多作品</a>
+      <a href="https://github.com/wangwanjie/NoCompile" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/wangwanjie/NoCompile/issues" target="_blank" rel="noopener" data-i18n="feedback">反馈问题</a>
+      <a href="https://github.com/wangwanjie/NoCompile/blob/main/LICENSE" target="_blank" rel="noopener" data-i18n="license">客户端 SDK · MIT</a>
+    </nav>
+    <p class="copy-r">© <span id="yr">2026</span> VanJay</p>
   </div>
 </footer>
 
-<script>
-  // 特性卡片：[图标, 颜色, 中文名, 英文名, 中文说明, 英文说明]
-  const features = [
-    ["⌘", "#7b6cff", "官方编译器展开命令", "Compiler-derived commands", "从构建日志取模块的 driver 命令，交给 swiftc -### 展开出单文件命令，Xcode 升级自动跟随。", "Module driver commands from the build log are expanded by swiftc -###, so Xcode upgrades just work."],
-    ["⇄", "#3b82f6", "三层替换", "Three-layer patching", "ObjC class_replaceMethod、Swift vtable 覆写与 fishhook 式符号重绑统一处理。", "ObjC class_replaceMethod, Swift vtable overrides and fishhook-style symbol rebinding, unified."],
-    ["⚡", "#f59e0b", "保存即注入", "Inject on save", "FSEvents 自动触发；漏检时点「检查改动」或按 ⌃⌥⌘R 补上。", "FSEvents triggers automatically; use Check Changes or ⌃⌥⌘R if anything is missed."],
-    ["▣", "#ec4899", "资源与新文件", "Resources & new files", "storyboard、xib、图片保存即生效（含真机），运行中新建的源文件也能注入。", "Storyboards, xibs and images reload on save (devices included); new source files can be injected too."],
-    ["文", "#22c55e", "中文与空格路径", "Any path", "全程用参数数组调用子进程，不拼接 shell 字符串，中文与空格路径天然支持。", "Subprocesses get argument arrays, never shell strings, so non-ASCII and spaced paths just work."],
-    ["⌁", "#0ea5e9", "USB 真机通道", "USB to device", "以 usbmuxd 为主通道，不依赖 UDP 广播，真机连接稳定。", "usbmuxd is the main channel, with no reliance on UDP broadcast."],
-    ["◇", "#a64bf4", "SwiftUI", "SwiftUI", "注入后发出通知，兼容 Inject / HotSwiftUI，配合 @ObserveInjection 自动重绘。", "Posts notifications compatible with Inject / HotSwiftUI; redraw with @ObserveInjection."],
-    ["⛑", "#ef4444", "布局变化保护", "Layout guard", "改动存储属性或方法顺序时不替换该类，并提示重新运行，避免崩溃。", "Classes whose memory layout changed are left alone, with a prompt to relaunch instead of a crash."]
-  ];
-
-  const grid = document.getElementById("feature-grid");
-  for (const [glyph, color, zh, en, zhText, enText] of features) {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML =
-      `<div class="tile" style="background:${color}">${glyph}</div>` +
-      `<h3><span class="zh">${zh}</span><span class="en">${en}</span></h3>` +
-      `<p><span class="zh">${zhText}</span><span class="en">${enText}</span></p>`;
-    grid.appendChild(card);
-  }
-
-  // 接入方式切换
-  document.getElementById("code-tabs").addEventListener("click", (event) => {
-    const button = event.target.closest("button");
-    if (!button) {
-      return;
-    }
-    document.querySelectorAll("#code-tabs button").forEach((b) => b.classList.toggle("active", b === button));
-    document.querySelectorAll("pre[data-code]").forEach((pre) => {
-      pre.hidden = pre.dataset.code !== button.dataset.code;
-    });
-  });
-
-  // 语言：默认跟随浏览器，记住用户的选择
-  const toggle = document.getElementById("lang-toggle");
-  function applyLanguage(lang) {
-    document.body.dataset.lang = lang;
-    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-    toggle.textContent = lang === "zh" ? "EN" : "中文";
-    localStorage.setItem("nocompile.lang", lang);
-  }
-  const saved = localStorage.getItem("nocompile.lang");
-  applyLanguage(saved || (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en"));
-  toggle.addEventListener("click", () => applyLanguage(document.body.dataset.lang === "zh" ? "en" : "zh"));
-
-  // 尽量识别 Intel Mac（浏览器无法可靠区分时保持 Apple 芯片优先）
-  try {
-    const canvas = document.createElement("canvas");
-    const gl = canvas.getContext("webgl");
-    const info = gl && gl.getExtension("WEBGL_debug_renderer_info");
-    const renderer = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : "";
-    if (/Intel|AMD|Radeon/i.test(renderer) && !/Apple/i.test(renderer)) {
-      document.getElementById("dl-intel").className = "btn primary";
-      document.getElementById("dl-arm").className = "btn secondary";
-      document.querySelector(".downloads").prepend(document.getElementById("dl-intel"));
-    }
-  } catch (error) {}
-
-  // 显示最新版本号
-  fetch("https://api.github.com/repos/wangwanjie/NoCompile/releases/latest")
-    .then((response) => (response.ok ? response.json() : null))
-    .then((release) => {
-      if (release && release.tag_name) {
-        document.getElementById("version").textContent = ` · ${release.tag_name}`;
-      }
-    })
-    .catch(() => {});
-</script>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/site.js"></script>
 </body>
 </html>
