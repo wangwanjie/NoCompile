@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <errno.h>
 #include <stdatomic.h>
 
@@ -64,10 +65,27 @@
         close(fd);
         return nil;
     }
+    // 带超时的连接：要依次探测一批端口，目标主机不可达（如 Wi-Fi 下 Mac 休眠）时不能在每个端口上都等系统默认的超时
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        close(fd);
-        return nil;
+        if (errno != EINPROGRESS) {
+            close(fd);
+            return nil;
+        }
+        struct pollfd pollFD = { .fd = fd, .events = POLLOUT, .revents = 0 };
+        int ready;
+        do {
+            ready = poll(&pollFD, 1, 2000);
+        } while (ready < 0 && errno == EINTR);
+        int socketError = 0;
+        socklen_t length = sizeof(socketError);
+        if (ready <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) != 0 || socketError != 0) {
+            close(fd);
+            return nil;
+        }
     }
+    fcntl(fd, F_SETFL, flags);
     return [[self alloc] initWithSocket:fd];
 }
 
@@ -89,6 +107,10 @@
 
 - (BOOL)isOpen {
     return atomic_load(&_open);
+}
+
+- (BOOL)hasStarted {
+    return atomic_load(&_started);
 }
 
 - (void)open {
@@ -235,6 +257,57 @@
         }
         sent += (size_t)n;
     }
+}
+
+@end
+
+@implementation NCMacPortScanner {
+    NSString *_host;
+    NSArray<NSNumber *> *_ports;
+    /// 端口 → 该端口上的连接（弱引用以外的持有者是调用方的连接集合，这里强引用也无妨：连接关闭后下一轮即被替换）
+    NSMutableDictionary<NSNumber *, NCConnection *> *_connectionsByPort;
+}
+
++ (NSArray<NSNumber *> *)defaultPorts {
+    NSMutableArray<NSNumber *> *ports = [NSMutableArray array];
+    for (uint32_t offset = 0; offset < NC_MAC_PORT_COUNT; offset++) {
+        uint16_t port = (uint16_t)(NC_MAC_PORT + offset);
+        if (port == NC_DEVICE_PORT) {
+            // 设备端口只在真机上监听，Mac 端不会占用
+            continue;
+        }
+        [ports addObject:@(port)];
+    }
+    return ports;
+}
+
+- (instancetype)initWithHost:(NSString *)host ports:(NSArray<NSNumber *> *)ports {
+    self = [super init];
+    if (self) {
+        _host = [host copy];
+        _ports = [ports copy];
+        _connectionsByPort = [NSMutableDictionary dictionary];
+    }
+    return self;
+}
+
+- (NSArray<NCConnection *> *)scan {
+    NSMutableArray<NCConnection *> *created = [NSMutableArray array];
+    for (NSNumber *port in _ports) {
+        NCConnection *existing = _connectionsByPort[port];
+        // 已打开或刚建立还没打开（调用方尚未 open）的连接都保留
+        if (existing && (existing.isOpen || !existing.hasStarted)) {
+            continue;
+        }
+        [_connectionsByPort removeObjectForKey:port];
+        NCConnection *connection = [NCConnection connectToHost:_host port:port.unsignedShortValue];
+        if (!connection) {
+            continue;
+        }
+        _connectionsByPort[port] = connection;
+        [created addObject:connection];
+    }
+    return created;
 }
 
 @end

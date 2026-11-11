@@ -21,13 +21,17 @@
 #define NC_PROTOCOL_VERSION 1
 /// 客户端版本：须与 Sources/NoCompileKit/Protocol.swift 的 NCProtocol.clientVersion 同步更新。
 /// 仅用于展示与诊断，不参与兼容性判断
-#define NC_CLIENT_VERSION @"0.2.13"
+#define NC_CLIENT_VERSION @"0.2.14"
 /// 客户端修订号：须与 NCProtocol.clientRevision 一致。握手时上报，不一致时 Mac 端提示重新编译 App
 /// （例如 App 包内拷贝的仍是旧 bundle）。只有客户端行为或与 Mac 端的交互发生不兼容变化时才递增
 #define NC_CLIENT_REVISION 1
 
-/// 模拟器 / macOS 客户端主动连接的 Mac 端口
+/// 模拟器 / macOS 客户端主动连接的 Mac 端起始端口。
+/// 端口被占用时 Mac 端会顺延到后面的端口，客户端从该端口起扫描 NC_MAC_PORT_COUNT 个端口（跳过 NC_DEVICE_PORT），
+/// 与每个监听中的 Mac 端各建立一条连接，由 Mac 端按握手内容判断 App 是否属于自己的工程
 #define NC_MAC_PORT 21890
+/// 扫描的端口数量。须与 NCProtocol.macPortCount 一致
+#define NC_MAC_PORT_COUNT 32
 /// 真机客户端在回环地址上监听的端口，Mac 端经 usbmuxd 连入
 #define NC_DEVICE_PORT 21891
 

@@ -295,7 +295,7 @@ nocompile --project /path/to/YourApp.xcworkspace
 
 ## Mac Catalyst（实验性）
 
-Catalyst App 与 macOS App 一样主动连接本机的 NoCompile（端口 21890），按 `-target …-macabi` 的编译命令重编，使用临时签名，接入方式同 iOS（SPM / CocoaPods / bundle 均可）。
+Catalyst App 与 macOS App 一样主动连接本机的 NoCompile（端口从 21890 起，被占用时自动顺延，客户端自动发现），按 `-target …-macabi` 的编译命令重编，使用临时签名，接入方式同 iOS（SPM / CocoaPods / bundle 均可）。
 
 ## 界面如何刷新（零侵入）
 
