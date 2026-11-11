@@ -33,8 +33,9 @@ NSString * const NoCompileInjectedFilesKey = @"files";
 @interface NoCompile () <NCConnectionDelegate>
 + (instancetype)shared;
 - (void)startWithHost:(nullable NSString *)host;
-/// 当前连接：重连线程、监听线程、读写线程与主线程都会访问，必须 atomic
-@property (atomic, strong) NCConnection *connection;
+/// 当前所有连接：重连线程、监听线程、读写线程与主线程都会访问，读写都在 @synchronized(self) 内。
+/// 同时可能有多条：每个监听中的 Mac 端（不同工程的 NoCompile 实例）各一条，由 Mac 端按握手内容判断 App 是否属于自己的工程
+@property (nonatomic, strong) NSMutableSet<NCConnection *> *connections;
 @property (nonatomic, copy) NSString *host;
 @property (atomic) BOOL started;
 /// 设备信息（设备标识、名称、系统版本），启动时在主线程采集，握手时上报
@@ -69,7 +70,7 @@ static NSUInteger gInjectionCount = 0;
 }
 
 + (BOOL)isConnected {
-    return [self shared].connection.isOpen;
+    return [[self shared] openConnections].count > 0;
 }
 
 + (void)start {
@@ -78,6 +79,27 @@ static NSUInteger gInjectionCount = 0;
 
 + (void)startWithHost:(NSString *)host {
     [[self shared] startWithHost:host];
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _connections = [NSMutableSet set];
+    }
+    return self;
+}
+
+/// 当前仍打开的连接（快照，可在锁外使用）
+- (NSArray<NCConnection *> *)openConnections {
+    NSMutableArray<NCConnection *> *result = [NSMutableArray array];
+    @synchronized (self) {
+        for (NCConnection *connection in self.connections) {
+            if (connection.isOpen) {
+                [result addObject:connection];
+            }
+        }
+    }
+    return result;
 }
 
 - (void)startWithHost:(NSString *)host {
@@ -107,22 +129,22 @@ static NSUInteger gInjectionCount = 0;
 
 #pragma mark - 连接（模拟器 / macOS / 真机 Wi-Fi）
 
+/// 发现并连接 Mac 端。Mac 端的监听端口不固定（起始端口被占用时会顺延），所以这里每轮扫描整个候选范围，
+/// 与每个监听中的 Mac 端各保持一条连接；断开的下一轮自动重连，新启动的 Mac 端下一轮即被发现。
+/// 属于其他工程的 Mac 端收到握手后会搁置这条连接，不会向本 App 推送任何内容
 - (void)connectLoop {
     NSString *host = self.host.length > 0 ? self.host : @"127.0.0.1";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NCMacPortScanner *scanner = [[NCMacPortScanner alloc] initWithHost:host ports:[NCMacPortScanner defaultPorts]];
         while (self.started) {
-            NCConnection *current = self.connection;
-            if (!current.isOpen) {
-                NCConnection *connection = [NCConnection connectToHost:host port:NC_MAC_PORT];
-                if (connection) {
-                    connection.delegate = self;
-                    @synchronized (self) {
-                        self.connection = connection;
-                    }
-                    [connection open];
+            for (NCConnection *connection in [scanner scan]) {
+                connection.delegate = self;
+                @synchronized (self) {
+                    [self.connections addObject:connection];
                 }
+                [connection open];
             }
-            sleep(2); // 每 2 秒检查一次，断开后重连
+            sleep(2); // 每 2 秒扫描一次，断开后重连
         }
     });
 }
@@ -192,13 +214,12 @@ static NSUInteger gInjectionCount = 0;
         }
         NCConnection *connection = [[NCConnection alloc] initWithSocket:client];
         connection.delegate = self;
-        // 新连接取代旧连接（Mac 端重启引擎后会重新连入），旧连接关闭，避免两条连接重复执行注入
-        NCConnection *previous = nil;
+        // 多个 Mac 端（不同工程的 NoCompile 实例）可能同时连入，各保留一条；
+        // 不属于它们工程的会被对方搁置，只有属于对方工程的那个才会推送注入。
+        // Mac 端重启引擎后留下的旧连接在 Mac 端退出时即被关闭，不会产生重复注入
         @synchronized (self) {
-            previous = self.connection;
-            self.connection = connection;
+            [self.connections addObject:connection];
         }
-        [previous close];
         [connection open];
     }
 }
@@ -210,11 +231,8 @@ static NSUInteger gInjectionCount = 0;
 }
 
 - (void)connection:(NCConnection *)connection didCloseWithError:(NSError *)error {
-    // 比较与清空要原子地完成，否则可能把刚建立的新连接清掉
     @synchronized (self) {
-        if (self.connection == connection) {
-            self.connection = nil;
-        }
+        [self.connections removeObject:connection];
     }
 }
 
@@ -569,9 +587,12 @@ static id NCTyped(NSDictionary *json, NSString *key, Class cls) {
 }
 
 - (void)forwardLog:(NCLogLevel)level message:(NSString *)message {
-    [self.connection sendType:NCMessageTypeLog
-                         json:@{ @"level": @(level), @"message": message }
-                         data:nil];
+    // 发给所有 Mac 端：不属于对方工程的会丢弃这些日志
+    for (NCConnection *connection in [self openConnections]) {
+        [connection sendType:NCMessageTypeLog
+                        json:@{ @"level": @(level), @"message": message }
+                        data:nil];
+    }
 }
 
 @end

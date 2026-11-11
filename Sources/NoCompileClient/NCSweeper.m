@@ -142,10 +142,13 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
         }
         // xib 用于 cell / 自定义视图、图片被代码引用：刷新最上层的可见业务控制器。
         // storyboard 没有可见的控制器时无需刷新，之后进入页面时会加载新版本
+        // 兜底选中的控制器不一定用到这个资源，不进入 pending（避免提示无关页面"退出后重新进入"）
         if (targets.count == 0 && ![kind isEqualToString:@"storyboard"]) {
             NCViewController *top = [self topAppControllerIn:visible];
             if (top) {
-                [targets addObject:top];
+                [refreshed addObjectsFromArray:[self refreshControllers:@[top]
+                                                   layoutChangedClasses:nil
+                                                                pending:[NSMutableArray array]]];
             }
         }
         [refreshed addObjectsFromArray:[self refreshControllers:[self outermostControllers:targets]
@@ -366,12 +369,17 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
         }
     }
 
-    // 被替换的是模型、工具类、C/C++ 函数等非界面代码：刷新最上层的可见业务控制器，让新逻辑立即体现
+    // 被替换的是模型、工具类、C/C++ 函数等非界面代码，或是当前不在屏幕上的视图：刷新最上层的可见业务控制器，
+    // 让新逻辑立即体现。这个控制器只是兜底选中的，并不一定用到被替换的代码，
+    // 所以它不进入 pending——否则会提示用户"退出 Doraemon 页面后重新进入"，而改动其实与它无关
     if (targets.count == 0) {
         NCViewController *top = [self topAppControllerIn:visible];
         if (top) {
-            [targets addObject:top];
+            return [self refreshControllers:@[top]
+                       layoutChangedClasses:layoutChangedClasses
+                                    pending:[NSMutableArray array]];
         }
+        return @[];
     }
     return [self refreshControllers:[self outermostControllers:targets]
                  layoutChangedClasses:layoutChangedClasses
