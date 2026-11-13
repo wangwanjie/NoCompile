@@ -6,6 +6,20 @@
         <description>NoCompile release feed.</description>
         <language>en</language>
         <item>
+            <title>0.2.15</title>
+            <pubDate>Fri, 13 Nov 2026 10:57:08 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.15</link>
+            <sparkle:version>17</sparkle:version>
+            <sparkle:shortVersionString>0.2.15</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.15/NoCompile_v0.2.15_x86_64.dmg" length="4061936" type="application/octet-stream" sparkle:edSignature="F9iwXYUOZRfUhDiaq99vaWLjvYEc2452gfYadpB+wJLVxmk8lptGikUF1DitGBRWluSyQZEDzn24SIS8se0ODQ==" />
+            <description>&lt;h2&gt;NoCompile 0.2.15&lt;/h2&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;菜单新增「反馈问题…」&lt;/strong&gt;：菜单栏 ⚡ 菜单和应用菜单里都可以一键打开 GitHub 的新建 issue 页面，方便直接提交问题与建议（支持简中 / 英文 / 繁中）&lt;/li&gt;&lt;li&gt;&lt;strong&gt;GitHub 主页新增英文版 README&lt;/strong&gt;：README 顶部可在简体中文与 English 之间切换&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;本版本只改动 Mac 端 App，客户端无变化，无需重新编译已接入的 App&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
             <title>0.2.14</title>
             <pubDate>Wed, 11 Nov 2026 18:45:53 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.14</link>
