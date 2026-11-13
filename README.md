@@ -12,6 +12,8 @@
 
 [主页](https://wangwanjie.github.io/NoCompile/) · [所有版本](https://github.com/wangwanjie/NoCompile/releases) · [接入指南](Docs/Integration.md) · [反馈问题](https://github.com/wangwanjie/NoCompile/issues)
 
+[English](README.en.md) · 简体中文
+
 </div>
 
 ## 主界面
