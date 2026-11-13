@@ -1,0 +1,24 @@
+name: 功能建议 / Feature Request
+description: 提出新功能或改进建议
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你想解决什么问题？目前是怎么处理的？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案
+      description: 希望 NoCompile 怎么做？有参考的其他工具也可以写在这里。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: NoCompile 版本
+    validations:
+      required: false

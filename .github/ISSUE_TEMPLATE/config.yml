@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 接入指南
+    url: https://github.com/wangwanjie/NoCompile/blob/main/Docs/Integration.md
+    about: 接入和配置问题请先查看接入指南

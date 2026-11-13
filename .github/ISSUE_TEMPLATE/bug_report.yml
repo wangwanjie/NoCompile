@@ -1,0 +1,97 @@
+name: 问题反馈 / Bug Report
+description: 反馈注入失败、连接异常、崩溃等问题（请尽量填写完整，能大幅加快排查）
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！为了尽快定位问题，请务必提供**诊断包**、**版本信息**和**使用环境**，有**最小复现 Demo** 更好。
+        信息不全的 issue 可能会被要求补充后才能处理。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 发生了什么？期望的行为是什么？
+      placeholder: 例如：修改 Swift 文件保存后提示「编译失败」，期望能正常注入。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序写出操作步骤，以及问题是必现还是偶现。
+      placeholder: |
+        1. 打开 NoCompile，选择工程 ……
+        2. 在 Xcode 运行 App 到模拟器
+        3. 修改 XXX.swift 并保存
+        4. 出现 ……
+    validations:
+      required: true
+  - type: input
+    id: nocompile-version
+    attributes:
+      label: NoCompile App 版本
+      description: 菜单栏「关于 NoCompile」中查看，例如 0.2.15。
+    validations:
+      required: true
+  - type: input
+    id: client-version
+    attributes:
+      label: App 端 NoCompile 客户端接入方式与版本
+      description: CocoaPods / SwiftPM / 手动集成，及对应版本号（Podfile.lock 或 Package.resolved 中可查）。
+      placeholder: 例如：CocoaPods，NoCompile 0.2.15
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 使用环境
+      description: 请填写以下信息（按实际情况修改）。
+      value: |
+        - macOS 版本：
+        - 芯片：Apple 芯片 / Intel
+        - Xcode 版本：
+        - 运行目标：模拟器（iOS 版本）/ 真机（机型 + 系统版本）/ macOS App
+        - 工程语言：Swift / ObjC / C / C++（涉及的文件类型）
+        - 工程结构：单工程 / Workspace / CocoaPods / SwiftPM / 其他
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断日志
+      description: |
+        请在 NoCompile 菜单栏 ⚡ 图标或应用菜单中选择「导出诊断包…」，**复现问题后**导出，并将生成的文件拖拽到此处上传
+        （诊断包含日志、编译失败现场、卡顿采样与当前配置）。
+        如果不方便上传文件，请至少粘贴控制台中问题发生时前后的日志。
+      placeholder: 将诊断包拖拽到此处，或粘贴相关日志（可用 ``` 包裹）。
+    validations:
+      required: true
+  - type: textarea
+    id: demo
+    attributes:
+      label: 复现 Demo（强烈建议）
+      description: |
+        最小可复现工程的仓库链接或压缩包（可基于仓库 `Examples/NoCompileExample` 修改）。
+        无法提供时，请说明原因（如涉及公司代码），并尽量给出涉及的代码片段或文件类型。
+      placeholder: 例如：https://github.com/xxx/NoCompileDemo
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他信息
+      description: 截图、录屏、已尝试过的排查手段等。
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已升级到最新版本，问题仍然存在
+          required: true
+        - label: 我已搜索过现有 issue，没有重复
+          required: true
+        - label: 我已附上诊断包 / 日志，并确认其中没有不便公开的敏感信息
+          required: true
