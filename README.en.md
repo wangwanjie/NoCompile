@@ -165,6 +165,8 @@ Hot reload mainly replaces **function bodies**; changing only method bodies (wit
 
 Other classes in the same file whose layout is unchanged, and free functions, still take effect.
 
+Layout changes to structs / enums (adding, removing, reordering or retyping stored properties; adding or removing cases or changing associated values; adding a `@State` to a SwiftUI view counts too) reach further: value types are passed by value, so all code in the same file that touches the type is compiled against the new layout. In that case **none of this file's changes are replaced** for this save, and NoCompile likewise tells you to rerun the app.
+
 Other notes:
 
 - You must build the project fully in Xcode once so NoCompile can get compile commands from the build log.
