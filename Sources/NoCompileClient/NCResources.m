@@ -12,6 +12,9 @@
 #import "NoCompile.h"
 #include <objc/runtime.h>
 #include <objc/message.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
 
 #if __has_include(<UIKit/UIKit.h>)
 #import <UIKit/UIKit.h>
@@ -49,6 +52,11 @@ static NSMutableDictionary<NSString *, NCPlatformImage *> *gImageCache;
 static NSMutableDictionary<NSString *, NSDictionary *> *gColors;
 /// 解析过的 .strings 文件：绝对路径 → 字典
 static NSMutableDictionary<NSString *, NSDictionary *> *gStringsCache;
+/// 每张 .strings 表选中的覆盖文件：@"bundleKey|表名" → 绝对路径，NSNull 表示当前语言没有可用的覆盖。
+/// localizedStringForKey: 调用极频繁（列表滚动时每个 cell 都会查），不能每次都遍历全部覆盖条目
+static NSMutableDictionary<NSString *, id> *gStringsChoice;
+/// 覆盖条目的代数：登记新条目时加一，用来作废期间算出的字符串表选择
+static NSUInteger gOverridesGeneration = 0;
 /// bundleKey → 真实 bundle 路径 / 当前镜像 bundle；历次镜像 bundle 路径 → bundleKey
 static NSMutableDictionary<NSString *, NSString *> *gBundlePaths;
 static NSMutableDictionary<NSString *, NSBundle *> *gMirrorBundles;
@@ -89,12 +97,28 @@ static NSBundle *NCFindLoadedBundle(NSString *directoryName, NSString *executabl
             return bundle;
         }
     }
-    // framework 可能还没被 NSBundle 登记（动态库延迟加载），到 App 的 Frameworks 目录里找
+    // bundle 可能还没被 NSBundle 登记：framework 延迟加载，SPM（Pkg_Target.bundle）与 CocoaPods resource_bundles
+    // 的资源 bundle 要等业务代码第一次用到才实例化。到 App 包内它们可能出现的位置找
     if (directoryName.length > 0) {
-        NSString *candidate = [[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"]
-                               stringByAppendingPathComponent:directoryName];
-        if ([NSFileManager.defaultManager fileExistsAtPath:candidate]) {
-            return [NSBundle bundleWithPath:candidate];
+        NSBundle *main = NSBundle.mainBundle;
+        NSMutableArray<NSString *> *roots = [NSMutableArray array];
+        for (NSString *root in @[[main.bundlePath stringByAppendingPathComponent:@"Frameworks"],
+                                 main.privateFrameworksPath ?: @"",
+                                 main.resourcePath ?: @"",
+                                 main.bundlePath,
+                                 main.builtInPlugInsPath ?: @""]) {
+            if (root.length > 0 && ![roots containsObject:root]) {
+                [roots addObject:root];
+            }
+        }
+        for (NSString *root in roots) {
+            NSString *candidate = [root stringByAppendingPathComponent:directoryName];
+            if ([NSFileManager.defaultManager fileExistsAtPath:candidate]) {
+                NSBundle *bundle = [NSBundle bundleWithPath:candidate];
+                if (bundle) {
+                    return bundle;
+                }
+            }
         }
     }
     return nil;
@@ -176,13 +200,17 @@ static NSString *NCOverrideItemNamed(NSString *bundleKey, NSString *name, NSStri
     return nil;
 }
 
-/// 文件名对应的已更新文件绝对路径（供 pathForResource: 系列使用）。
+/// 文件名对应的已更新文件绝对路径（供 pathForResource: 系列与本地化字符串使用）。
 /// subdirectory 为空时匹配资源目录根部或 .lproj 下的条目，与 Xcode 拷贝资源的位置一致；
-/// 指定了子目录时要求条目恰好位于该子目录
-static NSString *NCOverridePathForFile(NSString *bundleKey, NSString *fileName, NSString *subdirectory) {
+/// 指定了子目录时要求条目恰好位于该子目录。
+/// .lproj 下的条目按 bundle 当前使用的语言挑选（其次 Base）：只改了 en.lproj 里的文件时，
+/// 以中文运行的 App 仍应拿到原来的中文资源
+static NSString *NCOverridePathForFile(NSBundle *bundle, NSString *bundleKey, NSString *fileName, NSString *subdirectory) {
     if (!gHasOverrides || fileName.length == 0) {
         return nil;
     }
+    // 语言（.lproj 去掉扩展名）→ 新文件路径
+    NSMutableDictionary<NSString *, NSString *> *localized = nil;
     @synchronized (NCResourcesLock()) {
         NSDictionary<NSString *, NSString *> *overrides = gBundleOverrides[bundleKey];
         for (NSString *item in overrides) {
@@ -196,12 +224,28 @@ static NSString *NCOverridePathForFile(NSString *bundleKey, NSString *fileName, 
                 }
                 continue;
             }
-            if (directory.length == 0 || [directory.pathExtension isEqualToString:@"lproj"]) {
+            if (directory.length == 0) {
                 return overrides[item];
+            }
+            if ([directory.pathExtension isEqualToString:@"lproj"] && directory.pathComponents.count == 1) {
+                if (!localized) {
+                    localized = [NSMutableDictionary dictionary];
+                }
+                localized[directory.stringByDeletingPathExtension] = overrides[item];
             }
         }
     }
-    return nil;
+    if (localized.count == 0) {
+        return nil;
+    }
+    // preferredLocalizations 自身会访问 bundle，放在锁外调用
+    for (NSString *language in (bundle ?: NSBundle.mainBundle).preferredLocalizations) {
+        NSString *path = localized[language];
+        if (path) {
+            return path;
+        }
+    }
+    return localized[@"Base"];
 }
 
 /// 加载 name.ext 时应使用的 bundle：资源已更新则返回镜像 bundle，否则原样返回
@@ -228,9 +272,17 @@ static NSString *NCNormalizedImageName(NSString *name) {
     if ([extensions containsObject:result.pathExtension.lowercaseString]) {
         result = result.stringByDeletingPathExtension;
     }
-    NSRange at = [result rangeOfString:@"@" options:NSBackwardsSearch];
-    if (at.location != NSNotFound && [result hasSuffix:@"x"]) {
-        result = [result substringToIndex:at.location];
+    // 只去掉末尾的「@倍率x」与「~设备」后缀（icon@2x、icon~ipad、icon@2x~ipad），
+    // 名字中间带 @ 的（mail@box）保持原样
+    static NSRegularExpression *suffix;
+    static dispatch_once_t suffixToken;
+    dispatch_once(&suffixToken, ^{
+        suffix = [NSRegularExpression regularExpressionWithPattern:@"(@[0-9]+(\\.[0-9]+)?x)?(~(iphone|ipad|tv|mac|watch|car|vision))?$"
+                                                           options:0 error:NULL];
+    });
+    NSRange match = [suffix rangeOfFirstMatchInString:result options:0 range:NSMakeRange(0, result.length)];
+    if (match.location != NSNotFound && match.length > 0 && match.location > 0) {
+        result = [result substringToIndex:match.location];
     }
     return result;
 }
@@ -371,7 +423,7 @@ static NSString *NCFileNameFor(NSString *name, NSString *ext) {
 
 static NSString *NCPathForResource(NSBundle *self, SEL _cmd, NSString *name, NSString *ext) {
     NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
-    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), nil) : nil;
+    NSString *path = key ? NCOverridePathForFile(self, key, NCFileNameFor(name, ext), nil) : nil;
     if (path) {
         return path;
     }
@@ -380,7 +432,7 @@ static NSString *NCPathForResource(NSBundle *self, SEL _cmd, NSString *name, NSS
 
 static NSURL *NCURLForResource(NSBundle *self, SEL _cmd, NSString *name, NSString *ext) {
     NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
-    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), nil) : nil;
+    NSString *path = key ? NCOverridePathForFile(self, key, NCFileNameFor(name, ext), nil) : nil;
     if (path) {
         return [NSURL fileURLWithPath:path];
     }
@@ -389,7 +441,7 @@ static NSURL *NCURLForResource(NSBundle *self, SEL _cmd, NSString *name, NSStrin
 
 static NSString *NCPathForResourceInDirectory(NSBundle *self, SEL _cmd, NSString *name, NSString *ext, NSString *subpath) {
     NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
-    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), subpath) : nil;
+    NSString *path = key ? NCOverridePathForFile(self, key, NCFileNameFor(name, ext), subpath) : nil;
     if (path) {
         return path;
     }
@@ -398,14 +450,15 @@ static NSString *NCPathForResourceInDirectory(NSBundle *self, SEL _cmd, NSString
 
 static NSURL *NCURLForResourceSubdirectory(NSBundle *self, SEL _cmd, NSString *name, NSString *ext, NSString *subpath) {
     NSString *key = name.length > 0 ? NCBundleKeyForBundle(self) : nil;
-    NSString *path = key ? NCOverridePathForFile(key, NCFileNameFor(name, ext), subpath) : nil;
+    NSString *path = key ? NCOverridePathForFile(self, key, NCFileNameFor(name, ext), subpath) : nil;
     if (path) {
         return [NSURL fileURLWithPath:path];
     }
     return ((NSURL *(*)(id, SEL, NSString *, NSString *, NSString *))gOrigURLForResourceSubdirectory)(self, _cmd, name, ext, subpath);
 }
 
-/// 本地化字符串：bundle 里某张 .strings 表被更新过时，先在新表里找
+/// 本地化字符串：bundle 里某张 .strings 表被更新过时，先在新表里找。
+/// 只采用 bundle 当前语言（其次 Base、资源根目录）下的表，其他语言的表更新了也不影响当前界面
 static NSString *NCOverrideLocalizedString(NSBundle *bundle, NSString *key, NSString *table) {
     if (!gHasStrings || key.length == 0) {
         return nil;
@@ -415,30 +468,28 @@ static NSString *NCOverrideLocalizedString(NSBundle *bundle, NSString *key, NSSt
         return nil;
     }
     NSString *tableName = table.length > 0 ? table : @"Localizable";
-    NSString *fileName = [tableName stringByAppendingPathExtension:@"strings"];
-    NSString *chosen = nil;
+    NSString *choiceKey = [NSString stringWithFormat:@"%@|%@", bundleKey, tableName];
+    NSUInteger generation = 0;
     @synchronized (NCResourcesLock()) {
-        NSDictionary<NSString *, NSString *> *overrides = gBundleOverrides[bundleKey];
-        NSArray<NSString *> *preferred = bundle.preferredLocalizations ?: @[];
-        NSString *fallback = nil;
-        for (NSString *item in overrides) {
-            if (![item.lastPathComponent isEqualToString:fileName]) {
-                continue;
-            }
-            NSString *directory = item.stringByDeletingLastPathComponent;
-            NSString *language = directory.stringByDeletingPathExtension;
-            if (directory.length > 0 && [preferred containsObject:language]) {
-                chosen = overrides[item];
-                break;
-            }
-            if (!fallback || [language isEqualToString:@"Base"] || directory.length == 0) {
-                fallback = overrides[item];
-            }
+        id cached = gStringsChoice[choiceKey];
+        if (cached == NSNull.null) {
+            return nil;
         }
-        chosen = chosen ?: fallback;
+        if (cached) {
+            return gStringsCache[cached][key];
+        }
+        generation = gOverridesGeneration;
+    }
+    // 首次查这张表：挑出当前语言对应的覆盖文件并记住结果
+    NSString *chosen = NCOverridePathForFile(bundle, bundleKey, [tableName stringByAppendingPathExtension:@"strings"], nil);
+    @synchronized (NCResourcesLock()) {
         if (chosen && !gStringsCache[chosen]) {
             // .strings 是 OpenStep 风格的属性列表，NSDictionary 可直接解析
             gStringsCache[chosen] = [NSDictionary dictionaryWithContentsOfFile:chosen] ?: @{};
+        }
+        // 挑选期间又登记了新条目时不记结果，下次重新挑
+        if (generation == gOverridesGeneration) {
+            gStringsChoice[choiceKey] = chosen ?: (id)NSNull.null;
         }
         return chosen ? gStringsCache[chosen][key] : nil;
     }
@@ -697,6 +748,7 @@ static void NCInstallHooks(void) {
         gImageCache = [NSMutableDictionary dictionary];
         gColors = [NSMutableDictionary dictionary];
         gStringsCache = [NSMutableDictionary dictionary];
+        gStringsChoice = [NSMutableDictionary dictionary];
         gBundlePaths = [NSMutableDictionary dictionary];
         gMirrorBundles = [NSMutableDictionary dictionary];
         gMirrorPathKeys = [NSMutableDictionary dictionary];
@@ -781,8 +833,9 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
         }];
     }
     gGeneration++;
+    // 目录名带进程号：macOS 上未沙盒化的 App 共用同一个临时目录，只按序号命名会与另一个接入了客户端的 App 互相覆盖
     NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                      [NSString stringWithFormat:@"NoCompileResources/mirror_%lu", (unsigned long)gGeneration]];
+                      [NSString stringWithFormat:@"NoCompileResources/mirror_%d_%lu", (int)getpid(), (unsigned long)gGeneration]];
     [NSFileManager.defaultManager removeItemAtPath:root error:nil];
     NSString *mirrorPath = [root stringByAppendingPathComponent:bundlePath.lastPathComponent];
     if (!NCBuildMirror(bundlePath, mirrorPath, relativeToBundle)) {
@@ -801,7 +854,77 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
 
 #pragma mark - NCResources
 
+/// 取字典里指定类型的值，类型不符返回 nil
+static id NCTypedValue(NSDictionary *json, NSString *key, Class cls) {
+    id value = [json isKindOfClass:NSDictionary.class] ? json[key] : nil;
+    return [value isKindOfClass:cls] ? value : nil;
+}
+
+/// 取字典里的数组并校验元素类型。字段缺失返回空数组，类型不符返回 nil
+static NSArray *NCTypedArray(NSDictionary *json, NSString *key, Class elementClass) {
+    id value = [json isKindOfClass:NSDictionary.class] ? json[key] : nil;
+    if (value == nil || value == NSNull.null) {
+        return @[];
+    }
+    if (![value isKindOfClass:NSArray.class]) {
+        return nil;
+    }
+    for (id element in (NSArray *)value) {
+        if (![element isKindOfClass:elementClass]) {
+            return nil;
+        }
+    }
+    return value;
+}
+
+/// 镜像目录（mirror_<进程号>_<序号>）所属的进程是否还在运行。旧版本生成的目录名里没有进程号，按不在运行处理
+static BOOL NCMirrorOwnerIsAlive(NSString *directoryName) {
+    NSArray<NSString *> *parts = [directoryName componentsSeparatedByString:@"_"];
+    if (parts.count != 3 || ![parts[0] isEqualToString:@"mirror"]) {
+        return NO;
+    }
+    pid_t pid = (pid_t)parts[1].intValue;
+    if (pid <= 0) {
+        return NO;
+    }
+    // 信号 0 只做存在性检查；EPERM 说明进程存在但属于其他用户
+    return kill(pid, 0) == 0 || errno == EPERM;
+}
+
 @implementation NCResources
+
++ (void)removeStaleTemporaryFilesCreatedBefore:(NSDate *)date {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *tmp = NSTemporaryDirectory();
+    NSDate *threshold = date;
+#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
+    // macOS 上未沙盒化的 App 共用同一个临时目录，其他正在运行的 App 可能还在用里面的文件：只清理一周前的。
+    // iOS / tvOS 的临时目录在各自的容器里，本进程启动前的文件都是以前的进程留下的
+    threshold = [date dateByAddingTimeInterval:-7 * 24 * 3600];
+#endif
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    // 资源副本与镜像 bundle
+    for (NSString *directory in @[@"NoCompileIncoming", @"NoCompileResources"]) {
+        NSString *path = [tmp stringByAppendingPathComponent:directory];
+        for (NSString *name in [fm contentsOfDirectoryAtPath:path error:nil] ?: @[]) {
+            if (!NCMirrorOwnerIsAlive(name)) {
+                [candidates addObject:[path stringByAppendingPathComponent:name]];
+            }
+        }
+    }
+    // 注入 dylib 与符号桥接 dylib（nc_<会话>_<序号>.dylib / nc_syms_<摘要>.dylib）
+    for (NSString *name in [fm contentsOfDirectoryAtPath:tmp error:nil] ?: @[]) {
+        if ([name hasPrefix:@"nc_"] && [name.pathExtension isEqualToString:@"dylib"]) {
+            [candidates addObject:[tmp stringByAppendingPathComponent:name]];
+        }
+    }
+    for (NSString *path in candidates) {
+        NSDate *modified = [fm attributesOfItemAtPath:path error:nil][NSFileModificationDate];
+        if (modified && [modified compare:threshold] == NSOrderedAscending) {
+            [fm removeItemAtPath:path error:nil];
+        }
+    }
+}
 
 + (BOOL)isMirrorBundle:(NSBundle *)bundle {
     if (!bundle || !gHasOverrides) {
@@ -854,7 +977,9 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
         NSString *destination = [root stringByAppendingPathComponent:relative];
         [NSFileManager.defaultManager createDirectoryAtPath:destination.stringByDeletingLastPathComponent
                                 withIntermediateDirectories:YES attributes:nil error:nil];
-        if (![[data subdataWithRange:NSMakeRange(offset, length)] writeToFile:destination atomically:NO]) {
+        // 0 字节的文件（空的 .json / .strings）：整包数据为空时 data 是 nil，不能对它取子数据
+        NSData *chunk = length > 0 ? [data subdataWithRange:NSMakeRange(offset, length)] : [NSData data];
+        if (![chunk writeToFile:destination atomically:NO]) {
             *error = [NSString stringWithFormat:@"无法写入 %@", relative];
             return nil;
         }
@@ -884,15 +1009,28 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
 
 + (void)applyPackage:(NSDictionary *)json root:(NSString *)root result:(NCResourceResult *)result {
     NCInstallHooks();
-    NSString *kind = json[@"kind"];
-    NSString *name = json[@"name"];
-    NSArray<NSString *> *items = json[@"items"];
-    NSArray<NSDictionary *> *images = json[@"images"];
+    // 字段逐个校验类型：连接的对端未必是 NoCompile（客户端会连本机候选端口上的任何监听者），
+    // 类型不符时直接报错，不能让 unrecognized selector 把宿主 App 带崩
+    NSString *kind = NCTypedValue(json, @"kind", NSString.class);
+    NSString *name = NCTypedValue(json, @"name", NSString.class);
+    NSArray<NSString *> *items = NCTypedArray(json, @"items", NSString.class);
+    NSArray<NSDictionary *> *images = NCTypedArray(json, @"images", NSDictionary.class);
+    NSString *bundleHint = NCTypedValue(json, @"bundle", NSString.class);
+    if (kind.length == 0 || !items || !images) {
+        result.message = @"资源包格式错误";
+        return;
+    }
+    for (NSDictionary *image in images) {
+        if (![image[@"path"] isKindOfClass:NSString.class]) {
+            result.message = @"资源包格式错误";
+            return;
+        }
+    }
 
     // 0. 确定资源所属 bundle（主 bundle 为 @""）
-    NSString *bundleKey = NCResolveBundleKey(json[@"bundle"]);
+    NSString *bundleKey = NCResolveBundleKey(bundleHint);
     if (!bundleKey) {
-        result.message = [NSString stringWithFormat:@"找不到资源所属的 bundle：%@", json[@"bundle"]];
+        result.message = [NSString stringWithFormat:@"找不到资源所属的 bundle：%@", bundleHint];
         return;
     }
 
@@ -910,6 +1048,9 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
                     gHasStrings = YES;
                 }
             }
+            // 覆盖条目变了：各张字符串表要重新挑选文件
+            gOverridesGeneration++;
+            [gStringsChoice removeAllObjects];
         }
         gHasOverrides = YES;
         if (!NCRebuildMirrorBundle(bundleKey)) {
@@ -928,7 +1069,7 @@ static BOOL NCRebuildMirrorBundle(NSString *bundleKey) {
         }
         NSString *key = [NSString stringWithFormat:@"%@|%@", bundleKey, NCNormalizedImageName(name)];
         @synchronized (NCResourcesLock()) {
-            gImages[key] = @{ @"images": variants, @"template": json[@"template"] ?: @NO };
+            gImages[key] = @{ @"images": variants, @"template": NCTypedValue(json, @"template", NSNumber.class) ?: @NO };
             [gImageCache removeObjectForKey:key];
         }
         gHasImages = YES;

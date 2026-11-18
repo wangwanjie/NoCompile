@@ -54,6 +54,13 @@
 }
 
 + (instancetype)connectToHost:(NSString *)host port:(uint16_t)port {
+    return [self connectToHost:host port:port timedOut:NULL];
+}
+
++ (instancetype)connectToHost:(NSString *)host port:(uint16_t)port timedOut:(BOOL *)timedOut {
+    if (timedOut) {
+        *timedOut = NO;
+    }
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         return nil;
@@ -78,6 +85,10 @@
         do {
             ready = poll(&pollFD, 1, 2000);
         } while (ready < 0 && errno == EINTR);
+        if (ready == 0 && timedOut) {
+            // 等满超时仍无应答：主机不可达（区别于端口上没人监听时立即返回的 ECONNREFUSED）
+            *timedOut = YES;
+        }
         int socketError = 0;
         socklen_t length = sizeof(socketError);
         if (ready <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) != 0 || socketError != 0) {
@@ -159,37 +170,45 @@
 
 - (void)readLoop {
     NSString *reason = @"连接已断开";
-    while (self.isOpen) {
-        NCFrameHeader header = {0};
-        if (![self readFully:&header length:sizeof(header)]) {
-            break;
-        }
-        if (header.magic != NC_PROTOCOL_MAGIC) {
-            reason = @"协议魔数不匹配";
-            break;
-        }
-        if (header.jsonLength > NC_MAX_JSON_LENGTH || header.dataLength > NC_MAX_DATA_LENGTH) {
-            reason = @"帧长度超出上限";
-            break;
-        }
-        NSDictionary *json = nil;
-        NSData *data = nil;
-        if (header.jsonLength > 0) {
-            NSMutableData *jsonData = [NSMutableData dataWithLength:header.jsonLength];
-            if (![self readFully:jsonData.mutableBytes length:header.jsonLength]) {
-                break;
-            }
-            id object = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:NULL];
-            json = [object isKindOfClass:NSDictionary.class] ? object : nil;
-        }
-        if (header.dataLength > 0) {
-            NSMutableData *payload = [NSMutableData dataWithLength:(NSUInteger)header.dataLength];
-            if (!payload || ![self readFully:payload.mutableBytes length:(size_t)header.dataLength]) {
-                break;
-            }
-            data = payload;
-        }
+    BOOL failed = NO;
+    while (!failed && self.isOpen) {
+        // 读循环所在的 block 在连接存续期间不返回：整帧（真机上含几 MB 的 dylib）都要在本轮结束时释放，
+        // 否则会一直留到连接断开
         @autoreleasepool {
+            NCFrameHeader header = {0};
+            if (![self readFully:&header length:sizeof(header)]) {
+                failed = YES;
+                continue;
+            }
+            if (header.magic != NC_PROTOCOL_MAGIC) {
+                reason = @"协议魔数不匹配";
+                failed = YES;
+                continue;
+            }
+            if (header.jsonLength > NC_MAX_JSON_LENGTH || header.dataLength > NC_MAX_DATA_LENGTH) {
+                reason = @"帧长度超出上限";
+                failed = YES;
+                continue;
+            }
+            NSDictionary *json = nil;
+            NSData *data = nil;
+            if (header.jsonLength > 0) {
+                NSMutableData *jsonData = [NSMutableData dataWithLength:header.jsonLength];
+                if (![self readFully:jsonData.mutableBytes length:header.jsonLength]) {
+                    failed = YES;
+                    continue;
+                }
+                id object = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:NULL];
+                json = [object isKindOfClass:NSDictionary.class] ? object : nil;
+            }
+            if (header.dataLength > 0) {
+                NSMutableData *payload = [NSMutableData dataWithLength:(NSUInteger)header.dataLength];
+                if (!payload || ![self readFully:payload.mutableBytes length:(size_t)header.dataLength]) {
+                    failed = YES;
+                    continue;
+                }
+                data = payload;
+            }
             [self.delegate connection:self didReceiveType:(NCMessageType)header.type json:json data:data];
         }
     }
@@ -300,8 +319,14 @@
             continue;
         }
         [_connectionsByPort removeObjectForKey:port];
-        NCConnection *connection = [NCConnection connectToHost:_host port:port.unsignedShortValue];
+        BOOL timedOut = NO;
+        NCConnection *connection = [NCConnection connectToHost:_host port:port.unsignedShortValue timedOut:&timedOut];
         if (!connection) {
+            if (timedOut) {
+                // 主机不可达（Wi-Fi 下 Mac 休眠或不在同一网络）：其余端口同样会各等满超时，
+                // 一轮要一分钟，Mac 恢复后迟迟连不上。放弃本轮，下一轮再从头探测
+                break;
+            }
             continue;
         }
         _connectionsByPort[port] = connection;

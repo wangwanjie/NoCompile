@@ -33,6 +33,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 主动连接 TCP 主机（模拟器 / macOS 使用）
 + (nullable instancetype)connectToHost:(NSString *)host port:(uint16_t)port;
 
+/// 同上；连接失败且原因是等满超时仍无应答（主机不可达）时，*timedOut 置为 YES
++ (nullable instancetype)connectToHost:(NSString *)host port:(uint16_t)port timedOut:(nullable BOOL *)timedOut;
+
 - (void)open;
 - (void)close;
 

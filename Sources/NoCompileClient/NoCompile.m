@@ -103,12 +103,36 @@ static NSUInteger gInjectionCount = 0;
 }
 
 - (void)startWithHost:(NSString *)host {
-    if (self.started) {
+    BOOL alreadyStarted = NO;
+    BOOL adoptsLateHost = NO;
+    @synchronized (self) {
+        alreadyStarted = self.started;
+        if (!alreadyStarted) {
+            self.started = YES;
+            self.host = host;
+        } else if (host.length > 0 && self.host.length == 0) {
+            // 客户端已在镜像加载时自动启动（没有地址），之后业务代码才给出 Mac 地址：补记下来
+            self.host = host;
+            adoptsLateHost = YES;
+        }
+    }
+    if (alreadyStarted) {
+        (void)adoptsLateHost;
+#if !(TARGET_OS_SIMULATOR || TARGET_OS_OSX || TARGET_OS_MACCATALYST)
+        // 真机：自动启动时只开了 USB 监听，这里补上 Wi-Fi 连接；模拟器 / macOS 始终连本机，无需处理
+        if (adoptsLateHost) {
+            [self connectLoop];
+        }
+#endif
         return;
     }
-    self.started = YES;
-    self.host = host;
     self.deviceInfo = [self collectDeviceInfo];
+
+    // 清理以前的进程留在临时目录里的注入 dylib 与资源副本（只增不减，模拟器的容器不会被系统清理）
+    NSDate *launchDate = [NSDate date];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        [NCResources removeStaleTemporaryFilesCreatedBefore:launchDate];
+    });
 
     NCSwizzleGuardInstall();
     NCLogSetForwarder(^(NCLogLevel level, NSString *message) {
@@ -134,15 +158,28 @@ static NSUInteger gInjectionCount = 0;
 /// 属于其他工程的 Mac 端收到握手后会搁置这条连接，不会向本 App 推送任何内容
 - (void)connectLoop {
     NSString *host = self.host.length > 0 ? self.host : @"127.0.0.1";
+    // 只支持 IPv4 地址：传了主机名或 IPv6 时每次连接都会静默失败，这里直接说明原因
+    struct in_addr probe;
+    if (inet_pton(AF_INET, host.UTF8String, &probe) != 1) {
+        NSLog(@"[NoCompile] ⚠️ Mac 地址「%@」无效，需要 IPv4 地址（如 192.168.1.10），已放弃 Wi-Fi 连接", host);
+        // 清掉无效地址，之后再用正确的地址调用 +startWithHost: 仍能补上连接
+        @synchronized (self) {
+            self.host = nil;
+        }
+        return;
+    }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NCMacPortScanner *scanner = [[NCMacPortScanner alloc] initWithHost:host ports:[NCMacPortScanner defaultPorts]];
         while (self.started) {
-            for (NCConnection *connection in [scanner scan]) {
-                connection.delegate = self;
-                @synchronized (self) {
-                    [self.connections addObject:connection];
+            // 这个 block 永不返回，循环内的临时对象要逐轮释放
+            @autoreleasepool {
+                for (NCConnection *connection in [scanner scan]) {
+                    connection.delegate = self;
+                    @synchronized (self) {
+                        [self.connections addObject:connection];
+                    }
+                    [connection open];
                 }
-                [connection open];
             }
             sleep(2); // 每 2 秒扫描一次，断开后重连
         }
@@ -204,14 +241,17 @@ static NSUInteger gInjectionCount = 0;
 
 /// 接受 Mac 经 usbmuxd 发起的连接；监听 socket 出错时返回
 - (void)acceptDeviceConnectionsOn:(int)fd {
+    // 连续失败次数：监听 socket 失效后若一直返回可重试的错误，不能无限空转，交给外层重建
+    int consecutiveFailures = 0;
     while (self.started) {
         int client = accept(fd, NULL, NULL);
         if (client < 0) {
-            if (errno == EINTR || errno == ECONNABORTED) {
+            if ((errno == EINTR || errno == ECONNABORTED) && ++consecutiveFailures < 16) {
                 continue;
             }
             return;
         }
+        consecutiveFailures = 0;
         NCConnection *connection = [[NCConnection alloc] initWithSocket:client];
         connection.delegate = self;
         // 多个 Mac 端（不同工程的 NoCompile 实例）可能同时连入，各保留一条；
@@ -408,18 +448,18 @@ static NSString *NCImageUUID(const struct mach_header *header) {
     }
 }
 
-- (void)handleStatus:(NSDictionary *)json {
-    NSString *message = json[@"message"];
-    NSInteger state = [json[@"state"] integerValue];
-    if (gShowsHUD && message) {
-        [NCHUD showStatus:message state:state];
-    }
-}
-
 /// 取字典里指定类型的值，类型不符时返回 nil（Mac 端数据异常时不至于 unrecognized selector）
 static id NCTyped(NSDictionary *json, NSString *key, Class cls) {
     id value = [json isKindOfClass:NSDictionary.class] ? json[key] : nil;
     return [value isKindOfClass:cls] ? value : nil;
+}
+
+- (void)handleStatus:(NSDictionary *)json {
+    NSString *message = NCTyped(json, @"message", NSString.class);
+    NSInteger state = [NCTyped(json, @"state", NSNumber.class) integerValue];
+    if (gShowsHUD && message) {
+        [NCHUD showStatus:message state:state];
+    }
 }
 
 - (void)handleInject:(NSDictionary *)json data:(NSData *)data from:(NCConnection *)connection {

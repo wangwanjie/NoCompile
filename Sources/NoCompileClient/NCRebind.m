@@ -8,7 +8,17 @@
 #import "NCRebind.h"
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <stdlib.h>
 #include <string.h>
+
+/// 按符号名排序 / 查找重绑项（元素是指向 NCRebinding 的指针）
+static int NCCompareRebindings(const void *lhs, const void *rhs) {
+    return strcmp((*(const NCRebinding *const *)lhs)->name, (*(const NCRebinding *const *)rhs)->name);
+}
+
+static int NCCompareNameToRebinding(const void *name, const void *element) {
+    return strcmp((const char *)name, (*(const NCRebinding *const *)element)->name);
+}
 
 /// 处理单个间接符号指针节（lazy / non-lazy）
 static NSUInteger NCRebindSection(NCImage *image,
@@ -19,7 +29,7 @@ static NSUInteger NCRebindSection(NCImage *image,
                                   uint32_t symbolCount,
                                   const char *strtab,
                                   uint32_t stringsSize,
-                                  const NCRebinding *rebindings,
+                                  const NCRebinding *const *sortedRebindings,
                                   NSUInteger count) {
     uint32_t type = section->flags & SECTION_TYPE;
     if (type != S_LAZY_SYMBOL_POINTERS && type != S_NON_LAZY_SYMBOL_POINTERS) {
@@ -30,7 +40,7 @@ static NSUInteger NCRebindSection(NCImage *image,
     // reserved1 是本节在间接符号表中的起始下标
     uint32_t indirectBase = section->reserved1;
 
-    __block NSUInteger changed = 0;
+    NSUInteger changed = 0;
     for (uint32_t i = 0; i < slotCount; i++) {
         // 越界保护：间接符号表 / 符号表 / 字符串表的下标都要校验
         if (indirectBase + i >= indirectCount) {
@@ -49,23 +59,24 @@ static NSUInteger NCRebindSection(NCImage *image,
             continue;
         }
         const char *symbolName = strtab + strx;
-        for (NSUInteger r = 0; r < count; r++) {
-            if (strcmp(symbolName, rebindings[r].name) != 0) {
-                continue;
-            }
-            if (indirectSlots[i] == rebindings[r].replacement) {
-                break;
-            }
-            // 指针可能落在只读的 __DATA_CONST，需要临时开写
-            void **slot = &indirectSlots[i];
-            // 写入失败（页面无法改为可写）不计入，避免把没生效的替换报告成成功
-            BOOL written = NCWithWritableMemory(slot, sizeof(void *), ^{
-                *slot = rebindings[r].replacement;
-            });
-            if (written) {
-                changed++;
-            }
-            break;
+        // 二分查找：主程序的间接槽位可达十万级，一个文件有几百个符号时逐个比较是上千万次 strcmp，且在主线程上
+        const NCRebinding *const *found = bsearch(symbolName, sortedRebindings, count, sizeof(*sortedRebindings),
+                                                  NCCompareNameToRebinding);
+        if (!found) {
+            continue;
+        }
+        void *replacement = (*found)->replacement;
+        if (indirectSlots[i] == replacement) {
+            continue;
+        }
+        // 指针可能落在只读的 __DATA_CONST，需要临时开写
+        void **slot = &indirectSlots[i];
+        // 写入失败（页面无法改为可写）不计入，避免把没生效的替换报告成成功
+        BOOL written = NCWithWritableMemory(slot, sizeof(void *), ^{
+            *slot = replacement;
+        });
+        if (written) {
+            changed++;
         }
     }
     return changed;
@@ -104,14 +115,31 @@ NSUInteger NCRebindImage(NCImage *image, const NCRebinding *rebindings, NSUInteg
     const char *strtab = (const char *)(linkeditBase + symtabCommand->stroff);
     const uint32_t *indirectSymtab = (const uint32_t *)(linkeditBase + dysymtabCommand->indirectsymoff);
 
+    // 按符号名排好序，供各节二分查找。同名的重绑项保留排在前面的那个（与原先顺序查找的结果一致）
+    const NCRebinding **sorted = malloc(count * sizeof(*sorted));
+    if (!sorted) {
+        return 0;
+    }
+    for (NSUInteger i = 0; i < count; i++) {
+        sorted[i] = &rebindings[i];
+    }
+    mergesort(sorted, count, sizeof(*sorted), NCCompareRebindings);
+    NSUInteger uniqueCount = 0;
+    for (NSUInteger i = 0; i < count; i++) {
+        if (uniqueCount == 0 || strcmp(sorted[uniqueCount - 1]->name, sorted[i]->name) != 0) {
+            sorted[uniqueCount++] = sorted[i];
+        }
+    }
+
     __block NSUInteger changed = 0;
     NCEnumerateSections(image, ^(const struct segment_command_64 *segment, const struct section_64 *section, BOOL *stop) {
         if (strcmp(segment->segname, SEG_DATA) != 0 && strcmp(segment->segname, "__DATA_CONST") != 0) {
             return;
         }
         changed += NCRebindSection(image, section, indirectSymtab, dysymtabCommand->nindirectsyms,
-                                   symtab, symtabCommand->nsyms, strtab, symtabCommand->strsize, rebindings, count);
+                                   symtab, symtabCommand->nsyms, strtab, symtabCommand->strsize, sorted, uniqueCount);
     });
+    free(sorted);
     return changed;
 }
 

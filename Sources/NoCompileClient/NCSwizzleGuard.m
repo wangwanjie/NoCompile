@@ -19,6 +19,7 @@
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <pthread.h>
@@ -78,7 +79,9 @@ static IMP nc_method_setImplementation(Method method, IMP imp) {
 
 /// 替换版 class_replaceMethod：只拦截"替换类自身已有的方法"；类自身没有该方法时是新增，照常执行
 static IMP nc_class_replaceMethod(Class cls, SEL name, IMP imp, const char *types) {
-    if (cls && name) {
+    // 保护期之外（App 运行期间的绝大多数调用）直接转发，不必为了查已有方法先拷一份方法列表
+    BOOL guarding = atomic_load(&gGuardDepth) > 0 && pthread_equal(pthread_self(), gGuardThread);
+    if (guarding && cls && name) {
         Method existing = NULL;
         unsigned int count = 0;
         Method *methods = class_copyMethodList(cls, &count);
@@ -138,7 +141,14 @@ void NCSwizzleGuardInstall(void) {
 
 void NCSwizzleGuardBegin(const char *path) {
     if (path) {
-        strlcpy(gGuardPath, path, sizeof(gGuardPath));
+        // dyld 记录的镜像路径是解析过符号链接的（/var/folders → /private/var/folders、/tmp → /private/tmp），
+        // 保护路径要用同样的形式，否则按路径比对永远对不上：新镜像不会被重绑，+load 里的 swizzle 也拦不住
+        char resolved[PATH_MAX];
+        if (realpath(path, resolved) != NULL) {
+            strlcpy(gGuardPath, resolved, sizeof(gGuardPath));
+        } else {
+            strlcpy(gGuardPath, path, sizeof(gGuardPath));
+        }
     }
     gGuardThread = pthread_self();
     atomic_fetch_add(&gGuardDepth, 1);

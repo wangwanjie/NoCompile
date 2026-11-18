@@ -31,6 +31,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// 是否为 NoCompile 生成的镜像 bundle
 + (BOOL)isMirrorBundle:(nullable NSBundle *)bundle;
 
+/// 清理以前的进程留在临时目录里的注入 dylib、资源副本与镜像 bundle（可在任意线程调用）。
+/// @param date 本进程的启动时间，只删除早于它的文件；macOS 上临时目录由多个 App 共用，只删除一周前的
++ (void)removeStaleTemporaryFilesCreatedBefore:(NSDate *)date;
+
 @end
 
 NS_ASSUME_NONNULL_END

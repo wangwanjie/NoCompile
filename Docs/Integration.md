@@ -307,7 +307,7 @@ Catalyst App 与 macOS App 一样主动连接本机的 NoCompile（端口从 218
 
 UIKit 和 AppKit 都支持。
 
-**兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认流程（无论是否开启自动重建）。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
+**兼容 InjectionIII 的 `injected()`（可选）**：如果某个类已经实现了 `-injected` / `+injected`，NoCompile 会调用它，替代默认流程（无论是否开启自动重建）。`-injected` 发给当前可见的受影响控制器，以及可见视图层级中被替换类（含子类）的视图；不在界面上的对象请监听 `NoCompileDidInjectNotification`。从 InjectionIII 迁移过来的项目可以直接沿用。新项目不需要写。
 
 ## 资源与新增文件
 
@@ -391,7 +391,7 @@ NoCompile 注入后会发出 `INJECTION_BUNDLE_NOTIFICATION`，与这些包兼�
 - `Hangs/`：Mac 端主线程卡顿超过 2 秒时自动采集的调用栈
 - `Summary.txt`：系统、Xcode 版本、工程与 DerivedData、监听目录、已连接 App 的握手信息、最近的注入记录
 
-**改了属性 / 方法后提示「内存布局变了，请重新运行 App」**：增删、调换顺序的存储属性 / 实例变量 / Swift 方法改变了类的内存布局。旧实例按旧布局分配，新代码（包括 `viewWillAppear:` 这类 @objc override、outlet 的 getter、`dealloc`）按新偏移读写成员、按新 vtable 槽位派发，放到旧实例上会越界或调用到别的方法而崩溃，所以 NoCompile 不替换这个类的实现，重新运行 App 后生效。同一文件里布局没变的其他类、函数照常热重载。
+**改了属性 / 方法后提示「内存布局变了，请重新运行 App」**：增删、调换顺序的存储属性 / 实例变量 / Swift 方法改变了类的内存布局。旧实例按旧布局分配，新代码（包括 `viewWillAppear:` 这类 @objc override、outlet 的 getter、`dealloc`）按新偏移读写成员、按新 vtable 槽位派发，放到旧实例上会越界或调用到别的方法而崩溃，所以 NoCompile 不替换这个类的实现，重新运行 App 后生效。同一文件里布局没变的其他类、函数照常热重载。结构体 / 枚举增删或调整了存储属性 / case（包括给 SwiftUI 视图加 `@State`）时，同文件里用到它的代码都按新布局编译，这个文件本次的改动整体不替换，重新运行 App 后生效。
 
 **保存后没有触发热重载**：FSEvents 偶尔会漏报（目录权限、网络盘、事件被合并等）。点控制台顶栏的「检查改动」，或在任意 App（如 Xcode）里按全局快捷键 ⌃⌥⌘R（可在偏好设置中更换或关闭），NoCompile 会扫描工程目录，把漏掉的改动补上。
 

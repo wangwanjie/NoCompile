@@ -45,6 +45,11 @@ void NCRegisterClassAlias(Class newClass, Class oldClass) {
     }
     pthread_mutex_lock(&gAliasWriteLock);
     CFDictionaryRef current = atomic_load_explicit(&gAliasSnapshot, memory_order_acquire);
+    // 已登记过同样的映射：不用再复制整张表（每次复制都会留下一份不释放的旧快照）
+    if (current && CFDictionaryGetValue(current, (__bridge const void *)newClass) == (__bridge const void *)NCCanonicalClassIn(current, oldClass)) {
+        pthread_mutex_unlock(&gAliasWriteLock);
+        return;
+    }
     CFMutableDictionaryRef next = current
         ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, current)
         : CFDictionaryCreateMutable(kCFAllocatorDefault, 0, NULL, NULL);
@@ -55,6 +60,12 @@ void NCRegisterClassAlias(Class newClass, Class oldClass) {
     atomic_store_explicit(&gAliasSnapshot, published, memory_order_release);
     pthread_mutex_unlock(&gAliasWriteLock);
     [NCDynamicCastInstaller install];
+}
+
+/// cls 是否是某次注入产生的类副本（已登记为别名）。App 原有的类、新增文件第一次带进来的类返回 NO
+BOOL NCClassIsAlias(Class cls) {
+    CFDictionaryRef snapshot = atomic_load_explicit(&gAliasSnapshot, memory_order_acquire);
+    return snapshot && cls && CFDictionaryContainsKey(snapshot, (__bridge const void *)cls);
 }
 
 @implementation NCDynamicCastInstaller

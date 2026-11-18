@@ -102,6 +102,8 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     [refreshed addObjectsFromArray:[self reloadAffectedControllersForClassNames:names
                                                              layoutChangedClasses:layoutChangedClasses
                                                                           pending:pending]];
+    // 兼容项：-injected 也发给可见视图层级中被替换类的视图实例（控制器的已在上一步调用）
+    [self notifyInjectedViewsHittingNames:names];
 #endif
     if (outPending) {
         *outPending = [pending copy];
@@ -134,10 +136,12 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
             if ([kind isEqualToString:@"storyboard"] && controller.storyboard &&
                 [[self nameOfStoryboard:controller.storyboard] isEqualToString:name]) {
                 [targets addObject:controller];
-            } else if ([kind isEqualToString:@"nib"] && !controller.storyboard &&
-                       ([controller.nibName isEqualToString:name] ||
-                        [controller.nibName hasPrefix:[name stringByAppendingString:@"~"]])) {
-                [targets addObject:controller];
+            } else if ([kind isEqualToString:@"nib"] && !controller.storyboard && name.length > 0) {
+                // 含按类名约定加载 xib 的控制器（nibName 属性为 nil）
+                NSString *nibName = [self effectiveNibNameOf:controller];
+                if ([nibName isEqualToString:name] || [nibName hasPrefix:[name stringByAppendingString:@"~"]]) {
+                    [targets addObject:controller];
+                }
             }
         }
         // xib 用于 cell / 自定义视图、图片被代码引用：刷新最上层的可见业务控制器。
@@ -276,6 +280,46 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return NO;
 }
 
+/// 对可见窗口视图层级中、类链命中被替换类名且实现了 -injected 的视图逐个调用。
+/// 先收集再调用：回调里业务代码可能增删视图
++ (void)notifyInjectedViewsHittingNames:(NSSet<NSString *> *)names {
+    if (names.count == 0) {
+        return;
+    }
+    NSMutableArray<NCView *> *stack = [NSMutableArray array];
+#if NC_UIKIT
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) {
+            continue;
+        }
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window.hidden) {
+                [stack addObject:window];
+            }
+        }
+    }
+#else
+    for (NSWindow *window in NSApplication.sharedApplication.windows) {
+        if (window.isVisible && window.contentView) {
+            [stack addObject:window.contentView];
+        }
+    }
+#endif
+    SEL injectedSel = NSSelectorFromString(@"injected");
+    NSMutableArray<NCView *> *targets = [NSMutableArray array];
+    while (stack.count > 0) {
+        NCView *view = stack.lastObject;
+        [stack removeLastObject];
+        if ([self classChain:view.class hitsNames:names] && [view respondsToSelector:injectedSel]) {
+            [targets addObject:view];
+        }
+        [stack addObjectsFromArray:view.subviews];
+    }
+    for (NCView *view in targets) {
+        ((void (*)(id, SEL))objc_msgSend)(view, injectedSel);
+    }
+}
+
 #pragma mark - 刷新
 
 + (NSArray<NCViewController *> *)visibleControllers {
@@ -407,6 +451,34 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     return own != base;
 }
 
+/// 控制器界面所用 nib 的名字，界面不是来自 nib 时返回 nil。
+/// 除了显式指定的 nibName，还包括按系统约定加载的同名 nib：[[FooViewController alloc] init] 配
+/// FooViewController.xib（UIKit 还会尝试去掉 Controller 后缀的 FooView.xib）时 nibName 属性是 nil，
+/// 但界面同样来自 nib，不能按纯代码界面处理
++ (nullable NSString *)effectiveNibNameOf:(NCViewController *)controller {
+    if (controller.nibName.length > 0) {
+        return controller.nibName;
+    }
+    if (controller.storyboard || [self overridesLoadView:controller.class]) {
+        return nil;
+    }
+    NSBundle *bundle = controller.nibBundle ?: NSBundle.mainBundle;
+    // Swift 类名带模块前缀（Module.FooViewController），nib 文件名不带
+    NSString *className = [NSStringFromClass(controller.class) componentsSeparatedByString:@"."].lastObject;
+    NSMutableArray<NSString *> *candidates = [NSMutableArray arrayWithObject:className];
+#if NC_UIKIT
+    if ([className hasSuffix:@"Controller"] && className.length > 10) {
+        [candidates addObject:[className substringToIndex:className.length - 10]];
+    }
+#endif
+    for (NSString *candidate in candidates) {
+        if ([bundle pathForResource:candidate ofType:@"nib"] != nil) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
 /// 重建一个控制器的界面
 + (void)reloadController:(NCViewController *)controller {
     if (!controller.isViewLoaded) {
@@ -414,8 +486,9 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
     }
     // 界面来自 storyboard / xib：重新加载 nib（资源更新后会加载新 nib）。
     // 重新加载失败时保持原样：清空子视图再走 viewDidLoad 会丢掉 nib 中的全部内容
-    if (controller.nibName.length > 0) {
-        if (![self reloadControllerFromNib:controller]) {
+    NSString *nibName = [self effectiveNibNameOf:controller];
+    if (nibName.length > 0) {
+        if (![self reloadControllerFromNib:controller nibName:nibName]) {
             NCLogWarn(@"%@ 的界面来自 nib，未能自动重建，返回后重新进入该页面即可看到改动",
                       NSStringFromClass(controller.class));
         }
@@ -524,17 +597,16 @@ static BOOL NCInstallExternalPlaceholderHook(void) {
 /// 重新实例化控制器的 nib，把新视图换到旧视图的位置并重走生命周期。
 /// 加载入口已被 NCResources hook，资源更新过时会自动改用镜像 bundle 中的新 nib。
 /// 涉及系统私有行为，任何异常都只记录日志并回退到普通刷新，不能让 App 崩溃
-+ (BOOL)reloadControllerFromNib:(NCViewController *)controller {
++ (BOOL)reloadControllerFromNib:(NCViewController *)controller nibName:(NSString *)nibName {
     @try {
-        return [self unsafeReloadControllerFromNib:controller];
+        return [self unsafeReloadControllerFromNib:controller nibName:nibName];
     } @catch (NSException *exception) {
         NCLogWarn(@"重新加载 %@ 的 nib 失败：%@", NSStringFromClass(controller.class), exception.reason);
         return NO;
     }
 }
 
-+ (BOOL)unsafeReloadControllerFromNib:(NCViewController *)controller {
-    NSString *nibName = controller.nibName;
++ (BOOL)unsafeReloadControllerFromNib:(NCViewController *)controller nibName:(NSString *)nibName {
     id storyboard = controller.storyboard;
     NCView *oldView = controller.view;
 #if NC_UIKIT

@@ -21,7 +21,8 @@ typedef NS_ENUM(NSInteger, NCInjectStatus) {
 @property (nonatomic) NSUInteger symbolsRebound;
 /// 新镜像中挂到既有类上的分类数。分类由 ObjC 运行时在 dlopen 时直接附加，同名方法随即覆盖旧实现
 @property (nonatomic) NSUInteger categoriesAttached;
-/// 发生内存布局变化（增删 / 重排方法或存储属性）的类名。为避免崩溃，这些类的实现不会被替换，需重新运行 App
+/// 发生内存布局变化（增删 / 重排方法或存储属性）的类名。为避免崩溃，这些类的实现不会被替换，需重新运行 App。
+/// 也包含布局变化的值类型（struct / enum）名：这种情况下整个文件的实现都不替换
 @property (nonatomic, copy) NSArray<NSString *> *layoutChangedClasses;
 /// 本次注入未能完全生效的原因（布局变化、视图结构变化等），已写入日志
 @property (nonatomic, copy) NSArray<NSString *> *warnings;

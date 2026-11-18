@@ -12,6 +12,9 @@
 #import "NoCompile.h"
 #import <Foundation/Foundation.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 @interface NCBoot : NSObject
 @end
@@ -35,11 +38,15 @@
             return;
         }
         // 同一进程里可能同时存在多份客户端（例如既链接了 SPM 库又加载了 bundle），只启动第一份
-        if (getenv("NOCOMPILE_CLIENT_BOOTED") != NULL) {
+        // 标记里记进程号：环境变量会被 App 拉起的子进程继承，子进程里看到的是父进程的进程号，不算重复加载
+        char bootedBy[32];
+        snprintf(bootedBy, sizeof(bootedBy), "%d", (int)getpid());
+        const char *booted = getenv("NOCOMPILE_CLIENT_BOOTED");
+        if (booted != NULL && strcmp(booted, bootedBy) == 0) {
             NSLog(@"[NoCompile] 检测到重复加载的客户端，已忽略：%@", [NSBundle bundleForClass:self].bundlePath);
             return;
         }
-        setenv("NOCOMPILE_CLIENT_BOOTED", "1", 1);
+        setenv("NOCOMPILE_CLIENT_BOOTED", bootedBy, 1);
 
         NSString *host = env[@"NOCOMPILE_HOST"];
         // 延后到启动完成，避免干扰 App 自身的初始化

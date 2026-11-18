@@ -10,6 +10,7 @@
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <sys/mman.h>
+#include <pthread.h>
 #include <string.h>
 
 @implementation NCImage
@@ -138,7 +139,8 @@ NSArray<NCImage *> *NCAppImages(void) {
 NCImage *NCImageForPath(NSString *path) {
     NSString *resolved = path.stringByResolvingSymlinksInPath;
     uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
+    // 倒序查找：要找的是刚 dlopen 的镜像，排在列表末尾；正序要先给前面几百个系统镜像逐个解析符号链接
+    for (uint32_t i = count; i-- > 0;) {
         const char *name = _dyld_get_image_name(i);
         if (!name) {
             continue;
@@ -266,7 +268,29 @@ void NCEnumerateSymbolsWithDesc(NCImage *image, NCSymbolDescBlock block) {
     }
 }
 
+/// 实际执行，调用方已持有 gWritableMemoryLock
+static BOOL NCWithWritableMemoryLocked(void *address, size_t size, void (NS_NOESCAPE ^block)(void));
+
 BOOL NCWithWritableMemory(void *address, size_t size, void (NS_NOESCAPE ^block)(void)) {
+    // 「查询保护属性 → 开写 → 写入 → 恢复只读」必须整体互斥：主线程注入与其他线程上的 dyld 新增镜像回调
+    // 可能同时改同一只读页，一方刚看到页面可写、另一方就把它恢复成只读，写入会直接崩溃。
+    // 递归锁：block 里再次进入本函数（当前没有这种调用）也不会自锁
+    static pthread_mutex_t lock;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        pthread_mutexattr_t attributes;
+        pthread_mutexattr_init(&attributes);
+        pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&lock, &attributes);
+        pthread_mutexattr_destroy(&attributes);
+    });
+    pthread_mutex_lock(&lock);
+    BOOL written = NCWithWritableMemoryLocked(address, size, block);
+    pthread_mutex_unlock(&lock);
+    return written;
+}
+
+static BOOL NCWithWritableMemoryLocked(void *address, size_t size, void (NS_NOESCAPE ^block)(void)) {
     vm_size_t pageSize = (vm_size_t)getpagesize();
     uintptr_t start = (uintptr_t)address & ~(uintptr_t)(pageSize - 1);
     uintptr_t end = ((uintptr_t)address + size + pageSize - 1) & ~(uintptr_t)(pageSize - 1);

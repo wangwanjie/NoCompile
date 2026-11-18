@@ -22,7 +22,8 @@ FOUNDATION_EXPORT NSString * const NoCompileInjectedFilesKey;
 /// 实现了该协议的类，在注入后会收到回调，用来刷新界面或状态
 @protocol NoCompileInjectable <NSObject>
 @optional
-/// 对存活的实例调用（通过视图层级与对象图遍历找到）
+/// 对当前可见的实例调用：受影响的视图控制器，以及可见视图层级中被替换类（含其子类）的视图。
+/// 不在界面上的对象（模型、服务等）不会收到，这类对象请监听 NoCompileDidInjectNotification
 - (void)injected;
 /// 对被替换的类本身调用
 + (void)injected;

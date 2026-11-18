@@ -6,6 +6,7 @@
 #import <XCTest/XCTest.h>
 #import "NCConnection.h"
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 @interface NCConnectionTests : XCTestCase <NCConnectionDelegate>
@@ -34,6 +35,9 @@
     int fds[2];
     XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
     _peer = fds[1];
+    // 读超时：发送逻辑回归（连接没把帧写出来）时 readFromPeer 返回 nil 让断言失败，而不是把整个测试挂死
+    struct timeval timeout = { .tv_sec = 10, .tv_usec = 0 };
+    setsockopt(_peer, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     NCConnection *connection = [[NCConnection alloc] initWithSocket:fds[0]];
     connection.delegate = self;
     return connection;
