@@ -6,6 +6,29 @@
         <description>NoCompile release feed.</description>
         <language>en</language>
         <item>
+            <title>0.2.16</title>
+            <pubDate>Thu, 19 Nov 2026 01:11:14 +0800</pubDate>
+            <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.16</link>
+            <sparkle:version>18</sparkle:version>
+            <sparkle:shortVersionString>0.2.16</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/wangwanjie/NoCompile/releases/download/v0.2.16/NoCompile_v0.2.16_x86_64.dmg" length="4166281" type="application/octet-stream" sparkle:edSignature="E3c1rO/VThvnsAumnKqZjPRi3V36cCcgxSBXJD6z5PhnfDHo3dGZD0yACiEur/Fep+WNesQQxfd2EQ9ZzkHrAA==" />
+            <description>&lt;h2&gt;NoCompile 0.2.16&lt;/h2&gt;
+&lt;p&gt;这一版是一轮全面的代码审查后的修复合集，重点在热重载的正确性与稳定性。&lt;/p&gt;
+&lt;h3&gt;新功能&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;结构体 / 枚举的布局变化不再破坏内存&lt;/strong&gt;：给 struct 增删、调换存储属性（SwiftUI 视图加一个 `@State` 也算），或给 enum 增删 case、修改关联值后，旧代码仍按旧尺寸分配和读写这个类型，直接替换会读出错值甚至崩溃。现在客户端会比较新旧布局，布局变了就整个文件不替换，日志与浮层提示重新运行 App；只改方法体、新增类型照常热重载&lt;/li&gt;&lt;li&gt;&lt;strong&gt;`-injected` 也发给视图&lt;/strong&gt;：可见视图层级里被替换类（含子类）的视图实例也会收到 `-injected` 回调，原来只发给控制器&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复：热重载&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;Swift 类的构造逻辑改了不生效&lt;/strong&gt;：初始化构造器没有参与函数级替换，现在改动 `init` 后新建的实例会走新逻辑&lt;/li&gt;&lt;li&gt;&lt;strong&gt;注入子类文件后，父类已热重载的方法被还原&lt;/strong&gt;：子类继承来的方法槽位被写回成 App 最初的父类实现，现在保留最新的父类实现&lt;/li&gt;&lt;li&gt;&lt;strong&gt;类文件注入后，其他文件里分类对同名方法的覆盖失效&lt;/strong&gt;：现在只改类自己的那条方法&lt;/li&gt;&lt;li&gt;&lt;strong&gt;类改过布局又改回来，之后一直提示布局变了&lt;/strong&gt;：现在以 App 原有的类为准，恢复布局后照常替换&lt;/li&gt;&lt;li&gt;&lt;strong&gt;新增的 `some View` 属性 / 方法每次都提示「视图结构变了」&lt;/strong&gt;：本次运行中新增的 `some View` 以第一次注入时为基准，不再误报&lt;/li&gt;&lt;li&gt;&lt;strong&gt;做过 Archive / Profile 后，热重载用了 Release 的编译命令&lt;/strong&gt;：注入的代码带优化、`#if DEBUG` 里的代码消失。现在按运行中 App 的构建配置取命令&lt;/li&gt;&lt;li&gt;&lt;strong&gt;路径含空格的 Swift 文件无法热重载&lt;/strong&gt;：被当成新增文件或「不属于任何 App 目标」，现在正常识别&lt;/li&gt;&lt;li&gt;&lt;strong&gt;构建期间保存的改动在新启动的 App 上丢失&lt;/strong&gt;：文件编译完之后、链接结束之前保存的改动被误判为已编进 App，现在会补推&lt;/li&gt;&lt;li&gt;&lt;strong&gt;改动后被删除或改名的文件，每次重连都补推失败&lt;/strong&gt;：现在从待补推列表里移除&lt;/li&gt;&lt;li&gt;&lt;strong&gt;同一文件编译期间再次保存，注入结果与耗时错配&lt;/strong&gt;：现在按顺序一一对应，也不再重复补推&lt;/li&gt;&lt;li&gt;&lt;strong&gt;用 `[[Foo alloc] init]` 创建、配同名 xib 的控制器被当成纯代码界面&lt;/strong&gt;：现在识别为 nib 界面并重新加载&lt;/li&gt;&lt;li&gt;&lt;strong&gt;只改某一种语言的资源或 `.strings` 时，其他语言下运行的 App 拿到了这份文件&lt;/strong&gt;：现在按 App 当前语言挑选&lt;/li&gt;&lt;li&gt;&lt;strong&gt;名字中间带 `@` 的图片热重载后找不到&lt;/strong&gt;：现在只去掉末尾的 `@2x` / `~ipad` 这类后缀&lt;/li&gt;&lt;li&gt;&lt;strong&gt;SPM / CocoaPods 资源 bundle 尚未被加载时，资源热重载报找不到所属 bundle&lt;/strong&gt;：现在到 App 包内查找&lt;/li&gt;&lt;li&gt;&lt;strong&gt;macOS App 上 `+load` 里的 swizzle 被重复执行，可能无限递归&lt;/strong&gt;：临时目录带符号链接时保护没有生效，现在已修复&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复：文件监听&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;&lt;strong&gt;在工程目录里跑 `swift build`、`yarn install`、`carthage update` 时提示「一次改动了 N 个文件」，同批的真实改动被丢弃&lt;/strong&gt;：依赖目录里的文件不再被当成改动&lt;/li&gt;&lt;li&gt;&lt;strong&gt;工程放在以 `.app`、`.framework` 结尾的普通目录下时热重载完全失效&lt;/strong&gt;：现在按工程内的相对路径判断&lt;/li&gt;&lt;li&gt;&lt;strong&gt;`pod install`、切换分支、`git stash pop` 原样放回的文件被当成改动&lt;/strong&gt;：内容没变就不算改动&lt;/li&gt;&lt;li&gt;&lt;strong&gt;大工程首次启动时「检查改动」长时间没有反应&lt;/strong&gt;：不再排在基线计算后面&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复：Mac 端 App 与命令行&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;带数字的文案不再加千分位（端口不会显示成「21,890」），平台名在设备列表、通知、向导里跟随界面语言&lt;/li&gt;&lt;li&gt;控制台：日志很多时输入搜索词不再卡顿，⌘F 不会全选日志并打断「跟随最新」，切换搜索词后结果及时刷新，日志密集时不再带着整个界面一起刷新&lt;/li&gt;&lt;li&gt;菜单里的「检查改动」「关闭工程」「注入待处理改动」按当前状态置灰；切换「显示 Dock 图标」不再把控制台顶到最前；使用向导重新打开时从第一步开始；「恢复默认设置」同时恢复日志字号&lt;/li&gt;&lt;li&gt;每次启动不再重复解析一半的构建日志，启动更快；自建的预编译头、摘要缓存、编译中间产物会定期清理，不再无限占用磁盘&lt;/li&gt;&lt;li&gt;App 中途退出或重新运行时，不再把剩下的一批文件编译完&lt;/li&gt;&lt;li&gt;读不到设备名的真机，接入不再每次多等一轮超时；Wi-Fi 下 Mac 不可达时客户端更快放弃本轮扫描&lt;/li&gt;&lt;li&gt;安全加固：从其他机器连入、却自称模拟器或 macOS App 的连接不再被接受（只有真机可以经网络接入）&lt;/li&gt;&lt;li&gt;命令行 `nocompile`：`-p` 给了普通目录时直接报错，`selftest` 参数不全时给出用法，Ctrl+C 退出前保存摘要缓存&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;修复：接入脚本&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;`nocompile_setup.py` 保留源文件原有的换行符（CRLF 不再被改成 LF），写文件改为原子替换，多个 target 中途失败时不再留下半截改动&lt;/li&gt;&lt;li&gt;`--remove` 在链接参数被改写过形态后不再写坏 `OTHER_LDFLAGS`；只有 `OTHER_LDFLAGS[sdk=…]` 条件变体时会补上基础设置&lt;/li&gt;&lt;li&gt;SwiftUI 入口只在 App 结构体自己的 `init()` 里插入加载代码，不会插进同文件其他类型的 `init()`&lt;/li&gt;&lt;li&gt;Podfile：支持不带块参数的 `post_integrate do`；钩子缺少结束标记时拒绝自动删除，不再截断 Podfile&lt;/li&gt;&lt;li&gt;拷贝脚本不再把隔离标记带进 App 包&lt;/li&gt;&lt;/ul&gt;
+&lt;h3&gt;升级提示&lt;/h3&gt;
+&lt;ul&gt;&lt;li&gt;客户端有较多改动（上面「热重载」一节多数在客户端侧），需要更新 SDK 并重新编译 App 才能带上：SPM / CocoaPods / Carthage 更新到 0.2.16；用拷贝 bundle 方式接入的，更新 NoCompile.app 后重新编译运行即可&lt;/li&gt;&lt;li&gt;两端通信协议没有变化，已编译的 App 仍可与新版 Mac 端正常热重载，只是享受不到客户端侧的修复&lt;/li&gt;&lt;/ul&gt;</description>
+        </item>
+        <item>
             <title>0.2.15</title>
             <pubDate>Fri, 13 Nov 2026 10:57:08 +0800</pubDate>
             <link>https://github.com/wangwanjie/NoCompile/releases/tag/v0.2.15</link>
